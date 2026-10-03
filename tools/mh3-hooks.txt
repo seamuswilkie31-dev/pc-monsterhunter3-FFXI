@@ -10,3 +10,4 @@ font_print_ex__FsssPSce
 font_print__FPSce
 ItemName__FUs
 mh3_CockpitDraw        # the hunt HUD (MH3_HIDE_HUD=1: not drawn)
+nwAddResource__FPcPv   # a loaded file's resources registered (MH3_RES_TRACE=1: logged)

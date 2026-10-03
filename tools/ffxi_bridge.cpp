@@ -102,6 +102,14 @@ PPCFunc orig_em_hp, orig_pl_hp, orig_master;
 // caller once, with its call chain and its text, to find the code that draws the HUD.
 PPCFunc orig_font_ex, orig_font, orig_item_name;
 PPCFunc orig_cockpit;
+PPCFunc orig_add_resource;
+
+// MH3_RES_TRACE=1: every resource the game registers once a file is loaded (nwAddResource), to name
+// the one that arrives damaged when NW4R panics (ResTex::ref: Object not valid).
+void hook_add_resource(PPCContext& c) {
+    rt_log("ffxi: resource %s at %08X", guest_cstr(c.r[3], 96).c_str(), c.r[4]);
+    orig_add_resource(c);
+}
 
 // MH3_HIDE_HUD=1: Monster Hunter's hunt HUD (mh3_CockpitDraw) is not drawn; the FFXI interface replaces it.
 void hook_cockpit(PPCContext&) {}
@@ -244,11 +252,38 @@ void wr(uint32_t a, uint32_t n, uint32_t v) {
     else st32(a, v);
 }
 
+// The objects the hooks found may be freed when the game leaves an area, and their memory reused (a
+// file being loaded): one is believed only while it still looks like what it was, and is forgotten
+// otherwise, so the layer never reads or writes a stranger's memory through it.
+bool hunter_ok(uint32_t obj) {
+    if (!obj || !in_ram(obj + 0x370, 4)) return false;
+    int hp = (int16_t)ld16(obj + 0x370), max = (int16_t)ld16(obj + 0x372);
+    return max >= 50 && max <= 200 && hp >= 0 && hp <= max;
+}
+
+bool monster_ok(uint32_t obj) {
+    if (!obj || !in_ram(obj + 0x7A0, 8)) return false;
+    int32_t hp = (int32_t)ld32(obj + 0x7A0), max = (int32_t)ld32(obj + 0x7A4);
+    return max >= 10 && max <= 1000000 && hp >= 0 && hp <= max;
+}
+
+uint32_t object(uint32_t base) {
+    if (base == kBasePlayer) {
+        uint32_t o = g_player.load(std::memory_order_relaxed);
+        if (hunter_ok(o)) return o;
+        g_player.compare_exchange_strong(o, 0);
+    } else if (base == kBaseMonster) {
+        uint32_t o = g_monster.load(std::memory_order_relaxed);
+        if (monster_ok(o)) return o;
+        g_monster.compare_exchange_strong(o, 0);
+    }
+    return 0;
+}
+
 bool resolve(const Watch& w, uint32_t& out) {
     uint32_t a = w.addr;
     if (w.base != kBaseAddr) {
-        uint32_t obj = w.base == kBasePlayer ? g_player.load(std::memory_order_relaxed)
-                     : w.base == kBaseMonster ? g_monster.load(std::memory_order_relaxed) : 0;
+        uint32_t obj = object(w.base);
         if (!obj) return false;
         a = obj + w.addr;
     }
@@ -337,6 +372,8 @@ void install() {
         orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
         rt_log("ffxi: Monster Hunter's HUD hidden (MH3_HIDE_HUD=1)");
     }
+    if (const char* t = std::getenv("MH3_RES_TRACE"); t && !std::strcmp(t, "1"))
+        orig_add_resource = ppc_hook("nwAddResource__FPcPv", hook_add_resource);
     if (const char* t = std::getenv("MH3_HUD_TRACE"); t && !std::strcmp(t, "1")) {
         orig_font_ex = ppc_hook("font_print_ex__FsssPSce", hook_font_ex);
         orig_font = ppc_hook("font_print__FPSce", hook_font);
