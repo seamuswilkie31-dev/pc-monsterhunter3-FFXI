@@ -31,3 +31,5 @@ addr	name	evidence
 804F1B20	WPADControlDpd	0x1080 bytes as in Victorious, after __wpadDpdCallback (0x38); called by the game's extension callback (8004378C) and KPAD
 8011E6BC	mh3_EmHpAdd	a monster's HP (s32 at +0x7A0) plus r4, clamped to 0 and to r5, then to a floor (+0x7A4 times the float at +0x7B0); the European One Hit Kill code (Gecko, Bully@Wiiplaza) replaces its add at 8011E6D4; called by fn_8011E750 only
 802762F0	mh3_PlHpAdd	a hunter's HP (s16 at +0x370 of the _PLW) plus r4, clamped to 0 and to +0x372; calls Pl_master_ck; the European Infinite Health code (Gecko, Bully@Wiiplaza) replaces its add at 80276344
+802DD7C4	mh3_ItemInfoDraw	draws an item's name and description (calls fn_802DDC68: ItemName, ItemExp, font_print_ex; asserts in cockpit.cpp); reached through a pointer; not called in the field (traced): a menu's, not the HUD's
+802E55C0	mh3_CockpitDraw	the hunt HUD, every frame: calls its parts (the item bar fn_802EDD48 -> ItemName, a text panel fn_802ED4E4 -> font_print_ex, about 20 in all); called by fn_8004925C (the scene's draw); found by tracing font_print_ex and ItemName in the field

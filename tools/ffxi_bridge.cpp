@@ -24,6 +24,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -74,6 +75,34 @@ static_assert(sizeof(Block) == 752, "ffxi/port_bridge.py mirrors this layout");
 std::atomic<uint32_t> g_player{0}, g_monster{0}, g_hits{0};
 std::atomic<int32_t> g_delta{0};
 PPCFunc orig_em_hp, orig_pl_hp, orig_master;
+// MH3_HUD_TRACE=1: who draws text (font_print_ex, font_print) and item names (ItemName): each new
+// caller once, with its call chain and its text, to find the code that draws the HUD.
+PPCFunc orig_font_ex, orig_font, orig_item_name;
+PPCFunc orig_cockpit;
+
+// MH3_HIDE_HUD=1: Monster Hunter's hunt HUD (mh3_CockpitDraw) is not drawn; the FFXI interface replaces it.
+void hook_cockpit(PPCContext&) {}
+
+void trace(const char* fn, PPCContext& c, const char* text) {
+    static std::mutex m;
+    static uint32_t seen[256];
+    static int n = 0;
+    std::lock_guard<std::mutex> l(m);
+    for (int i = 0; i < n; ++i)
+        if (seen[i] == c.lr) return;
+    if (n == 256) return;
+    seen[n++] = c.lr;
+    rt_log("ffxi: trace %s from %s: \"%s\"", fn, rt_name(c.lr).c_str(), text);
+    rt_backtrace(c, stderr, 12);
+}
+void hook_font_ex(PPCContext& c) { trace("font_print_ex", c, guest_cstr(c.r[6], 64).c_str()); orig_font_ex(c); }
+void hook_font(PPCContext& c) { trace("font_print", c, guest_cstr(c.r[3], 64).c_str()); orig_font(c); }
+void hook_item_name(PPCContext& c) {
+    char id[16];
+    std::snprintf(id, sizeof id, "item %u", c.r[3] & 0xFFFF);
+    trace("ItemName", c, id);
+    orig_item_name(c);
+}
 
 // fn_8011E6BC(em*, delta, cap): the One Hit Kill code's function (NEXT.md).
 void hook_em_hp(PPCContext& c) {
@@ -195,6 +224,15 @@ void install() {
     orig_em_hp = ppc_hook("mh3_EmHpAdd", hook_em_hp);
     orig_pl_hp = ppc_hook("mh3_PlHpAdd", hook_pl_hp);
     orig_master = ppc_hook("Pl_master_ck__FP4_PLW", hook_master);
+    if (const char* h = std::getenv("MH3_HIDE_HUD"); h && !std::strcmp(h, "1")) {
+        orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
+        rt_log("ffxi: Monster Hunter's HUD hidden (MH3_HIDE_HUD=1)");
+    }
+    if (const char* t = std::getenv("MH3_HUD_TRACE"); t && !std::strcmp(t, "1")) {
+        orig_font_ex = ppc_hook("font_print_ex__FsssPSce", hook_font_ex);
+        orig_font = ppc_hook("font_print__FPSce", hook_font);
+        orig_item_name = ppc_hook("ItemName__FUs", hook_item_name);
+    }
     if (!orig_em_hp || !orig_pl_hp || !orig_master)
         rt_log("ffxi: a hook is missing (tools/mh3-hooks.txt): the player and monster objects won't be known");
     // The layer may have made the block first and written its watches: keep them.

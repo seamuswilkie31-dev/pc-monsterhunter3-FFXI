@@ -31,11 +31,22 @@ Elsewhere:
 - `files/00/dataNN_lang.bin`: `OMOM` containers (a count, then offset/size pairs) of Capcom's own formats,
   likely message tables and screen layouts.
 
+## The HUD's code
+
+`mh3_CockpitDraw` (`802E55C0`) draws the whole hunt HUD every frame: about 20 parts (the item bar
+`fn_802EDD48`, a text panel `fn_802ED4E4`, ...), called by the scene's draw (`fn_8004925C`). Found by
+tracing the callers of `font_print_ex` and `ItemName` in the field (`MH3_HUD_TRACE=1`). The port skips it
+with `MH3_HIDE_HUD=1`: the HUD is gone, bars, icons and labels together (checked in the field), while its
+textures stay as they are.
+
+Clearing `cock00` instead (tried first) removes only the frames: the health and stamina fills are drawn
+as plain coloured quads, and the item's icon and name come from the icon sheet and the font.
+
 ## What it means for the FFXI interface
 
 - The port reads the game's files from `build/extract`, so a texture redrawn and written back into its
   `.brres` restyles that piece everywhere, with no code: menus, frames, words, icons. It needs a TEX0
   encoder for these formats (RGBA8, RGB5A3, IA4, CI8 with its PLT0 palette; CMPR if those are touched).
-- Monster Hunter's hunt HUD can be hidden the same way: `cock00`'s pieces made transparent.
+- Monster Hunter's hunt HUD is hidden by code instead (`MH3_HIDE_HUD=1`, above).
 - The live FFXI HUD (status bar, target window, combat log, command menu) is drawn by code: milestone 2.
 - The art is ours, in FFXI's style; nothing is taken from FFXI's files.

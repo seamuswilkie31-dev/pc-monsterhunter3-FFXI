@@ -5,3 +5,8 @@
 mh3_EmHpAdd            # a monster's HP changes: that monster
 mh3_PlHpAdd            # a hunter's HP changes: the local hunter, offline
 Pl_master_ck__FP4_PLW  # the local player's hunter
+# MH3_HUD_TRACE=1 traces the callers of font_print_ex__FsssPSce, font_print__FPSce and ItemName__FUs
+font_print_ex__FsssPSce
+font_print__FPSce
+ItemName__FUs
+mh3_CockpitDraw        # the hunt HUD (MH3_HIDE_HUD=1: not drawn)
