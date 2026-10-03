@@ -17,6 +17,7 @@
 // write may be overwritten by the game's own read-modify-write, as with
 // Dolphin Memory Engine.
 #include "rt.h"
+#include "video.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -70,6 +71,19 @@ struct Block {
     int32_t monster_delta;  // the last one (negative: damage)
 };
 static_assert(sizeof(Block) == 752, "ffxi/port_bridge.py mirrors this layout");
+
+// The FFXI interface the layer draws, laid over the game's picture by the renderer
+// (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
+// fills the one not shown, sets slot, w and h, then bumps serial; it bumps alive as it runs.
+constexpr uint32_t kOverlayMagic = 0x4D48334F;     // 'MH3O'
+constexpr int kOverlayMaxW = 1920, kOverlayMaxH = 1080;
+struct OverlayBlock {
+    uint32_t magic, version;
+    uint32_t serial, slot, w, h;
+    uint32_t alive;         // the layer bumps it while it runs: 3 s without, the overlay goes
+    uint32_t pad;
+    uint8_t px[2][kOverlayMaxW * kOverlayMaxH * 4];   // RGBA, straight alpha, rows top first
+};
 
 // Set by the hooks, on guest threads; published by serve().
 std::atomic<uint32_t> g_player{0}, g_monster{0}, g_hits{0};
@@ -177,8 +191,30 @@ bool resolve(const Watch& w, uint32_t& out) {
     return true;
 }
 
-void serve(Block* b) {
+void serve_overlay(OverlayBlock* o) {
+    static uint32_t shown = 0, alive = 0;
+    static auto last_alive = std::chrono::steady_clock::now();
+    static bool up = false;
+    auto now = std::chrono::steady_clock::now();
+    if (o->alive != alive) { alive = o->alive; last_alive = now; }
+    if (up && now - last_alive > std::chrono::seconds(3)) {
+        video_overlay_update(nullptr, 0, 0);     // the layer has gone
+        up = false;
+        shown = o->serial;
+        return;
+    }
+    if (o->serial == shown) return;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    uint32_t w = o->w, h = o->h, slot = o->slot & 1;
+    shown = o->serial;
+    if (w > (uint32_t)kOverlayMaxW || h > (uint32_t)kOverlayMaxH) return;
+    video_overlay_update(w && h ? o->px[slot] : nullptr, (int)w, (int)h);
+    up = w && h;
+}
+
+void serve(Block* b, OverlayBlock* o) {
     for (;;) {
+        if (o) serve_overlay(o);
         for (int i = 0; i < kWatches; ++i) {
             Watch w;
             std::memcpy(&w, (const void*)&b->watch[i], sizeof w);
@@ -239,7 +275,17 @@ void install() {
     b->version = kVersion;
     b->magic = kMagic;
     rt_log("ffxi: serving guest memory to the FFXI layer (shared block mh3-ffxi)");
-    std::thread(serve, b).detach();
+    OverlayBlock* o = nullptr;
+    if (HANDLE oh = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(OverlayBlock),
+                                       L"mh3-ffxi-overlay")) {
+        o = static_cast<OverlayBlock*>(MapViewOfFile(oh, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(OverlayBlock)));
+        if (o) {
+            o->version = 1;
+            o->magic = kOverlayMagic;
+        }
+    }
+    if (!o) rt_log("ffxi: no overlay block: the FFXI interface won't show in the game");
+    std::thread(serve, b, o).detach();
 }
 
 RtGameLayer layer("FFXI bridge", install);
