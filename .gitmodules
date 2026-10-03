@@ -1,3 +1,4 @@
 [submodule "wiikit"]
 	path = wiikit
-	url = https://github.com/vs-sr-dev/wiikit.git
+	url = https://github.com/seamuswilkie31-dev/wiikit.git
+	branch = ffxi
