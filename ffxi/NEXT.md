@@ -2,8 +2,8 @@
 
 Where it stands (2026-10-04): **the FFXI interface runs in the game.** Monster Hunter's HUD is switched
 off (`MH3_HIDE_HUD=1`); the layer draws FFXI's classic windows into the game's own window (status, target
-with the monster's HP percent, combat log, casting bar, macro palette); the pad's **X** opens the FFXI
-command menu (Weapon Skills / Magic / Items: d-pad, A to choose, B back), Items passing one press to the
+with the monster's HP percent, combat log, casting bar, macro palette); the pad's **X held** opens the FFXI
+command menu (a tap of X is still the game's: sheathe, use an item) (Weapon Skills / Magic / Items: d-pad, A to choose, B back), Items passing one press to the
 game's own item use. Saving works. Checked in play.
 
 Run: the port with `MH3_FFXI=1 MH3_HIDE_HUD=1`, then `uv run ffxi_mh3.py` (in-game interface by default).

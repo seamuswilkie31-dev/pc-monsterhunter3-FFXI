@@ -101,8 +101,8 @@ def serve_once(mm, ram: FakeRam) -> None:
 
 
 def press(mm, bits: int) -> None:
-    """A button pressed on the pad, as classic_filter sees it: Y opens or closes the menu; while it is
-    open, every press is an event for the layer."""
+    """A button pressed on the pad, as classic_filter sees it: Y (held, in the port) opens the menu and
+    (tapped) closes it; while it is open, every press is an event for the layer."""
     m = list(P.MENU.unpack_from(mm, P.MENU_AT))
     if bits & P.CL_Y:
         m[0] ^= 1

@@ -193,6 +193,7 @@ class Engine:
     prev_player: int | None = None
     log: list = field(default_factory=list)
     kinds: list = field(default_factory=list)   # each log line's kind (ffxi_ui.KIND), for its colour
+    said: int = 0
 
     def __post_init__(self):
         self.j = D.JOBS[self.job]
@@ -202,6 +203,7 @@ class Engine:
 
     # --- helpers ---
     def say(self, msg: str, kind: str = "info"):
+        self.said += 1                  # every message ever: the recorder counts on it
         self.log.append(msg)
         self.kinds.append(kind)
         del self.log[:-12]
@@ -405,6 +407,9 @@ class App:
         self.monster_hp = self.player_hp = None
         self.monster_max = 0           # its max HP: read (monster_max_hp) or the most seen
         self.menu = None               # the command menu: {"level": "root"/"ws"/"magic", "cur": i, "root": i}
+        self.rec = None                # --record: the fight, one JSON line per event
+        self._rec_hits = self._rec_log = 0
+        self._rec_t0 = time.monotonic()
 
     def step(self):
         now = time.monotonic()
@@ -438,6 +443,44 @@ class App:
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
         self.player_hp = writes.get("player_hp", p)
+        if self.rec:
+            self._record(now, p)
+
+    def start_recording(self, path) -> None:
+        import json
+        self._json = json
+        self.rec = open(path, "a", encoding="utf-8")
+        self._rec_log = self.e.said
+        if hasattr(self.mem, "objects"):
+            self._rec_hits = self.mem.objects()["monster_hits"]
+        self._rec_player = None
+        print(f"recording the fight to {path}")
+
+    def _record(self, now: float, player_hp) -> None:
+        """The game's hits on monsters (the port's hook), the layer's messages, the hunter's HP."""
+        e, t = self.e, round(now - self._rec_t0, 2)
+        out = []
+        if hasattr(self.mem, "objects"):
+            o = self.mem.objects()
+            if o["monster_hits"] != self._rec_hits:
+                n = (o["monster_hits"] - self._rec_hits) & 0xFFFFFFFF
+                self._rec_hits = o["monster_hits"]
+                out.append({"t": t, "ev": "game_hit", "n": n, "last_delta": o["monster_delta"],
+                            "monster": hex(o["monster"]), "hp": self.monster_hp, "max": self.monster_max,
+                            "tp": int(e.tp)})
+        k = min(e.said - self._rec_log, len(e.log))      # the messages said since the last time
+        if k > 0:
+            for line, kind in zip(e.log[-k:], e.kinds[-k:]):
+                out.append({"t": t, "ev": kind, "text": line, "hp": self.monster_hp, "tp": int(e.tp), "mp": int(e.mp)})
+        self._rec_log = e.said
+        if player_hp is not None and player_hp != self._rec_player:
+            if self._rec_player is not None:
+                out.append({"t": t, "ev": "player_hp", "from": self._rec_player, "to": player_hp})
+            self._rec_player = player_hp
+        for r in out:
+            self.rec.write(self._json.dumps(r) + "\n")
+        if out:
+            self.rec.flush()
 
     # --- the FFXI command menu: the pad's left face button (the Classic's Y) opens it in the port ---
     ROOT = ("Weapon Skills", "Magic", "Items")
@@ -761,6 +804,7 @@ def main() -> int:
     ap.add_argument("--ui", choices=["game", "window", "console"],
                     help="game: in the game's window (the port's default); window: a separate overlay; console")
     ap.add_argument("--seconds", type=float, help="console mode: stop after N seconds")
+    ap.add_argument("--record", metavar="FILE", help="write the fight's events to FILE (JSON lines)")
     ap.add_argument("--allow-kills", action="store_true", help="let weapon skills/spells take the monster to 0 HP")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
@@ -794,6 +838,8 @@ def main() -> int:
             sys.exit(f"unknown backend {backend}; pick port or dolphin")
 
     app = App(engine, mem, cfg)
+    if a.record:
+        app.start_recording(a.record)
     start_hotkeys(cfg, app.actions)
     hk = cfg["hotkeys"]
     print(f"FFXI layer: {D.JOBS[job]['name']} with {weapon.replace('_', ' ')}. "

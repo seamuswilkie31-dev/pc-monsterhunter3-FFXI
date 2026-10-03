@@ -70,7 +70,7 @@ struct Block {
     uint32_t monster_hits;  // the game's changes to a monster's HP, counted
     int32_t monster_delta;  // the last one (negative: damage)
     // The FFXI command menu (classic_filter): while the layer runs, the Classic's Y (the pad's
-    // left face button) opens and closes it; while open, the d-pad and the face buttons are its,
+    // left face button) held opens it, tapped closes it (a tap with it closed is the game's); while open, the d-pad and the face buttons are its,
     // each press an event for the layer, and the game doesn't see them.
     uint32_t menu_open;                 // port
     uint32_t menu_close_seq, menu_close_ack;   // the layer closes it: bumps seq; the port acks
@@ -160,13 +160,19 @@ constexpr uint32_t kMenuButtons = kClUp | kClDown | kClLeft | kClRight | kClA | 
 Block* g_block = nullptr;
 std::atomic<bool> g_layer_up{false};    // the layer bumped the overlay's alive within 3 s
 
-// Channel 1's Classic, before the game reads it.
+// Channel 1's Classic, before the game reads it. Y is shared with the game, which sheathes the
+// weapon and uses items with it: a tap reaches the game (at its release), held it opens the menu.
+constexpr auto kHoldForMenu = std::chrono::milliseconds(350);
+
 void classic_filter(int chan, ClassicState& s) {
     Block* b = g_block;
     if (chan != 0 || !b) return;
+    using clock = std::chrono::steady_clock;
     static uint32_t prev = 0;
-    static std::chrono::steady_clock::time_point item_until{};
-    uint32_t pressed = s.buttons & ~prev;
+    static clock::time_point y_since{}, y_until{};
+    static bool y_held = false;                   // Y down, the menu closed: a tap or a hold, not yet known
+    auto now = clock::now();
+    uint32_t pressed = s.buttons & ~prev, released = prev & ~s.buttons;
     prev = s.buttons;
     bool up = g_layer_up.load(std::memory_order_relaxed);
     if (b->menu_close_seq != b->menu_close_ack) {
@@ -175,11 +181,23 @@ void classic_filter(int chan, ClassicState& s) {
     }
     if (!up) {
         b->menu_open = 0;
+        y_held = false;
         return;                                   // no layer: the pad is the game's, as it was
     }
-    if (pressed & kClY) {
-        b->menu_open ^= 1;
-        pressed &= ~kClY;
+    if (b->menu_open) {
+        if (pressed & kClY) {                     // a tap closes it
+            b->menu_open = 0;
+            pressed &= ~kClY;
+        }
+    } else if (pressed & kClY) {
+        y_held = true;
+        y_since = now;
+    } else if (y_held && (released & kClY)) {
+        y_held = false;                           // a tap: the game's, now
+        y_until = now + std::chrono::milliseconds(120);
+    } else if (y_held && now - y_since >= kHoldForMenu) {
+        y_held = false;                           // held: the menu
+        b->menu_open = 1;
     }
     if (b->menu_open) {
         if (uint32_t ev = pressed & kMenuButtons) {
@@ -189,13 +207,12 @@ void classic_filter(int chan, ClassicState& s) {
         }
         s.buttons &= ~kMenuButtons;
     }
-    auto now = std::chrono::steady_clock::now();
     if (b->item_seq != b->item_ack) {
         b->item_ack = b->item_seq;
-        item_until = now + std::chrono::milliseconds(120);
+        y_until = now + std::chrono::milliseconds(120);
     }
-    if (now < item_until) s.buttons |= kClY;      // the layer's Items: the game's own item use
-    else s.buttons &= ~kClY;                      // otherwise Y is the menu's
+    if (now < y_until) s.buttons |= kClY;         // a tap, or the layer's Items: the game's own Y
+    else s.buttons &= ~kClY;                      // otherwise the filter's, until it knows
 }
 
 // Only RAM is committed in the host's reservation: MEM1 and MEM2.
