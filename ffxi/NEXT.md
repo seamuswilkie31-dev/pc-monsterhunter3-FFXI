@@ -1,16 +1,17 @@
 # FFXI layer — next session
 
-Where it stands (2026-10-04): the port builds and boots on this PC with the bridge on (`MH3_FFXI=1`).
-Its hooks on the game's own HP functions find the hunter's and the monster's objects, and `config.toml`
-is filled in from them (offsets below). Checked against `fake_port.py` (20 protocol checks) and at the
-title screen (hooks attached, no objects yet); not yet in a hunt.
+Where it stands (2026-10-04): **phase 1 works in the game.** The port's hooks find the hunter (HP 100/100
+on a new character) and the monster the game last hurt (Aptonoth, Jaggi); TP builds from hits, and a
+weapon skill's damage is written back and applied (a Jaggi taken down, the game's own death running).
+Hotkeys are on the number row (3-6 weapon skills, 7-0 - = [ ] spells, P pause): no numpad needed.
 
-1. **The first real test.** Launch the port with the bridge, play to a hunt with a large monster, start
-   the layer (`uv run ffxi_mh3.py`): the player's HP shows at once, the monster's from the first hit.
-   Check TP builds from hits, then land a weapon skill (Numpad 1).
-2. If a value looks wrong: `memscan.py` (README section 2a) to check it against a snapshot.
-3. Small monsters share the HP function, so hitting one makes it the target. If that's a problem, filter
-   by max HP (+0x7A4).
+Next:
+1. **Spells and skillchains in play**: Cure on a hit hunter (player HP written), a nuke, two weapon skills
+   2-8 s apart, a magic burst. A large monster (Great Jaggi) to have the time.
+2. **Phase 2**: weapon skills and spells on Classic Controller chords instead of the keyboard
+   (`wpad_set_classic_filter`), the rules in the port, the overlay in the game's window (phase 3).
+3. Small monsters share the HP function, so the last one hit is the target; filter by max HP (+0x7A4)
+   if that gets in the way.
 
 ## Found from the European Gecko codes (codes.rc24.xyz, RMHP08, Bully@Wiiplaza), checked in the disassembly
 

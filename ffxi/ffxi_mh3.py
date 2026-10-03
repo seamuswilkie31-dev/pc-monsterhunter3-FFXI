@@ -345,6 +345,17 @@ class Engine:
 # ================================================================================================
 # Hotkeys
 # ================================================================================================
+def key_name(vk: int) -> str:
+    """A Windows virtual-key code as the key's label."""
+    if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
+        return chr(vk)
+    if 0x60 <= vk <= 0x69:
+        return f"Num{vk - 0x60}"
+    return {0x6A: "Num*", 0x6B: "Num+", 0x6D: "Num-", 0x6E: "Num.", 0x6F: "Num/", 0xBA: ";", 0xBB: "=",
+            0xBC: ",", 0xBD: "-", 0xBE: ".", 0xBF: "/", 0xC0: "`", 0xDB: "[", 0xDC: "\\", 0xDD: "]",
+            0xDE: "'"}.get(vk, hex(vk))
+
+
 def start_hotkeys(cfg: dict, actions: queue.Queue):
     try:
         from pynput import keyboard
@@ -353,6 +364,7 @@ def start_hotkeys(cfg: dict, actions: queue.Queue):
         return None
     ws_keys = {vk: i for i, vk in enumerate(cfg["hotkeys"]["weapon_skills"])}
     sp_keys = {vk: i for i, vk in enumerate(cfg["hotkeys"]["spells"])}
+    pause_key = cfg["hotkeys"].get("pause", 0x6E)
 
     def on_press(key):
         vk = getattr(key, "vk", None)
@@ -362,7 +374,7 @@ def start_hotkeys(cfg: dict, actions: queue.Queue):
             actions.put(("ws", ws_keys[vk]))
         elif vk in sp_keys:
             actions.put(("spell", sp_keys[vk]))
-        elif vk == 0x6E:  # Numpad .
+        elif vk == pause_key:
             actions.put(("pause", 0))
 
     lst = keyboard.Listener(on_press=on_press)
@@ -387,7 +399,7 @@ class App:
         if not self.mem.connected():
             self.status = "waiting for the game..."
             return
-        self.status = "PAUSED (Numpad .)" if self.paused else "connected"
+        self.status = f"PAUSED ({key_name(self.cfg['hotkeys'].get('pause', 0x6E))})" if self.paused else "connected"
         m = self.mem.read("monster_hp") if self.mem.has("monster_hp") else None
         p = self.mem.read("player_hp") if self.mem.has("player_hp") else None
         mx = self.mem.read("player_max_hp") if self.mem.has("player_max_hp") else None
@@ -465,7 +477,7 @@ class App:
 
         ws_names = e.w["ws"]
         sp_names = e.j["spells"]
-        num = lambda vk: {0x60: "0", 0x6A: "*", 0x6B: "+", 0x6D: "-", 0x6E: ".", 0x6F: "/"}.get(vk, str(vk - 0x60))
+        num = key_name
 
         def bar(y, label, val, mx, color):
             c.create_text(12, y, text=label, fill=DIM, anchor="w", font=("Segoe UI", 9, "bold"))
@@ -637,8 +649,10 @@ def main() -> int:
 
     app = App(engine, mem, cfg)
     start_hotkeys(cfg, app.actions)
+    hk = cfg["hotkeys"]
     print(f"FFXI layer: {D.JOBS[job]['name']} with {weapon.replace('_', ' ')}. "
-          f"Numpad 1-4 = weapon skills, Numpad 5-9/0/÷/× = spells, Numpad . = pause.")
+          f"{' '.join(map(key_name, hk['weapon_skills']))} = weapon skills, "
+          f"{' '.join(map(key_name, hk['spells']))} = spells, {key_name(hk.get('pause', 0x6E))} = pause.")
     if a.no_overlay:
         app.run_console(a.seconds)
     else:

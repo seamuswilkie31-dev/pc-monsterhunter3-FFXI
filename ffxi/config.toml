@@ -6,7 +6,7 @@
 backend = "port"         # "port": the native port, run with MH3_FFXI=1 (tools/ffxi_bridge.cpp)
                          # "dolphin": Dolphin + Dolphin Memory Engine, with the same disc
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
-weapon = "long_sword"    # great_sword, long_sword, sword_and_shield, hammer, lance,
+weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,
                          # switch_axe, light_bowgun, heavy_bowgun
 player_max_hp = 150      # used to cap Cures until you find a max-HP address
 
@@ -45,10 +45,13 @@ address = 0x372
 type = "u16"
 
 # ------------------------------------------------------------------------------------------------
-# Hotkeys = Windows virtual-key codes. Defaults use the number pad (turn Num Lock on).
-# The F-keys are avoided on purpose: Dolphin uses them for save states.
+# Hotkeys = Windows virtual-key codes. The defaults use the number row: the port's keyboard mapping
+# (build/keys.txt) leaves 3-0, - = [ ] and P free (1 and 2 are the Remote's buttons, H is Home, which
+# crashes the port). The F-keys are avoided: Dolphin and the port use them.
+#   0-9 = 0x30-0x39,  A-Z = 0x41-0x5A,  - = 0xBD,  = = 0xBB,  [ = 0xDB,  ] = 0xDD
 #   Numpad 0-9 = 0x60-0x69,  Numpad * = 0x6A,  + = 0x6B,  - = 0x6D,  . = 0x6E,  / = 0x6F
 # ------------------------------------------------------------------------------------------------
 [hotkeys]
-weapon_skills = [0x61, 0x62, 0x63, 0x64]                   # Numpad 1-4 -> your weapon's 4 WS
-spells = [0x65, 0x66, 0x67, 0x68, 0x69, 0x60, 0x6F, 0x6A]  # Numpad 5-9, 0, /, *  -> job spells in order
+weapon_skills = [0x33, 0x34, 0x35, 0x36]                   # 3 4 5 6 -> your weapon's 4 WS
+spells = [0x37, 0x38, 0x39, 0x30, 0xBD, 0xBB, 0xDB, 0xDD]  # 7 8 9 0 - = [ ] -> job spells in order
+pause = 0x50                                               # P: pause / resume the layer
