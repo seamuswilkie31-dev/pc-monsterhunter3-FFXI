@@ -26,10 +26,12 @@ Next:
 The codes: Infinite Health `04276344` (the `add` in `fn_802762F0`), One Hit Kill `0411E6D4` (the `add` in
 `fn_8011E6BC`). `Pl_master_ck(_PLW*)` (`8026FE38`) says whether a hunter object is the local player's.
 
+**Saving works** (2026-10-04): a save in Moga Village writes `build/nand/title/00010000/524d4850/data/nocopy/data00`
+(plain, unencrypted) and loads back after a restart. Tests start from the save, not a new character.
+
 Known problems in the port (not the layer):
 - **Home crashes the game.** The Xbox button (or H) opens the Wii's Home Button menu, which crashes
   (a read at 0x00000008 in `GXCallDisplayList`, after `HBMCreate`). Avoid it; Esc is the port's own menu.
-- **Saving is untested**, so each launch starts from a new character.
 - The sound has short gaps (`docs/07-next-session.md`).
 
 Setup on this PC: MSYS2 at `C:\msys64` (mingw64: clang, CMake, Ninja, SDL3), Dolphin 2609 at
