@@ -38,3 +38,7 @@ drawlog.txt
 efb_*.png
 nand/
 *.zip
+
+# the FFXI layer: your levels and EXP
+ffxi/save.json
+ffxi/save.tmp
