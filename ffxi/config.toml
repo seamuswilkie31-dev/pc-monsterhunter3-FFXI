@@ -1,0 +1,47 @@
+# FFXI layer for Monster Hunter Tri - settings.
+#
+# The port (pc-monsterhunter3) runs the European release, RMHP08: the addresses below are that disc's.
+# Addresses found on the US release (RMHE08) will not carry over.
+
+backend = "port"         # "port": the native port, run with MH3_FFXI=1 (tools/ffxi_bridge.cpp)
+                         # "dolphin": Dolphin + Dolphin Memory Engine, with the same disc
+job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
+weapon = "long_sword"    # great_sword, long_sword, sword_and_shield, hammer, lance,
+                         # switch_axe, light_bowgun, heavy_bowgun
+player_max_hp = 150      # used to cap Cures until you find a max-HP address
+
+# ------------------------------------------------------------------------------------------------
+# Memory addresses (fill these in with Dolphin Memory Engine).
+#
+# Simple address:           address = 0x80123456
+# Pointer chain:            address = 0x80123456   offsets = [0x10, 0x2A4]
+#     (Monster data usually moves between quests, so monster HP will most likely be a pointer chain.)
+# type = "u8", "u16", "u32" or "float"   (MH Tri is big-endian; the script handles that)
+#
+# Leave address = 0 for anything you haven't found yet - the script skips it.
+# The port's bridge serves 8 addresses at most, each with up to 4 offsets.
+# ------------------------------------------------------------------------------------------------
+
+[addresses.monster_hp]      # REQUIRED: current HP of the (first) large monster
+address = 0
+offsets = []
+type = "u16"
+
+[addresses.player_hp]       # REQUIRED for Cures, Regen, Protect, Drain and spell interrupts
+address = 0
+offsets = []
+type = "u16"
+
+[addresses.player_max_hp]   # optional: replaces player_max_hp above
+address = 0
+offsets = []
+type = "u16"
+
+# ------------------------------------------------------------------------------------------------
+# Hotkeys = Windows virtual-key codes. Defaults use the number pad (turn Num Lock on).
+# The F-keys are avoided on purpose: Dolphin uses them for save states.
+#   Numpad 0-9 = 0x60-0x69,  Numpad * = 0x6A,  + = 0x6B,  - = 0x6D,  . = 0x6E,  / = 0x6F
+# ------------------------------------------------------------------------------------------------
+[hotkeys]
+weapon_skills = [0x61, 0x62, 0x63, 0x64]                   # Numpad 1-4 -> your weapon's 4 WS
+spells = [0x65, 0x66, 0x67, 0x68, 0x69, 0x60, 0x6F, 0x6A]  # Numpad 5-9, 0, /, *  -> job spells in order
