@@ -36,6 +36,7 @@ class FakeRam:
         self.b = bytearray(SPAN)
         self.player_obj = self.monster_obj = 0  # what the hooks have seen
         self.monster_hits, self.monster_delta = 0, 0
+        self.items_used = 0          # Y presses the layer passed to the game
 
     def em_hp_add(self, obj: int, delta: int) -> None:
         """The game's mh3_EmHpAdd, and the port's hook on it."""
@@ -87,8 +88,29 @@ def serve_once(mm, ram: FakeRam) -> None:
         P.put_u32(mm, P.SNAP_AT + 8, 1)
         P.put_u32(mm, P.SNAP_AT + 4, seq)
     P.OBJ.pack_into(mm, P.OBJ_AT, ram.player_obj, ram.monster_obj, ram.monster_hits, ram.monster_delta)
+    # the command menu, as classic_filter: the layer's close and item requests
+    m = list(P.MENU.unpack_from(mm, P.MENU_AT))
+    if m[1] != m[2]:
+        m[0], m[2] = 0, m[1]
+    if m[3] != m[4]:
+        m[4] = m[3]
+        ram.items_used += 1
+    P.MENU.pack_into(mm, P.MENU_AT, *m)
     _, _, hb, _ = P.HEADER.unpack_from(mm, 0)
     P.put_u32(mm, 8, hb + 1)
+
+
+def press(mm, bits: int) -> None:
+    """A button pressed on the pad, as classic_filter sees it: Y opens or closes the menu; while it is
+    open, every press is an event for the layer."""
+    m = list(P.MENU.unpack_from(mm, P.MENU_AT))
+    if bits & P.CL_Y:
+        m[0] ^= 1
+        bits &= ~P.CL_Y
+    if m[0] and bits:
+        P.put_u32(mm, P.EVENTS_AT + 4 * (m[5] % 32), bits)
+        m[5] += 1
+    P.MENU.pack_into(mm, P.MENU_AT, *m)
 
 
 def start(mm) -> FakeRam:
@@ -157,6 +179,7 @@ def run(seconds: float | None) -> None:
 def test() -> int:
     """The protocol, ticked by hand: a PortBackend against serve_once."""
     import tomllib
+    P.TAG = "mh3-ffxi-test"   # a block of its own: a running port's (and its layer's) is never touched
     ok = True
 
     def check(cond, msg):
@@ -223,6 +246,35 @@ def test() -> int:
         f.seek(MONSTER_DATA + MONSTER_HP_OFF - P.MEM1)
         check(int.from_bytes(f.read(2), "big") == 4000, "...with RAM at its addresses, big-endian")
     os.remove(path)
+
+    # the command menu, driven as the pad would, through the layer's app
+    import ffxi_mh3 as M
+    cfg = tomllib.loads(CONFIG)
+    app = M.App(M.Engine("RDM", "sword_and_shield", 150), P.PortBackend(cfg["addresses"]), cfg)
+    serve_once(mm, ram)
+    app.step()
+    press(mm, P.CL_Y)                                     # open
+    app.step()
+    check(app.menu == {"level": "root", "cur": 0, "root": 0}, "the pad's X opens the command menu")
+    press(mm, P.CL_DOWN); press(mm, P.CL_B)               # Magic
+    app.step()
+    check(app.menu and app.menu["level"] == "magic", "down, confirm: the Magic list")
+    check(len(app.menu_view()) == 2 and app.menu_view()[1][0] == "Magic", "...drawn beside the first level")
+    press(mm, P.CL_DOWN); press(mm, P.CL_B)               # its second spell
+    app.step()
+    serve_once(mm, ram)
+    check(app.menu is None and not app.mem.menu_open(), "a spell chosen closes the menu (the port told)")
+    check(app.e.casting == app.e.j["spells"][1], f"...and casts it ({app.e.casting})")
+    press(mm, P.CL_Y); app.step()                         # open again
+    press(mm, P.CL_DOWN); press(mm, P.CL_DOWN); press(mm, P.CL_B)   # Items
+    app.step(); serve_once(mm, ram)
+    check(ram.items_used == 1 and app.menu is None, "Items passes one press to the game's own item use")
+    press(mm, P.CL_Y); app.step()
+    press(mm, P.CL_B); press(mm, P.CL_A)                  # Weapon Skills, then back
+    app.step()
+    check(app.menu == {"level": "root", "cur": 0, "root": 0}, "back from a list returns to the first level")
+    press(mm, P.CL_A); app.step(); serve_once(mm, ram)    # back again: closed
+    check(app.menu is None and not app.mem.menu_open(), "back from the first level closes it")
 
     # the objects the port's hooks find (the real game's layout)
     be3 = P.PortBackend(tomllib.loads(CONFIG)["addresses"])

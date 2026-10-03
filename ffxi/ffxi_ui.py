@@ -57,6 +57,7 @@ class UiState:
     cast_frac: float = 0.0
     log: tuple = ()                       # ((text, kind), ...), oldest first
     palette: tuple = ()                   # ((key, name, usable), ...)
+    menu: tuple = ()                      # the command menu: ((title, ((label, usable), ...), cursor), ...)
     status: str = ""
 
 
@@ -85,6 +86,8 @@ class FfxiUi:
             self._cast(img, d, s)
         if s.palette:
             self._palette(img, d, s)
+        if s.menu:
+            self._menu(img, d, s)
         if s.status:
             self._text(d, (W - 14, 10), s.status, self.f_small, DIM, anchor="ra")
         return img
@@ -162,6 +165,23 @@ class FfxiUi:
         self._text(d, (x0 + 12, y0 + 7), s.casting, self.f_val, KIND["magic"])
         self._bar(d, x0 + 12, y0 + 27, 236, s.cast_frac, MP_BAR)
 
+    def _menu(self, img, d, s: UiState) -> None:
+        """The command menu above the target window: the first level rightmost, each deeper one left of it."""
+        x1, y1 = W - 12, H - 136
+        for title, items, cursor in s.menu:
+            width = 44 + max(int(d.textlength(t, font=self.f_val)) for t, _ in items + ((title, True),))
+            x0 = x1 - width
+            y0 = y1 - (34 + 22 * len(items))
+            self.window(img, (x0, y0, x1, y1))
+            self._text(d, (x0 + 12, y0 + 8), title, self.f_small, DIM)
+            for i, (label, ok) in enumerate(items):
+                y = y0 + 28 + 22 * i
+                if i == cursor:
+                    d.rectangle([x0 + 6, y - 2, x1 - 7, y + 18], fill=(70, 90, 160, 150))
+                    _menu_pointer(d, x0 + 10, y + 3)
+                self._text(d, (x0 + 28, y), label, self.f_val, WHITE if ok else DIM)
+            x1 = x0 - 6
+
     def _palette(self, img, d, s: UiState) -> None:
         rows = s.palette
         x1, y0 = W - 12, 34
@@ -171,6 +191,11 @@ class FfxiUi:
             y = y0 + 8 + 18 * i
             self._text(d, (x0 + 12, y), key, self.f_small, KIND["skillchain"] if ok else DIM)
             self._text(d, (x0 + 40, y), name, self.f_small, WHITE if ok else DIM)
+
+
+def _menu_pointer(d: ImageDraw.ImageDraw, x: int, y: int) -> None:
+    """FFXI's pointer, drawn: a small white hand-like arrow."""
+    d.polygon([(x, y), (x + 11, y + 6), (x, y + 12)], fill=(255, 255, 255, 255), outline=(40, 40, 60, 255))
 
 
 def demo() -> UiState:

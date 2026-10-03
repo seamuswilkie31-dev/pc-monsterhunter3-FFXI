@@ -404,6 +404,7 @@ class App:
         self.status = "starting"
         self.monster_hp = self.player_hp = None
         self.monster_max = 0           # its max HP: read (monster_max_hp) or the most seen
+        self.menu = None               # the command menu: {"level": "root"/"ws"/"magic", "cur": i, "root": i}
 
     def step(self):
         now = time.monotonic()
@@ -411,6 +412,7 @@ class App:
             self.status = "waiting for the game..."
             return
         self.status = f"PAUSED ({key_name(self.cfg['hotkeys'].get('pause', 0x6E))})" if self.paused else "connected"
+        self._menu_step()
         m = self.mem.read("monster_hp") if self.mem.has("monster_hp") else None
         p = self.mem.read("player_hp") if self.mem.has("player_hp") else None
         mx = self.mem.read("player_max_hp") if self.mem.has("player_max_hp") else None
@@ -437,6 +439,78 @@ class App:
         self.monster_hp = writes.get("monster_hp", m)
         self.player_hp = writes.get("player_hp", p)
 
+    # --- the FFXI command menu: the pad's left face button (the Classic's Y) opens it in the port ---
+    ROOT = ("Weapon Skills", "Magic", "Items")
+
+    def _menu_step(self):
+        mem = self.mem
+        if not hasattr(mem, "menu_open"):
+            return
+        if not mem.menu_open():
+            mem.menu_events()                      # what was pressed before it closed: not ours
+            self.menu = None
+            return
+        if self.menu is None:
+            self.menu = {"level": "root", "cur": 0, "root": 0}
+        import port_bridge as P
+        for ev in mem.menu_events():
+            m = self.menu
+            n = len(self._menu_items(m["level"]))
+            if ev & P.CL_UP:
+                m["cur"] = (m["cur"] - 1) % n
+            elif ev & P.CL_DOWN:
+                m["cur"] = (m["cur"] + 1) % n
+            elif ev & P.CL_B:                      # the pad's bottom button (Xbox A): confirm
+                self._menu_confirm()
+            elif ev & P.CL_A:                      # the pad's right button (Xbox B): back
+                if m["level"] == "root":
+                    self._menu_close()
+                else:
+                    self.menu = {"level": "root", "cur": m["root"], "root": m["root"]}
+            if self.menu is None:
+                break
+
+    def _menu_items(self, level: str) -> list:
+        if level == "root":
+            return list(self.ROOT)
+        if level == "ws":
+            return list(self.e.w["ws"])
+        return list(self.e.j["spells"][:len(self.cfg["hotkeys"]["spells"])])
+
+    def _menu_confirm(self):
+        m = self.menu
+        if m["level"] == "root":
+            pick = self.ROOT[m["cur"]]
+            if pick == "Items":
+                self.mem.use_item()                # Monster Hunter's own item use
+                self._menu_close()
+            else:
+                self.menu = {"level": "ws" if pick == "Weapon Skills" else "magic", "cur": 0, "root": m["cur"]}
+        elif m["level"] == "ws":
+            self.actions.put(("ws", m["cur"]))
+            self._menu_close()
+        else:
+            self.actions.put(("spell", m["cur"]))
+            self._menu_close()
+
+    def _menu_close(self):
+        self.mem.close_menu()
+        self.menu = None
+
+    def menu_view(self) -> tuple:
+        """The menu as ffxi_ui draws it."""
+        m, e = self.menu, self.e
+        if m is None:
+            return ()
+        root = ("Command", tuple((t, True) for t in self.ROOT), m["cur"] if m["level"] == "root" else m["root"])
+        if m["level"] == "root":
+            return (root,)
+        if m["level"] == "ws":
+            sub = ("Weapon Skills", tuple((n, e.tp >= D.TP_WS_MIN) for n in self._menu_items("ws")), m["cur"])
+        else:
+            sub = ("Magic", tuple((n, e.mp >= D.SPELLS[n]["mp"]) for n in self._menu_items("magic")), m["cur"])
+        return (root, sub)
+
     # --- the FFXI interface in the game's window (the port) ---
     def ui_state(self, now: float):
         import ffxi_ui as U
@@ -462,7 +536,7 @@ class App:
             mp=int(e.mp), max_mp=e.j["mp"], tp=int(e.tp), effects=effects + tuple(tags),
             target_pct=None if target is None else round(target, 3), target_name=e.target.title(),
             casting=e.casting, cast_frac=round(cast_frac, 2),
-            log=tuple(zip(e.log[-7:], e.kinds[-7:])), palette=tuple(pal),
+            log=tuple(zip(e.log[-7:], e.kinds[-7:])), palette=tuple(pal), menu=self.menu_view(),
             status="" if self.status == "connected" else self.status)
 
     def run_game_ui(self, seconds: float | None = None):

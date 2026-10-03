@@ -1,17 +1,19 @@
 # FFXI layer — next session
 
-Where it stands (2026-10-04): **phase 1 works in the game.** The port's hooks find the hunter (HP 100/100
-on a new character) and the monster the game last hurt (Aptonoth, Jaggi); TP builds from hits, and a
-weapon skill's damage is written back and applied (a Jaggi taken down, the game's own death running).
-Hotkeys are on the number row (3-6 weapon skills, 7-0 - = [ ] spells, P pause): no numpad needed.
+Where it stands (2026-10-04): **the FFXI interface runs in the game.** Monster Hunter's HUD is switched
+off (`MH3_HIDE_HUD=1`); the layer draws FFXI's classic windows into the game's own window (status, target
+with the monster's HP percent, combat log, casting bar, macro palette); the pad's **X** opens the FFXI
+command menu (Weapon Skills / Magic / Items: d-pad, A to choose, B back), Items passing one press to the
+game's own item use. Saving works. Checked in play.
+
+Run: the port with `MH3_FFXI=1 MH3_HIDE_HUD=1`, then `uv run ffxi_mh3.py` (in-game interface by default).
 
 Next:
-1. **Spells and skillchains in play**: Cure on a hit hunter (player HP written), a nuke, two weapon skills
-   2-8 s apart, a magic burst. A large monster (Great Jaggi) to have the time.
-2. **Phase 2**: weapon skills and spells on Classic Controller chords instead of the keyboard
-   (`wpad_set_classic_filter`), the rules in the port, the overlay in the game's window (phase 3).
-3. Small monsters share the HP function, so the last one hit is the target; filter by max HP (+0x7A4)
-   if that gets in the way.
+1. **The target's name** ("Great Jaggi", not "Target"): which monster an object is.
+2. **Reskinning Monster Hunter's menus** in FFXI's manner: frames (`waku`), panels and words (`menu`),
+   with `brres_tex.py` (`UI-MAP.md`).
+3. Spells and skillchains in a long fight (a Great Jaggi), and balance (`ffxi_data.py`).
+4. Small monsters share the HP function, so the last one hit is the target; filter by max HP if needed.
 
 ## Found from the European Gecko codes (codes.rc24.xyz, RMHP08, Bully@Wiiplaza), checked in the disassembly
 

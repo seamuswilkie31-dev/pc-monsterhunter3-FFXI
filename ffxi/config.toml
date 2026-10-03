@@ -5,7 +5,7 @@
 
 backend = "port"         # "port": the native port, run with MH3_FFXI=1 (tools/ffxi_bridge.cpp)
                          # "dolphin": Dolphin + Dolphin Memory Engine, with the same disc
-name = "Adventurer"      # your hunter, as the FFXI interface and its combat log call you
+name = "12345"           # your hunter, as the FFXI interface and its combat log call you
 ui = "game"              # game: the FFXI interface in the game's window (the port); window; console
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
 weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,

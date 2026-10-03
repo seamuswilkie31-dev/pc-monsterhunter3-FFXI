@@ -31,7 +31,7 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 3;
+constexpr uint32_t kVersion = 4;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -69,8 +69,17 @@ struct Block {
     uint32_t player_obj, monster_obj;
     uint32_t monster_hits;  // the game's changes to a monster's HP, counted
     int32_t monster_delta;  // the last one (negative: damage)
+    // The FFXI command menu (classic_filter): while the layer runs, the Classic's Y (the pad's
+    // left face button) opens and closes it; while open, the d-pad and the face buttons are its,
+    // each press an event for the layer, and the game doesn't see them.
+    uint32_t menu_open;                 // port
+    uint32_t menu_close_seq, menu_close_ack;   // the layer closes it: bumps seq; the port acks
+    uint32_t item_seq, item_ack;        // the layer asks for one Y press to reach the game (its item)
+    uint32_t ev_head;                   // port: events written so far
+    uint32_t reserved[2];
+    uint32_t events[32];                // port: the buttons newly pressed, a ring
 };
-static_assert(sizeof(Block) == 752, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 912, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -143,6 +152,52 @@ void hook_master(PPCContext& c) {
     if (c.r[3] & 0xFF) g_player.store(obj, std::memory_order_relaxed);
 }
 
+// The Classic's buttons (KPAD_CL_*, as video.cpp's).
+enum : uint32_t { kClUp = 0x0001, kClLeft = 0x0002, kClX = 0x0008, kClA = 0x0010, kClY = 0x0020,
+                  kClB = 0x0040, kClDown = 0x4000, kClRight = 0x8000 };
+constexpr uint32_t kMenuButtons = kClUp | kClDown | kClLeft | kClRight | kClA | kClB | kClX | kClY;
+
+Block* g_block = nullptr;
+std::atomic<bool> g_layer_up{false};    // the layer bumped the overlay's alive within 3 s
+
+// Channel 1's Classic, before the game reads it.
+void classic_filter(int chan, ClassicState& s) {
+    Block* b = g_block;
+    if (chan != 0 || !b) return;
+    static uint32_t prev = 0;
+    static std::chrono::steady_clock::time_point item_until{};
+    uint32_t pressed = s.buttons & ~prev;
+    prev = s.buttons;
+    bool up = g_layer_up.load(std::memory_order_relaxed);
+    if (b->menu_close_seq != b->menu_close_ack) {
+        b->menu_open = 0;
+        b->menu_close_ack = b->menu_close_seq;
+    }
+    if (!up) {
+        b->menu_open = 0;
+        return;                                   // no layer: the pad is the game's, as it was
+    }
+    if (pressed & kClY) {
+        b->menu_open ^= 1;
+        pressed &= ~kClY;
+    }
+    if (b->menu_open) {
+        if (uint32_t ev = pressed & kMenuButtons) {
+            b->events[b->ev_head % 32] = ev;
+            std::atomic_thread_fence(std::memory_order_release);
+            b->ev_head = b->ev_head + 1;
+        }
+        s.buttons &= ~kMenuButtons;
+    }
+    auto now = std::chrono::steady_clock::now();
+    if (b->item_seq != b->item_ack) {
+        b->item_ack = b->item_seq;
+        item_until = now + std::chrono::milliseconds(120);
+    }
+    if (now < item_until) s.buttons |= kClY;      // the layer's Items: the game's own item use
+    else s.buttons &= ~kClY;                      // otherwise Y is the menu's
+}
+
 // Only RAM is committed in the host's reservation: MEM1 and MEM2.
 bool in_ram(uint32_t a, uint32_t n) {
     auto in = [&](uint32_t lo, uint32_t size) { return a >= lo && a - lo + n <= size; };
@@ -193,10 +248,11 @@ bool resolve(const Watch& w, uint32_t& out) {
 
 void serve_overlay(OverlayBlock* o) {
     static uint32_t shown = 0, alive = 0;
-    static auto last_alive = std::chrono::steady_clock::now();
+    static std::chrono::steady_clock::time_point last_alive{};   // never: no layer until it bumps alive
     static bool up = false;
     auto now = std::chrono::steady_clock::now();
     if (o->alive != alive) { alive = o->alive; last_alive = now; }
+    g_layer_up.store(now - last_alive < std::chrono::seconds(3), std::memory_order_relaxed);
     if (up && now - last_alive > std::chrono::seconds(3)) {
         video_overlay_update(nullptr, 0, 0);     // the layer has gone
         up = false;
@@ -275,6 +331,8 @@ void install() {
     b->version = kVersion;
     b->magic = kMagic;
     rt_log("ffxi: serving guest memory to the FFXI layer (shared block mh3-ffxi)");
+    g_block = b;
+    wpad_set_classic_filter(classic_filter);
     OverlayBlock* o = nullptr;
     if (HANDLE oh = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(OverlayBlock),
                                        L"mh3-ffxi-overlay")) {
