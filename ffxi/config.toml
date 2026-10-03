@@ -11,30 +11,37 @@ weapon = "long_sword"    # great_sword, long_sword, sword_and_shield, hammer, la
 player_max_hp = 150      # used to cap Cures until you find a max-HP address
 
 # ------------------------------------------------------------------------------------------------
-# Memory addresses (fill these in with Dolphin Memory Engine).
+# Memory addresses.
 #
-# Simple address:           address = 0x80123456
-# Pointer chain:            address = 0x80123456   offsets = [0x10, 0x2A4]
-#     (Monster data usually moves between quests, so monster HP will most likely be a pointer chain.)
+# With the port, the game's objects come from its hooks (tools/ffxi_bridge.cpp):
+#   base = "player"    the local hunter's object       address = an offset in it
+#   base = "monster"   the monster the game last hurt   address = an offset in it
+# Elsewhere (Dolphin, or anything without a hook):
+#   Simple address:    address = 0x80123456
+#   Pointer chain:     address = 0x80123456   offsets = [0x10, 0x2A4]
 # type = "u8", "u16", "u32" or "float"   (MH Tri is big-endian; the script handles that)
 #
 # Leave address = 0 for anything you haven't found yet - the script skips it.
 # The port's bridge serves 8 addresses at most, each with up to 4 offsets.
+#
+# The offsets below are the European release's (RMHP08), read from the game's own code where the
+# European Gecko codes patch it (ffxi/NEXT.md). The monster is whichever the game last hurt, so a small
+# monster you hit becomes the target until the big one is hit again.
 # ------------------------------------------------------------------------------------------------
 
-[addresses.monster_hp]      # REQUIRED: current HP of the (first) large monster
-address = 0
-offsets = []
-type = "u16"
+[addresses.monster_hp]      # REQUIRED: s32 at +0x7A0 of the monster (mh3_EmHpAdd)
+base = "monster"
+address = 0x7A0
+type = "u32"
 
 [addresses.player_hp]       # REQUIRED for Cures, Regen, Protect, Drain and spell interrupts
-address = 0
-offsets = []
+base = "player"             # s16 at +0x370 of the hunter (mh3_PlHpAdd)
+address = 0x370
 type = "u16"
 
 [addresses.player_max_hp]   # optional: replaces player_max_hp above
-address = 0
-offsets = []
+base = "player"
+address = 0x372
 type = "u16"
 
 # ------------------------------------------------------------------------------------------------

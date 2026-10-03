@@ -6,9 +6,13 @@ resolves them 60 times a second and publishes each value, and applies the layer'
 
 The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endian u32s,
     header   magic, version, heartbeat, pad
-    watch[8] addr, size, n_offsets, offsets[4], write_seq, write_value     (written by the layer)
+    watch[8] addr, size, n_offsets, offsets[4], write_seq, write_value, base   (written by the layer)
     result[8] valid, resolved, value, write_ack                             (written by the port)
     snap_seq, snap_ack, snap_ok, snap_path[260]: a snapshot of RAM on request (MEM1, then MEM2)
+    player_obj, monster_obj, monster_hits, monster_delta: what the port's hooks saw
+
+A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
+local hunter's object, or in the monster whose HP the game last changed).
 """
 from __future__ import annotations
 
@@ -18,17 +22,21 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 2
+VERSION = 3
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
-WATCH = struct.Struct(f"<3I{OFFSETS}I2I")
+WATCH = struct.Struct(f"<3I{OFFSETS}I3I")
 RESULT = struct.Struct("<4I")
 WATCH_AT = HEADER.size
 RESULT_AT = WATCH_AT + WATCHES * WATCH.size
 SNAP_AT = RESULT_AT + WATCHES * RESULT.size
 SNAP_PATH_LEN = 260
-SIZE = SNAP_AT + 12 + SNAP_PATH_LEN  # 704
+OBJ_AT = SNAP_AT + 12 + SNAP_PATH_LEN
+OBJ = struct.Struct("<3Ii")
+SIZE = OBJ_AT + OBJ.size
+assert SIZE == 752, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+BASES = {"address": 0, "player": 1, "monster": 2}
 
 MEM1, MEM1_SIZE = 0x80000000, 0x01800000
 MEM2, MEM2_SIZE = 0x90000000, 0x04000000
@@ -72,11 +80,15 @@ class PortBackend:
             self.slot[name] = i
             self._set_watch(i, a)
         self._hb, self._hb_time = HEADER.unpack_from(self.mm, 0)[2], 0.0  # connected once it moves
+        self._where = {}  # name -> the address last read
 
     def _set_watch(self, i: int, a: dict) -> None:
         t = a.get("type", "u16")
         if t not in TYPE_SIZE:
             raise ValueError(f"unknown type {t!r}")
+        base = a.get("base", "address")
+        if base not in BASES:
+            raise ValueError(f"unknown base {base!r}; pick one of {', '.join(BASES)}")
         offs = list(a.get("offsets", []))
         if len(offs) > OFFSETS:
             raise ValueError(f"the bridge follows {OFFSETS} offsets at most; got {len(offs)}")
@@ -85,7 +97,7 @@ class PortBackend:
         # addr last: the port ignores the watch until it is set
         put_u32(self.mm, at, 0)
         self.mm[at:at + WATCH.size] = WATCH.pack(0, TYPE_SIZE[t], len(offs), *(offs + [0] * (OFFSETS - len(offs))),
-                                                 ack, 0)
+                                                 ack, 0, BASES[base])
         put_u32(self.mm, at, a["address"])
 
     def connected(self) -> bool:
@@ -105,9 +117,14 @@ class PortBackend:
         if i is None:
             return None
         ack = u32(self.mm, result_at(i) + 12)  # the ack first: the port stores the value before it
-        valid, _, value, _ = RESULT.unpack_from(self.mm, result_at(i))
+        valid, where, value, _ = RESULT.unpack_from(self.mm, result_at(i))
         if not valid:
+            self._where.pop(name, None)
             return None  # pointer not valid right now (e.g. not in a quest)
+        if self._where.setdefault(name, where) != where:
+            # another object (another monster): one tick of nothing, so its HP isn't taken for a hit
+            self._where[name] = where
+            return None
         at = watch_at(i)
         if u32(self.mm, at + 7 * 4) != ack:
             # a write the port hasn't applied yet: report it, or the engine would take the old value
@@ -146,3 +163,9 @@ class PortBackend:
                 return bool(u32(self.mm, SNAP_AT + 8))
             time.sleep(0.02)
         return False
+
+    def objects(self) -> dict:
+        """What the port's hooks saw: the hunter's and the monster's objects (0: not yet), the game's
+        changes to a monster's HP counted, and the last one."""
+        player, monster, hits, delta = OBJ.unpack_from(self.mm, OBJ_AT)
+        return {"player": player, "monster": monster, "monster_hits": hits, "monster_delta": delta}

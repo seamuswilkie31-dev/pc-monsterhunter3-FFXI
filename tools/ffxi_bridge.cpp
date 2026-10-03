@@ -8,9 +8,14 @@
 // A host thread resolves them 60 times a second, publishes each value, and
 // applies the layer's writes.
 //
+// The game's objects move between quests; three hooks (tools/mh3-hooks.txt)
+// say where they are: the monster whose HP the game last changed
+// (mh3_EmHpAdd), and the local player's hunter (Pl_master_ck, mh3_PlHpAdd).
+// A watch may start from either instead of a fixed address.
+//
 // Not synchronised with the game: a read may see a value mid-frame, and a
 // write may be overwritten by the game's own read-modify-write, as with
-// Dolphin Memory Engine. Phase 2 moves this onto a hooked per-frame function.
+// Dolphin Memory Engine.
 #include "rt.h"
 
 #ifdef _WIN32
@@ -24,7 +29,7 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersion = 3;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -38,7 +43,9 @@ struct Watch {              // written by the layer
     uint32_t offsets[kOffsets];
     uint32_t write_seq;     // the layer bumps it after setting write_value
     uint32_t write_value;
+    uint32_t base;          // kBaseAddr: addr is an address; else the object's + addr
 };
+enum : uint32_t { kBaseAddr = 0, kBasePlayer = 1, kBaseMonster = 2 };
 struct Result {             // written by the port
     uint32_t valid;         // 1: resolved to RAM this tick
     uint32_t resolved;      // the final guest address
@@ -56,7 +63,42 @@ struct Block {
     // as the guest holds them, and sets snap_ack (snap_ok 0 if it failed).
     uint32_t snap_seq, snap_ack, snap_ok;
     char snap_path[260];    // UTF-8, NUL-terminated
+    // From the hooks: the objects, 0 until the game has touched one.
+    uint32_t player_obj, monster_obj;
+    uint32_t monster_hits;  // the game's changes to a monster's HP, counted
+    int32_t monster_delta;  // the last one (negative: damage)
 };
+static_assert(sizeof(Block) == 752, "ffxi/port_bridge.py mirrors this layout");
+
+// Set by the hooks, on guest threads; published by serve().
+std::atomic<uint32_t> g_player{0}, g_monster{0}, g_hits{0};
+std::atomic<int32_t> g_delta{0};
+PPCFunc orig_em_hp, orig_pl_hp, orig_master;
+
+// fn_8011E6BC(em*, delta, cap): the One Hit Kill code's function (NEXT.md).
+void hook_em_hp(PPCContext& c) {
+    uint32_t obj = c.r[3];
+    int32_t delta = (int32_t)c.r[4];
+    orig_em_hp(c);
+    g_monster.store(obj, std::memory_order_relaxed);
+    g_delta.store(delta, std::memory_order_relaxed);
+    g_hits.fetch_add(1, std::memory_order_relaxed);
+}
+
+// fn_802762F0(PLW*, short delta): the Infinite Health code's function. Offline,
+// only the local hunter's HP changes.
+void hook_pl_hp(PPCContext& c) {
+    uint32_t obj = c.r[3];
+    orig_pl_hp(c);
+    g_player.store(obj, std::memory_order_relaxed);
+}
+
+// Pl_master_ck(PLW*): true for the local player's hunter.
+void hook_master(PPCContext& c) {
+    uint32_t obj = c.r[3];
+    orig_master(c);
+    if (c.r[3] & 0xFF) g_player.store(obj, std::memory_order_relaxed);
+}
 
 // Only RAM is committed in the host's reservation: MEM1 and MEM2.
 bool in_ram(uint32_t a, uint32_t n) {
@@ -89,6 +131,12 @@ void wr(uint32_t a, uint32_t n, uint32_t v) {
 
 bool resolve(const Watch& w, uint32_t& out) {
     uint32_t a = w.addr;
+    if (w.base != kBaseAddr) {
+        uint32_t obj = w.base == kBasePlayer ? g_player.load(std::memory_order_relaxed)
+                     : w.base == kBaseMonster ? g_monster.load(std::memory_order_relaxed) : 0;
+        if (!obj) return false;
+        a = obj + w.addr;
+    }
     uint32_t n = w.n_offsets < (uint32_t)kOffsets ? w.n_offsets : (uint32_t)kOffsets;
     for (uint32_t i = 0; i < n; ++i) {
         if (!in_ram(a, 4)) return false;
@@ -127,6 +175,10 @@ void serve(Block* b) {
             std::atomic_thread_fence(std::memory_order_release);
             b->snap_ack = b->snap_seq;
         }
+        b->player_obj = g_player.load(std::memory_order_relaxed);
+        b->monster_obj = g_monster.load(std::memory_order_relaxed);
+        b->monster_delta = g_delta.load(std::memory_order_relaxed);
+        b->monster_hits = g_hits.load(std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_release);
         b->heartbeat = b->heartbeat + 1;
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
@@ -140,6 +192,11 @@ void install() {
     if (!h) { rt_log("ffxi: no shared block (error %lu)", GetLastError()); return; }
     auto* b = static_cast<Block*>(MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Block)));
     if (!b) { rt_log("ffxi: shared block not mapped (error %lu)", GetLastError()); return; }
+    orig_em_hp = ppc_hook("mh3_EmHpAdd", hook_em_hp);
+    orig_pl_hp = ppc_hook("mh3_PlHpAdd", hook_pl_hp);
+    orig_master = ppc_hook("Pl_master_ck__FP4_PLW", hook_master);
+    if (!orig_em_hp || !orig_pl_hp || !orig_master)
+        rt_log("ffxi: a hook is missing (tools/mh3-hooks.txt): the player and monster objects won't be known");
     // The layer may have made the block first and written its watches: keep them.
     b->version = kVersion;
     b->magic = kMagic;

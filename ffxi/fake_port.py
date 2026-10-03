@@ -25,11 +25,23 @@ MONSTER_DATA = 0x80480000    # where the "heap" put the monster this quest
 MONSTER_HP_OFF = 0x2A4
 PLAYER_HP = 0x80400010
 PLAYER_MAX_HP = 0x80400012
+# as the real game holds them (NEXT.md), found by the port's hooks
+EM_HP, PL_HP, PL_MAX_HP = 0x7A0, 0x370, 0x372   # s32 in the monster; s16 in the hunter
+PLAYER_OBJ = 0x80420000
+MONSTER_OBJ, MONSTER2_OBJ = 0x80440000, 0x80460000
 
 
 class FakeRam:
     def __init__(self):
         self.b = bytearray(SPAN)
+        self.player_obj = self.monster_obj = 0  # what the hooks have seen
+        self.monster_hits, self.monster_delta = 0, 0
+
+    def em_hp_add(self, obj: int, delta: int) -> None:
+        """The game's mh3_EmHpAdd, and the port's hook on it."""
+        self.wr(obj + EM_HP, 4, max(0, self.rd(obj + EM_HP, 4) + delta))
+        self.monster_obj, self.monster_delta = obj, delta
+        self.monster_hits += 1
 
     def ok(self, a: int, n: int) -> bool:
         return BASE <= a and a + n <= BASE + SPAN
@@ -45,10 +57,13 @@ def serve_once(mm, ram: FakeRam) -> None:
     """One tick of tools/ffxi_bridge.cpp's serve()."""
     for i in range(P.WATCHES):
         f = P.WATCH.unpack_from(mm, P.watch_at(i))
-        addr, size, n_off, offs, wseq, wval = f[0], f[1], f[2], f[3:3 + P.OFFSETS], f[-2], f[-1]
+        addr, size, n_off, offs, wseq, wval, base = f[0], f[1], f[2], f[3:3 + P.OFFSETS], f[-3], f[-2], f[-1]
         r = P.result_at(i)
         ack = P.u32(mm, r + 12)
         a, ok = addr, bool(addr)
+        if ok and base:
+            obj = {1: ram.player_obj, 2: ram.monster_obj}.get(base, 0)
+            a, ok = obj + addr, bool(obj)
         for o in offs[:min(n_off, P.OFFSETS)]:
             if not ok or not ram.ok(a, 4):
                 ok = False
@@ -71,6 +86,7 @@ def serve_once(mm, ram: FakeRam) -> None:
             f.write(bytes(P.MEM2_SIZE))
         P.put_u32(mm, P.SNAP_AT + 8, 1)
         P.put_u32(mm, P.SNAP_AT + 4, seq)
+    P.OBJ.pack_into(mm, P.OBJ_AT, ram.player_obj, ram.monster_obj, ram.monster_hits, ram.monster_delta)
     _, _, hb, _ = P.HEADER.unpack_from(mm, 0)
     P.put_u32(mm, 8, hb + 1)
 
@@ -81,6 +97,11 @@ def start(mm) -> FakeRam:
     ram.wr(MONSTER_DATA + MONSTER_HP_OFF, 2, 3000)
     ram.wr(PLAYER_HP, 2, 150)
     ram.wr(PLAYER_MAX_HP, 2, 150)
+    ram.wr(PLAYER_OBJ + PL_HP, 2, 150)
+    ram.wr(PLAYER_OBJ + PL_MAX_HP, 2, 150)
+    ram.wr(MONSTER_OBJ + EM_HP, 4, 3000)
+    ram.wr(MONSTER2_OBJ + EM_HP, 4, 900)
+    ram.player_obj = PLAYER_OBJ  # Pl_master_ck runs every frame
     P.put_u32(mm, 4, P.VERSION)
     P.put_u32(mm, 0, P.MAGIC)
     return ram
@@ -93,18 +114,18 @@ weapon = "long_sword"
 player_max_hp = 150
 
 [addresses.monster_hp]
-address = {MONSTER_PTR:#x}
-offsets = [{MONSTER_HP_OFF:#x}]
-type = "u16"
+base = "monster"
+address = {EM_HP:#x}
+type = "u32"
 
 [addresses.player_hp]
-address = {PLAYER_HP:#x}
-offsets = []
+base = "player"
+address = {PL_HP:#x}
 type = "u16"
 
 [addresses.player_max_hp]
-address = {PLAYER_MAX_HP:#x}
-offsets = []
+base = "player"
+address = {PL_MAX_HP:#x}
 type = "u16"
 
 [hotkeys]
@@ -120,13 +141,14 @@ def run(seconds: float | None) -> None:
     t0 = next_hit = next_roar = time.monotonic()
     while seconds is None or time.monotonic() - t0 < seconds:
         now = time.monotonic()
-        hp_at = MONSTER_DATA + MONSTER_HP_OFF
         if now >= next_hit:
-            hp = ram.rd(hp_at, 2)
-            ram.wr(hp_at, 2, 3000 if hp <= 1 else max(1, hp - random.randint(22, 48)))
+            if ram.rd(MONSTER_OBJ + EM_HP, 4) <= 1:
+                ram.wr(MONSTER_OBJ + EM_HP, 4, 3000)  # new monster
+            ram.em_hp_add(MONSTER_OBJ, -random.randint(22, 48))
             next_hit = now + random.uniform(0.8, 1.6)
         if now >= next_roar:
-            ram.wr(PLAYER_HP, 2, max(1, ram.rd(PLAYER_HP, 2) - random.randint(12, 30)))
+            at = PLAYER_OBJ + PL_HP
+            ram.wr(at, 2, max(1, ram.rd(at, 2) - random.randint(12, 30)))
             next_roar = now + random.uniform(3.0, 6.0)
         serve_once(mm, ram)
         time.sleep(1 / 60)
@@ -145,7 +167,12 @@ def test() -> int:
     mm = P.open_block()
     mm[:] = bytes(P.SIZE)
     ram = start(mm)
-    be = P.PortBackend(tomllib.loads(CONFIG)["addresses"])
+    CHAIN = {  # fixed addresses and a pointer chain, as found by scanning
+        "monster_hp": {"address": MONSTER_PTR, "offsets": [MONSTER_HP_OFF], "type": "u16"},
+        "player_hp": {"address": PLAYER_HP, "type": "u16"},
+        "player_max_hp": {"address": PLAYER_MAX_HP, "type": "u16"},
+    }
+    be = P.PortBackend(CHAIN)
     check(not be.connected(), "not connected before the port's first tick")
     serve_once(mm, ram)
     check(be.connected(), "connected once the heartbeat moves")
@@ -171,7 +198,7 @@ def test() -> int:
     serve_once(mm, ram)
     check(be.read("monster_hp") == 4000, "a write refused while unresolved is not replayed later")
 
-    be2 = P.PortBackend(tomllib.loads(CONFIG)["addresses"])  # the layer restarted
+    be2 = P.PortBackend(CHAIN)  # the layer restarted
     serve_once(mm, ram)
     check(be2.read("monster_hp") == 4000, "a restarted layer starts in step with the port")
 
@@ -196,6 +223,25 @@ def test() -> int:
         f.seek(MONSTER_DATA + MONSTER_HP_OFF - P.MEM1)
         check(int.from_bytes(f.read(2), "big") == 4000, "...with RAM at its addresses, big-endian")
     os.remove(path)
+
+    # the objects the port's hooks find (the real game's layout)
+    be3 = P.PortBackend(tomllib.loads(CONFIG)["addresses"])
+    serve_once(mm, ram)
+    check(be3.read("player_hp") == 150 and be3.read("player_max_hp") == 150, "the hunter's HP through its object")
+    check(be3.read("monster_hp") is None, "no monster until the game changes one's HP")
+    ram.em_hp_add(MONSTER_OBJ, -40)
+    serve_once(mm, ram)
+    check(be3.read("monster_hp") == 2960, "the monster the game hit, s32 at +0x7A0")
+    o = be3.objects()
+    check(o["monster"] == MONSTER_OBJ and o["player"] == PLAYER_OBJ and o["monster_delta"] == -40,
+          "the hooks' objects and the last change are published")
+    be3.write("monster_hp", 2500)
+    serve_once(mm, ram)
+    check(ram.rd(MONSTER_OBJ + EM_HP, 4) == 2500, "a write lands in the monster object")
+    ram.em_hp_add(MONSTER2_OBJ, -30)  # another monster hit
+    serve_once(mm, ram)
+    check(be3.read("monster_hp") is None, "a new monster reads as nothing for one tick (not a hit)")
+    check(be3.read("monster_hp") == 870, "...then its own HP")
     print("\nall good" if ok else "\nsome checks failed")
     return 0 if ok else 1
 

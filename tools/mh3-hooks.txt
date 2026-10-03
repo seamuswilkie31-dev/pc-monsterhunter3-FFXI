@@ -1,2 +1,7 @@
 # Monster Hunter Tri: the functions tools/mh3.cpp replaces, on top of
 # wiikit/runtime/hooks.txt.
+
+# the FFXI bridge (ffxi_bridge.cpp, MH3_FFXI=1): where the hunter and the monster are
+mh3_EmHpAdd            # a monster's HP changes: that monster
+mh3_PlHpAdd            # a hunter's HP changes: the local hunter, offline
+Pl_master_ck__FP4_PLW  # the local player's hunter

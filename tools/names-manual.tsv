@@ -29,3 +29,5 @@ addr	name	evidence
 804D2BA0	OSShutdownSystem	0x11C bytes as in Victorious, just before OSRestart; SCInit, SCCheckStatus, __OSStopPlayRecord, __OSUnRegisterStateEvent, __DVDPrepareReset, __OSReadStateFlags
 804EEE30	WPADGetAccGravityUnit	0xD4 bytes as in Victorious, after __wpadReceiveCallback; called by the game (80044DDC) and KPADiSamplingCallback
 804F1B20	WPADControlDpd	0x1080 bytes as in Victorious, after __wpadDpdCallback (0x38); called by the game's extension callback (8004378C) and KPAD
+8011E6BC	mh3_EmHpAdd	a monster's HP (s32 at +0x7A0) plus r4, clamped to 0 and to r5, then to a floor (+0x7A4 times the float at +0x7B0); the European One Hit Kill code (Gecko, Bully@Wiiplaza) replaces its add at 8011E6D4; called by fn_8011E750 only
+802762F0	mh3_PlHpAdd	a hunter's HP (s16 at +0x370 of the _PLW) plus r4, clamped to 0 and to +0x372; calls Pl_master_ck; the European Infinite Health code (Gecko, Bully@Wiiplaza) replaces its add at 80276344

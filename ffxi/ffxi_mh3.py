@@ -43,7 +43,9 @@ class DolphinBackend:
     def __init__(self, addresses: dict):
         import dolphin_memory_engine as dme
         self.dme = dme
-        self.addrs = {k: v for k, v in addresses.items() if v.get("address")}
+        # objects found by the port's hooks (base = "player"/"monster") mean nothing here
+        self.addrs = {k: v for k, v in addresses.items()
+                      if v.get("address") and v.get("base", "address") == "address"}
         self._next_hook_try = 0.0
 
     def connected(self) -> bool:

@@ -1,14 +1,16 @@
 # FFXI layer — next session
 
-Where it stands (2026-10-03): the port builds and boots on this PC with the bridge on (`MH3_FFXI=1`); the
-layer reads the running game's memory through it; `memscan.py` takes snapshots of RAM and compares them.
-`config.toml` has no addresses yet: that is the next step.
+Where it stands (2026-10-04): the port builds and boots on this PC with the bridge on (`MH3_FFXI=1`).
+Its hooks on the game's own HP functions find the hunter's and the monster's objects, and `config.toml`
+is filled in from them (offsets below). Checked against `fake_port.py` (20 protocol checks) and at the
+title screen (hooks attached, no objects yet); not yet in a hunt.
 
-1. **The hunting session.** Launch the port with the bridge, play to a hunt with a **large** monster
-   (Great Jaggi; a small Jaggi dies too fast to scan), and scan as in README section 2a: snapshot before
-   hitting, after hits (`dec`), after waiting (`same`), until a few candidates are left; then `ptr` for a
-   static pointer to the monster's data, checked across two quests. Then the player's HP.
-2. **The first real test:** the layer with those addresses: TP from hits, a weapon skill landing.
+1. **The first real test.** Launch the port with the bridge, play to a hunt with a large monster, start
+   the layer (`uv run ffxi_mh3.py`): the player's HP shows at once, the monster's from the first hit.
+   Check TP builds from hits, then land a weapon skill (Numpad 1).
+2. If a value looks wrong: `memscan.py` (README section 2a) to check it against a snapshot.
+3. Small monsters share the HP function, so hitting one makes it the target. If that's a problem, filter
+   by max HP (+0x7A4).
 
 ## Found from the European Gecko codes (codes.rc24.xyz, RMHP08, Bully@Wiiplaza), checked in the disassembly
 
