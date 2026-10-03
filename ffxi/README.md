@@ -33,7 +33,22 @@ uv run ffxi_mh3.py --config fake.toml       # in a second window
 uv run fake_port.py --test                  # the bridge's protocol checks
 ```
 
-## 2. Find the addresses (European release, in Dolphin)
+## 2a. Find the addresses in the port (no Dolphin)
+
+`memscan.py` takes snapshots of the port's RAM through the bridge (88 MB each, in `build/scan`) and
+compares them. Run the port with `MH3_FFXI=1`, start a hunt, then:
+
+```powershell
+uv run memscan.py snap s0        # before hitting the monster
+uv run memscan.py snap s1        # after a few hits
+uv run memscan.py filter s0 s1 dec --type u16 --range 1 60000
+uv run memscan.py snap s2        # after waiting, no hits, not hit yourself
+uv run memscan.py filter s1 s2 same
+uv run memscan.py list           # repeat hit/wait until a few are left
+uv run memscan.py ptr 0x90123456 # a static pointer to the struct holding it: address + offset for config.toml
+```
+
+## 2b. Find the addresses in Dolphin
 
 The port has no memory scanner, so the addresses are found in Dolphin, with the same disc the port runs
 (the `.rvz` in `build/`). The port runs the game's own code in the same address space, so the addresses
@@ -73,6 +88,7 @@ Run the port with the bridge on (it is off otherwise), then the layer:
 
 ```powershell
 $env:MH3_FFXI = "1"
+$env:PATH = "C:\msys64\mingw64\bin;$env:PATH"     # SDL3 and the other DLLs the build links
 cd build\run1; & ..\recomp-build\wiiboot.exe ..\extract --symbols ..\recomp\symbols.tsv
 ```
 

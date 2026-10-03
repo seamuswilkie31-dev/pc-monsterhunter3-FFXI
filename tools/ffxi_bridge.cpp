@@ -24,8 +24,10 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;
 constexpr int kWatches = 8, kOffsets = 4;
+constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
+constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
 
 // The block's layout; ffxi/port_bridge.py mirrors it field by field.
 // Host byte order; values are given as the guest holds them, made host-endian.
@@ -49,12 +51,28 @@ struct Block {
     uint32_t pad;
     Watch watch[kWatches];
     Result result[kWatches];
+    // A snapshot of RAM, for finding addresses (ffxi/memscan.py): the layer
+    // sets snap_path and bumps snap_seq; the port writes MEM1 then MEM2 there,
+    // as the guest holds them, and sets snap_ack (snap_ok 0 if it failed).
+    uint32_t snap_seq, snap_ack, snap_ok;
+    char snap_path[260];    // UTF-8, NUL-terminated
 };
 
 // Only RAM is committed in the host's reservation: MEM1 and MEM2.
 bool in_ram(uint32_t a, uint32_t n) {
     auto in = [&](uint32_t lo, uint32_t size) { return a >= lo && a - lo + n <= size; };
-    return in(0x80000000u, 0x01800000u) || in(0x90000000u, 0x04000000u);
+    return in(kMem1, kMem1Size) || in(kMem2, kMem2Size);
+}
+
+// Written beside the path, then renamed over it: the layer never sees half a file.
+bool snapshot(const char* path) {
+    std::string tmp = std::string(path) + ".part";
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = std::fwrite(host(kMem1), 1, kMem1Size, f) == kMem1Size &&
+              std::fwrite(host(kMem2), 1, kMem2Size, f) == kMem2Size;
+    ok = (std::fclose(f) == 0) && ok;
+    return ok && MoveFileExA(tmp.c_str(), path, MOVEFILE_REPLACE_EXISTING);
 }
 
 uint32_t rd(uint32_t a, uint32_t n) {
@@ -98,6 +116,16 @@ void serve(Block* b) {
             // the value after the write before the ack: the layer reads the ack first, then the value
             std::atomic_thread_fence(std::memory_order_release);
             if (pending) r.write_ack = w.write_seq;              // applied, or refused while unresolved
+        }
+        if (b->snap_seq != b->snap_ack) {
+            char path[sizeof b->snap_path];
+            std::memcpy(path, b->snap_path, sizeof path);
+            path[sizeof path - 1] = 0;
+            bool ok = snapshot(path);
+            if (!ok) rt_log("ffxi: snapshot to %s failed", path);
+            b->snap_ok = ok;
+            std::atomic_thread_fence(std::memory_order_release);
+            b->snap_ack = b->snap_seq;
         }
         std::atomic_thread_fence(std::memory_order_release);
         b->heartbeat = b->heartbeat + 1;

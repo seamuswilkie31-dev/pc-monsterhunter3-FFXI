@@ -61,6 +61,16 @@ def serve_once(mm, ram: FakeRam) -> None:
         mm[r:r + 12] = struct.pack("<3I", int(ok), a if ok else 0, ram.rd(a, size) if ok else 0)
         if pending:
             P.put_u32(mm, r + 12, wseq)
+    seq = P.u32(mm, P.SNAP_AT)
+    if seq != P.u32(mm, P.SNAP_AT + 4):
+        path = bytes(mm[P.SNAP_AT + 12:P.SNAP_AT + 12 + P.SNAP_PATH_LEN]).split(b"\0")[0].decode("utf-8")
+        mem1 = bytearray(P.MEM1_SIZE)
+        mem1[BASE - P.MEM1:BASE - P.MEM1 + SPAN] = ram.b
+        with open(path, "wb") as f:
+            f.write(mem1)
+            f.write(bytes(P.MEM2_SIZE))
+        P.put_u32(mm, P.SNAP_AT + 8, 1)
+        P.put_u32(mm, P.SNAP_AT + 4, seq)
     _, _, hb, _ = P.HEADER.unpack_from(mm, 0)
     P.put_u32(mm, 8, hb + 1)
 
@@ -164,6 +174,28 @@ def test() -> int:
     be2 = P.PortBackend(tomllib.loads(CONFIG)["addresses"])  # the layer restarted
     serve_once(mm, ram)
     check(be2.read("monster_hp") == 4000, "a restarted layer starts in step with the port")
+
+    import os, tempfile, threading
+    stop = threading.Event()
+
+    def tick():
+        while not stop.is_set():
+            serve_once(mm, ram)
+            time.sleep(0.01)
+
+    th = threading.Thread(target=tick)
+    th.start()
+    path = os.path.join(tempfile.mkdtemp(), "snap.bin")
+    try:
+        got = be2.snapshot(path, timeout=10)
+    finally:
+        stop.set()
+        th.join()
+    check(got and os.path.getsize(path) == P.MEM1_SIZE + P.MEM2_SIZE, "a snapshot is all of MEM1 and MEM2")
+    with open(path, "rb") as f:
+        f.seek(MONSTER_DATA + MONSTER_HP_OFF - P.MEM1)
+        check(int.from_bytes(f.read(2), "big") == 4000, "...with RAM at its addresses, big-endian")
+    os.remove(path)
     print("\nall good" if ok else "\nsome checks failed")
     return 0 if ok else 1
 

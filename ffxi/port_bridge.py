@@ -8,6 +8,7 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     header   magic, version, heartbeat, pad
     watch[8] addr, size, n_offsets, offsets[4], write_seq, write_value     (written by the layer)
     result[8] valid, resolved, value, write_ack                             (written by the port)
+    snap_seq, snap_ack, snap_ok, snap_path[260]: a snapshot of RAM on request (MEM1, then MEM2)
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 1
+VERSION = 2
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -25,7 +26,12 @@ WATCH = struct.Struct(f"<3I{OFFSETS}I2I")
 RESULT = struct.Struct("<4I")
 WATCH_AT = HEADER.size
 RESULT_AT = WATCH_AT + WATCHES * WATCH.size
-SIZE = RESULT_AT + WATCHES * RESULT.size  # 432
+SNAP_AT = RESULT_AT + WATCHES * RESULT.size
+SNAP_PATH_LEN = 260
+SIZE = SNAP_AT + 12 + SNAP_PATH_LEN  # 704
+
+MEM1, MEM1_SIZE = 0x80000000, 0x01800000
+MEM2, MEM2_SIZE = 0x90000000, 0x04000000
 
 TYPE_SIZE = {"u8": 1, "u16": 2, "u32": 4, "float": 4}
 
@@ -125,3 +131,18 @@ class PortBackend:
         put_u32(self.mm, at + 8 * 4, raw)        # write_value, then
         put_u32(self.mm, at + 7 * 4, seq + 1)    # write_seq: the port applies it on its next tick
         return True
+
+    def snapshot(self, path: str, timeout: float = 30.0) -> bool:
+        """Ask the port for a snapshot of RAM at path (MEM1, then MEM2); True once it is written."""
+        raw = str(path).encode("utf-8")
+        if len(raw) >= SNAP_PATH_LEN:
+            raise ValueError(f"snapshot path too long: {path}")
+        self.mm[SNAP_AT + 12:SNAP_AT + 12 + SNAP_PATH_LEN] = raw.ljust(SNAP_PATH_LEN, b"\0")
+        seq = (u32(self.mm, SNAP_AT + 4) + 1) & 0xFFFFFFFF  # one past the port's last ack
+        put_u32(self.mm, SNAP_AT, seq)
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if u32(self.mm, SNAP_AT + 4) == seq:
+                return bool(u32(self.mm, SNAP_AT + 8))
+            time.sleep(0.02)
+        return False
