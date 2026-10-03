@@ -5,6 +5,8 @@
 
 backend = "port"         # "port": the native port, run with MH3_FFXI=1 (tools/ffxi_bridge.cpp)
                          # "dolphin": Dolphin + Dolphin Memory Engine, with the same disc
+name = "Adventurer"      # your hunter, as the FFXI interface and its combat log call you
+ui = "game"              # game: the FFXI interface in the game's window (the port); window; console
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
 weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,
                          # switch_axe, light_bowgun, heavy_bowgun
@@ -32,6 +34,11 @@ player_max_hp = 150      # used to cap Cures until you find a max-HP address
 [addresses.monster_hp]      # REQUIRED: s32 at +0x7A0 of the monster (mh3_EmHpAdd)
 base = "monster"
 address = 0x7A0
+type = "u32"
+
+[addresses.monster_max_hp]  # optional: the target window's percent (else the most HP seen)
+base = "monster"            # s32 at +0x7A4, its max HP (ffxi/NEXT.md): confirmed in play
+address = 0x7A4
 type = "u32"
 
 [addresses.player_hp]       # REQUIRED for Cures, Regen, Protect, Drain and spell interrupts

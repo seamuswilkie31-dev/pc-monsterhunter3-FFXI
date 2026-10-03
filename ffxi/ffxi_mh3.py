@@ -3,6 +3,7 @@
 # dependencies = [
 #     "dolphin-memory-engine>=1.3",
 #     "pynput>=1.7",
+#     "pillow>=10",
 # ]
 # ///
 """FFXI combat layer for Monster Hunter Tri (Wii): the native PC port, or Dolphin.
@@ -169,6 +170,8 @@ class Engine:
     weapon: str
     player_max_hp: int = 150
     allow_kills: bool = False
+    me: str = "You"                 # the hunter's name, for the combat log
+    target: str = "target"          # what the log calls the monster
 
     tp: float = 0.0
     mp: float = 0.0
@@ -189,6 +192,7 @@ class Engine:
     prev_monster: int | None = None
     prev_player: int | None = None
     log: list = field(default_factory=list)
+    kinds: list = field(default_factory=list)   # each log line's kind (ffxi_ui.KIND), for its colour
 
     def __post_init__(self):
         self.j = D.JOBS[self.job]
@@ -197,9 +201,11 @@ class Engine:
         self.tp_hit = D.tp_per_hit(self.w["delay"])
 
     # --- helpers ---
-    def say(self, msg: str):
+    def say(self, msg: str, kind: str = "info"):
         self.log.append(msg)
-        del self.log[:-8]
+        self.kinds.append(kind)
+        del self.log[:-12]
+        del self.kinds[:-12]
 
     def _monster_floor(self) -> int:
         return 0 if self.allow_kills else 1
@@ -220,7 +226,7 @@ class Engine:
                     self.avg_hit += (delta - self.avg_hit) * 0.2
                     self.tp = min(D.TP_MAX, self.tp + self.tp_hit * self.j["tp_mult"])
                 elif delta < -300:
-                    self.say("New monster.")
+                    pass  # another monster
             self.prev_monster = monster_hp
 
         # player HP: detect damage taken
@@ -229,7 +235,7 @@ class Engine:
             if taken > 0:
                 self.tp = min(D.TP_MAX, self.tp + D.TP_WHEN_HIT * self.j["tp_mult"])
                 if self.casting:
-                    self.say(f"{self.casting} interrupted!")
+                    self.say(f"{self.me}'s casting of {self.casting} is interrupted.", "warn")
                     self.casting = None
                 if now < self.protect_until:
                     refund = max(1, round(taken * self.protect_power))
@@ -260,15 +266,16 @@ class Engine:
         name = self.w["ws"][slot]
         ws = D.WEAPON_SKILLS[name]
         if self.tp < D.TP_WS_MIN:
-            self.say(f"Not enough TP for {name} ({int(self.tp)}/1000).")
+            self.say(f"Not enough TP for {name} ({int(self.tp)}/1000).", "warn")
             return {}
         if monster_hp is None:
-            self.say("No monster to hit.")
+            self.say("You have no target.", "warn")
             return {}
         hits = ws.get("hits", 1)
         dmg = self.avg_hit * (interp_ftp(ws["ftp"], self.tp) + 0.8 * (hits - 1)) * self.j["ws_mult"]
         dmg = int(dmg)
-        self.say(f"{name}! ({int(self.tp)} TP) -> {dmg}")
+        self.say(f"{self.me} uses {name}.", "ws")
+        self.say(f"The {self.target} takes {dmg} points of damage.", "damage")
         self.tp = 0
 
         # skillchain?
@@ -282,7 +289,7 @@ class Engine:
                 self.sc_name = sc
                 self.mb_until = now + D.MB_WINDOW
                 self.mb_elements = D.SC_ELEMENTS[sc]
-                self.say(f"Skillchain: {sc}! +{bonus}")
+                self.say(f"Skillchain: {sc}. The {self.target} takes {bonus} points of damage.", "skillchain")
                 props = [sc]  # the chain can continue from its result
         self.last_ws_time, self.last_ws_props = now, props
 
@@ -298,16 +305,16 @@ class Engine:
         name = spells[slot]
         sp = D.SPELLS[name]
         if self.casting:
-            self.say(f"Already casting {self.casting}.")
+            self.say(f"You are already casting {self.casting}.", "warn")
             return
         if self.mp < sp["mp"]:
-            self.say(f"Not enough MP for {name}.")
+            self.say(f"You do not have enough MP to cast {name}.", "warn")
             return
         if sp["kind"] in ("heal", "regen", "protect", "drain") and not has_player_hp:
-            self.say(f"{name} needs the player_hp address.")
+            self.say(f"{name} needs the player_hp address.", "warn")
             return
         self.casting, self.cast_done = name, now + sp["cast"]
-        self.say(f"Casting {name}...")
+        self.say(f"{self.me} starts casting {name}.", "magic")
 
     def _finish_spell(self, now: float, monster_hp, player_hp) -> dict:
         name, self.casting = self.casting, None
@@ -316,17 +323,17 @@ class Engine:
         kind, writes = sp["kind"], {}
         if kind == "heal" and player_hp is not None:
             new = min(self.player_max_hp, player_hp + sp["power"])
-            self.say(f"{name}: +{new - player_hp} HP")
+            self.say(f"{self.me} casts {name}. {self.me} recovers {new - player_hp} HP.", "heal")
             writes["player_hp"] = self.prev_player = new
         elif kind == "regen":
             self.regen_until, self.regen_next, self.regen_power = now + sp["duration"], now + sp["tick"], sp["power"]
-            self.say("Regen on.")
+            self.say(f"{self.me} casts Regen. {self.me} gains the effect of Regen.", "heal")
         elif kind == "protect":
             self.protect_until, self.protect_power = now + sp["duration"], sp["power"]
-            self.say("Protect on.")
+            self.say(f"{self.me} casts Protect. {self.me} gains the effect of Protect.", "heal")
         elif kind in ("nuke", "drain"):
             if monster_hp is None:
-                self.say(f"{name} fizzled: no monster.")
+                self.say(f"{self.me} casts {name}, but there is no target.", "warn")
                 return {}
             dmg = self.avg_hit * sp["power"] * self.j["nuke_mult"]
             burst = now < self.mb_until and sp["element"] in self.mb_elements
@@ -335,7 +342,10 @@ class Engine:
             dmg = int(dmg)
             new = max(self._monster_floor(), monster_hp - dmg)
             writes["monster_hp"] = self.prev_monster = new
-            self.say(f"{'Magic Burst! ' if burst else ''}{name} -> {dmg}")
+            if burst:
+                self.say(f"Magic Burst! {self.me} casts {name}. The {self.target} takes {dmg} points of damage.", "burst")
+            else:
+                self.say(f"{self.me} casts {name}. The {self.target} takes {dmg} points of damage.", "magic")
             if kind == "drain" and player_hp is not None:
                 heal = min(40, dmg // 4)
                 writes["player_hp"] = self.prev_player = min(self.player_max_hp, player_hp + heal)
@@ -393,6 +403,7 @@ class App:
         self.paused = False
         self.status = "starting"
         self.monster_hp = self.player_hp = None
+        self.monster_max = 0           # its max HP: read (monster_max_hp) or the most seen
 
     def step(self):
         now = time.monotonic()
@@ -403,6 +414,13 @@ class App:
         m = self.mem.read("monster_hp") if self.mem.has("monster_hp") else None
         p = self.mem.read("player_hp") if self.mem.has("player_hp") else None
         mx = self.mem.read("player_max_hp") if self.mem.has("player_max_hp") else None
+        mm = self.mem.read("monster_max_hp") if self.mem.has("monster_max_hp") else None
+        if m is None:
+            self.monster_max = 0
+        elif mm and mm >= m:
+            self.monster_max = mm
+        else:
+            self.monster_max = max(self.monster_max, m)
         if self.paused:
             self.e.prev_monster, self.e.prev_player = m, p
             self._drain_actions(only_pause=True)
@@ -418,6 +436,57 @@ class App:
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
         self.player_hp = writes.get("player_hp", p)
+
+    # --- the FFXI interface in the game's window (the port) ---
+    def ui_state(self, now: float):
+        import ffxi_ui as U
+        e, hk = self.e, self.cfg["hotkeys"]
+        effects = tuple(n for n, until in (("Protect", e.protect_until), ("Regen", e.regen_until)) if now < until)
+        tags = []
+        if now < e.mb_until:
+            tags.append(f"MB {e.sc_name}")
+        elif D.SC_WINDOW_OPEN <= now - e.last_ws_time <= D.SC_WINDOW_CLOSE:
+            tags.append("Chain")
+        pal = [(key_name(hk["weapon_skills"][i]), n, e.tp >= D.TP_WS_MIN) for i, n in enumerate(e.w["ws"])]
+        pal += [(key_name(hk["spells"][i]), n, e.mp >= D.SPELLS[n]["mp"])
+                for i, n in enumerate(e.j["spells"][:len(hk["spells"])])]
+        cast_frac = 0.0
+        if e.casting:
+            total = D.SPELLS[e.casting]["cast"]
+            cast_frac = 1 - max(0.0, e.cast_done - now) / total if total else 1.0
+        target = None
+        if self.monster_hp is not None and self.monster_max:
+            target = max(0.0, min(1.0, self.monster_hp / self.monster_max))
+        return U.UiState(
+            name=e.me, job=e.job, hp=self.player_hp, max_hp=e.player_max_hp,
+            mp=int(e.mp), max_mp=e.j["mp"], tp=int(e.tp), effects=effects + tuple(tags),
+            target_pct=None if target is None else round(target, 3), target_name=e.target.title(),
+            casting=e.casting, cast_frac=round(cast_frac, 2),
+            log=tuple(zip(e.log[-7:], e.kinds[-7:])), palette=tuple(pal),
+            status="" if self.status == "connected" else self.status)
+
+    def run_game_ui(self, seconds: float | None = None):
+        """The FFXI interface drawn in the game's window, through the port (port_overlay.py)."""
+        import ffxi_ui as U
+        from port_overlay import PortOverlay
+        out, ui = PortOverlay(), U.FfxiUi()
+        start, last_draw = time.monotonic(), 0.0
+        print("FFXI interface: in the game's window. Ctrl+C to stop.")
+        try:
+            while seconds is None or time.monotonic() - start < seconds:
+                self.step()
+                now = time.monotonic()
+                if now - last_draw >= 1 / 20:            # 20 images a second at most, only when it changed
+                    last_draw = now
+                    img = ui.render(self.ui_state(now))
+                    if img is not None:
+                        out.show(img)
+                out.keep_alive()
+                time.sleep(1 / 60)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            out.show(None)
 
     def _drain_actions(self, only_pause=False):
         out = []
@@ -615,6 +684,8 @@ def main() -> int:
     ap.add_argument("--sim", action="store_true", help="fake fight, no game")
     ap.add_argument("--backend", choices=["port", "dolphin"], help="override backend from config")
     ap.add_argument("--no-overlay", action="store_true", help="print to the console instead of an overlay")
+    ap.add_argument("--ui", choices=["game", "window", "console"],
+                    help="game: in the game's window (the port's default); window: a separate overlay; console")
     ap.add_argument("--seconds", type=float, help="console mode: stop after N seconds")
     ap.add_argument("--allow-kills", action="store_true", help="let weapon skills/spells take the monster to 0 HP")
     ap.add_argument("--selftest", action="store_true")
@@ -631,7 +702,8 @@ def main() -> int:
     if weapon not in D.WEAPONS:
         sys.exit(f"unknown weapon {weapon}; pick one of {', '.join(D.WEAPONS)}")
 
-    engine = Engine(job, weapon, cfg.get("player_max_hp", 150), allow_kills=a.allow_kills)
+    engine = Engine(job, weapon, cfg.get("player_max_hp", 150), allow_kills=a.allow_kills,
+                    me=cfg.get("name", "Adventurer"))
     backend = a.backend or cfg.get("backend", "port")
     if a.sim:
         mem = SimBackend(engine.player_max_hp)
@@ -653,8 +725,11 @@ def main() -> int:
     print(f"FFXI layer: {D.JOBS[job]['name']} with {weapon.replace('_', ' ')}. "
           f"{' '.join(map(key_name, hk['weapon_skills']))} = weapon skills, "
           f"{' '.join(map(key_name, hk['spells']))} = spells, {key_name(hk.get('pause', 0x6E))} = pause.")
-    if a.no_overlay:
+    ui = "console" if a.no_overlay else a.ui or cfg.get("ui") or ("game" if backend == "port" and not a.sim else "window")
+    if ui == "console":
         app.run_console(a.seconds)
+    elif ui == "game":
+        app.run_game_ui(a.seconds)
     else:
         try:
             app.run_overlay()

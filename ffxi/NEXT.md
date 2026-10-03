@@ -21,7 +21,7 @@ Next:
 | hunter max HP | + `0x372` | s16 | |
 | hunter red (recoverable) HP, likely | + `0x376` | s16 | |
 | monster HP | monster object + `0x7A0` | s32 | `fn_8011E6BC(em*, delta, cap)`, called by `fn_8011E750` only |
-| monster max HP, likely | + `0x7A4` | s32 | `+0x7B0` (float) is a ratio of it HP can't fall below |
+| monster max HP | + `0x7A4` | s32 | confirmed in play (the target window's percent); `+0x7B0` (float) is a ratio of it HP can't fall below |
 
 The codes: Infinite Health `04276344` (the `add` in `fn_802762F0`), One Hit Kill `0411E6D4` (the `add` in
 `fn_8011E6BC`). `Pl_master_ck(_PLW*)` (`8026FE38`) says whether a hunter object is the local player's.
