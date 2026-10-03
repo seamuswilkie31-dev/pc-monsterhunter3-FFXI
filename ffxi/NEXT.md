@@ -8,6 +8,17 @@ game's own item use. Saving works. Checked in play.
 
 Run: the port with `MH3_FFXI=1 MH3_HIDE_HUD=1`, then `uv run ffxi_mh3.py` (in-game interface by default).
 
+**Open: a crash on entering a quest's area the second time** (2026-10-03, in play). The Deserted
+Island (`map01`) loaded for a quest, back to the village, then `map01` again: during that load the game
+stopped, `g3d_restex_ac.h:38 Panic: ResTex::ref: Object not valid` (a model's texture not loaded), from
+`fn_800CE704` <- `fn_800416F8` <- `fn_80046D98`. The log is kept in `build/run1/crash_20261003_restex.log`.
+Not yet known whether it is the port's (only one quest load was tried before) or `MH3_HIDE_HUD`'s (the
+one change near the game's resources). Next step: the same sequence without `MH3_HIDE_HUD`; if it still
+crashes, the port's.
+
+A fight recording (`--record`) of the session is in `build/run1/fight_20261003_1536.jsonl` (village,
+Moga Woods, the start of a mushroom quest; no large monster yet).
+
 Next:
 1. **The target's name** ("Great Jaggi", not "Target"): which monster an object is.
 2. **Reskinning Monster Hunter's menus** in FFXI's manner: frames (`waku`), panels and words (`menu`),
