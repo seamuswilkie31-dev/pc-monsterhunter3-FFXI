@@ -32,7 +32,8 @@ HP_COL = [(1.0, (238, 240, 250)), (0.75, (246, 232, 120)), (0.5, (250, 170, 80))
 MP_BAR, TP_READY, TP_LOW = (122, 168, 255), (160, 236, 140), (190, 200, 220)
 EXP_BAR = (230, 200, 110)
 KIND = {"ws": (255, 255, 255), "damage": (255, 255, 255), "magic": (170, 205, 255), "heal": (150, 240, 160),
-        "skillchain": (255, 226, 120), "burst": (255, 200, 90), "warn": (250, 150, 140), "info": (210, 214, 230)}
+        "skillchain": (255, 226, 120), "burst": (255, 200, 90), "warn": (250, 150, 140), "info": (210, 214, 230),
+        "say": (255, 255, 255), "emote": (230, 220, 255)}
 UP, DOWN = "\u25b2", "\u25bc"
 
 
@@ -136,6 +137,7 @@ class UiState:
     nameplate: tuple | None = None        # where your head is in the picture (-1..1, y up): your name above it
     target_arrow: tuple | None = None     # (x, y, locked, bob 0..1): FFXI's arrow above the target's head
     target_locked: bool = False
+    chat_input: str | None = None         # the chat line being typed (None: closed)
     status: str = ""
 
 
@@ -164,7 +166,7 @@ class FfxiUi:
             self._effects(img, d, s)
         if s.target_pct is not None:
             self._target(img, d, s)
-        if s.log:
+        if s.log or s.chat_input is not None:
             self._log(img, d, s)
         if s.casting:
             self._cast(img, d, s)
@@ -290,11 +292,19 @@ class FfxiUi:
 
     def _log(self, img, d, s: UiState) -> None:
         lines = s.log[-7:]
+        typing = s.chat_input is not None
         x0, y1 = 12, H - 12
-        y0 = y1 - 16 - 20 * len(lines)
+        y0 = y1 - 16 - 20 * (len(lines) + (1 if typing else 0))
         self.window(img, (x0, y0, x0 + 600, y1))
         for i, (text, kind) in enumerate(lines):
             self._text(d, (x0 + 12, y0 + 9 + 20 * i), text, self.f_log, KIND.get(kind, WHITE))
+        if typing:                                   # the input line, as FFXI's: its own row, a caret after it
+            y = y0 + 9 + 20 * len(lines)
+            d.line([(x0 + 8, y - 3), (x0 + 592, y - 3)], fill=(110, 125, 170, 200))
+            shown = s.chat_input
+            while shown and d.textlength(shown + "_", font=self.f_log) > 570:
+                shown = shown[1:]
+            self._text(d, (x0 + 12, y), shown + "_", self.f_log, WHITE)
 
     def _cast(self, img, d, s: UiState) -> None:
         x0, y0 = W // 2 - 130, H - 200

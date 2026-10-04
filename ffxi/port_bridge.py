@@ -18,6 +18,8 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     bgm_stream, bgm_seq, bgm_mute, reserved: the game's music (what its player was last asked for), and
         the layer's word that it be silent while FFXI's plays
     map[16]: the map's code module linked now
+    chat_open, chat_seq, chat_line[128], chat_sent[128]: FFXI's chat line ("/" opens it in the game's
+        window; the port captures the typing): open, lines sent so far, what's typed, the last sent
 
 A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
 local hunter's object, or in the monster whose HP the game last changed).
@@ -30,7 +32,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 7
+VERSION = 8
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -52,8 +54,10 @@ TARGET = struct.Struct("<ffIII16sf")    # x, y, ok, locked, model, name, dist
 BGM_AT = TARGET_AT + TARGET.size
 BGM = struct.Struct("<4I")              # stream, seq, mute, reserved
 MAP_AT = BGM_AT + BGM.size              # the map's code module linked now: "map_village", "map01"; "": none
-SIZE = MAP_AT + 16
-assert SIZE == 1008, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+CHAT_AT = MAP_AT + 16
+CHAT = struct.Struct("<II128s128s")     # open, seq, line, sent
+SIZE = CHAT_AT + CHAT.size
+assert SIZE == 1272, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
 # the Classic's buttons, as the port's filter reports them (the pad's: by position)
 CL_UP, CL_LEFT, CL_X, CL_A, CL_Y, CL_B, CL_DOWN, CL_RIGHT = 0x0001, 0x0002, 0x0008, 0x0010, 0x0020, 0x0040, 0x4000, 0x8000
@@ -231,6 +235,12 @@ class PortBackend:
         """What Monster Hunter's music player was last asked to play: (its stream, a count of requests)."""
         stream, seq, _, _ = BGM.unpack_from(self.mm, BGM_AT)
         return stream, seq
+
+    def chat(self) -> tuple[bool, str, int, str]:
+        """FFXI's chat line: (open, what's typed so far, lines sent so far, the last sent)."""
+        is_open, seq, line, sent = CHAT.unpack_from(self.mm, CHAT_AT)
+        text = lambda b: b.split(bytes(1))[0].decode("utf-8", "replace")
+        return bool(is_open), text(line), seq, text(sent)
 
     def map_name(self) -> str:
         """The map the game has loaded ("map_village", "map01"...; "" in the menus)."""

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import queue
+import re
 import random
 import sys
 import time
@@ -169,7 +170,7 @@ def macro_keys(cfg: dict) -> list[int]:
     return list(hk.get("macros") or (hk.get("weapon_skills", []) + hk.get("spells", [])))
 
 
-def start_hotkeys(cfg: dict, actions: queue.Queue):
+def start_hotkeys(cfg: dict, actions: queue.Queue, typing=lambda: False):
     try:
         from pynput import keyboard
     except Exception as e:
@@ -179,6 +180,8 @@ def start_hotkeys(cfg: dict, actions: queue.Queue):
     pause_key = cfg["hotkeys"].get("pause", 0x6E)
 
     def on_press(key):
+        if typing():                                   # the chat line has the keyboard
+            return
         vk = getattr(key, "vk", None)
         if vk is None and hasattr(key, "value"):
             vk = getattr(key.value, "vk", None)
@@ -226,6 +229,8 @@ class App:
         self.sounds = None             # FFXI's sounds (ffxi_sound.Player), in the game's interface
         self.character = None          # FFXI's character in the game (port_model.PortModel)
         self.port_target = None        # the port's target (port_bridge.target): its arrow, lock, model
+        self.chat_seen = None          # the chat line's lines handled so far (port_bridge.chat)
+        self.chat_typing = None        # what's being typed, while the line is open
         self.mh_weapon = cfg.get("weapon", "sword_and_shield")   # Monster Hunter's weapon: FFXI's like is held
         self._rebuilding = False
         self.music_now = "unset"       # FFXI's piece playing (None: the game's own), and when to leave battle
@@ -278,6 +283,7 @@ class App:
         self._play_events()
         self._music(now, p)
         self._weapon_watch()
+        self._chat_step()
         if self.e.dirty and now - self._saved_at > 5:
             self.save()
         if self.rec:
@@ -593,7 +599,7 @@ class App:
             target_check=check, target_effects=tuple(sorted({s for s, _ in e.debuffs})),
             casting=e.casting, cast_frac=round(cast_frac, 2),
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now),
-            nameplate=self._nameplate(), **self._target_arrow(now),
+            nameplate=self._nameplate(), **self._target_arrow(now), chat_input=self.chat_typing,
             status="" if self.status == "connected" else self.status)
 
     def _target_arrow(self, now: float) -> dict:
@@ -612,6 +618,55 @@ class App:
         if fade > 0:
             lines = [(t, k, at) for t, k, at in lines if now - at < fade]
         return tuple((t, k) for t, k, _ in lines)
+
+    def _chat_step(self) -> None:
+        """FFXI's chat line, typed in the game's window ("/" opens it): each line sent handled."""
+        if not hasattr(self.mem, "chat"):
+            return
+        is_open, line, seq, sent = self.mem.chat()
+        self.chat_typing = line if is_open else None
+        if self.chat_seen is None:
+            self.chat_seen = seq
+        if seq != self.chat_seen:
+            self.chat_seen = seq
+            self.chat_command(sent)
+
+    def typing(self) -> bool:
+        return self.chat_typing is not None
+
+    def chat_command(self, text: str) -> None:
+        """A line from the chat line: an emote (/wave), an action (/ma "Cure", /ja, /ws), /echo, or words said."""
+        import ffxi_model as FM
+        e, text = self.e, text.strip()
+        if not text:
+            return
+        if not text.startswith("/"):
+            e.say(f"{e.me} : {text}", "say")
+            return
+        word, _, rest = text[1:].partition(" ")
+        word, rest = word.lower(), rest.strip().strip('"')
+        rest = re.sub(r"\s*<\w+>$", "", rest).strip().strip('"')   # a target in brackets (<t>, <me>): the one there is
+        if word in FM.EMOTES:
+            code, msg, hold = FM.EMOTES[word]
+            e.say(msg.format(me=e.me, their="their"), "emote")
+            if self.character:
+                if word == "heal":
+                    self.character.request("rx0", "rx1")
+                else:
+                    self.character.request(code, code if hold else None)
+        elif word in ("s", "say"):
+            e.say(f"{e.me} : {rest}", "say")
+        elif word == "echo":
+            e.say(rest, "info")
+        elif word in ("ma", "magic", "ja", "jobability", "ws", "weaponskill", "pet", "use"):
+            name = next((n for n in list(D.SPELLS) + list(D.ABILITIES) + list(D.WEAPON_SKILLS)
+                         if n.lower() == rest.lower()), None)
+            if name:
+                self.actions.put(("use", name))
+            else:
+                e.say(f"No such action: {rest}.", "warn")
+        else:
+            e.say(f"Unknown command: /{word}.", "warn")
 
     def _weapon_watch(self) -> None:
         """Monster Hunter's weapon, from its hunter's motion's name (w03_*: the lance): when it changes,
@@ -875,7 +930,7 @@ def main() -> int:
         mem.set_name_height(cfg.get("nameplate_height", 200))
     if a.record:
         app.start_recording(a.record)
-    start_hotkeys(cfg, app.actions)
+    start_hotkeys(cfg, app.actions, app.typing)
     keys = macro_keys(cfg)
     print(f"FFXI layer: {engine.me}, {D.JOBS[engine.job]['name']} ({engine.job_label()}) with "
           f"{weapon.replace('_', ' ')}. Macros: "

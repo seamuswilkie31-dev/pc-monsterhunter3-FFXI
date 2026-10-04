@@ -41,7 +41,7 @@ extern uint32_t g_rso_base[];
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 7;
+constexpr uint32_t kVersion = 8;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -111,8 +111,14 @@ struct Block {
     uint32_t bgm_mute;                  // layer: 1 while FFXI's music plays
     uint32_t reserved3;
     char map[16];                       // port: the map's code module linked now ("map_village", "map01"; "": none)
+    // FFXI's chat line (chat_key): "/" opens it, the keyboard typing into it (wiikit's text capture), Enter
+    // sends it, Esc closes it.
+    uint32_t chat_open;                 // port: 1 while it's open
+    uint32_t chat_seq;                  // port: bumped with each line sent
+    char chat_line[128];                // port: what's typed so far (UTF-8)
+    char chat_sent[128];                // port: the last line sent
 };
-static_assert(sizeof(Block) == 1008, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 1272, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -362,6 +368,57 @@ void classic_filter(int chan, ClassicState& s) {
     }
     if (now < l_until) s.buttons |= kClL, s.lt = 1.0f;
     else s.buttons &= ~kClL, s.lt = 0.0f;
+}
+
+// FFXI's chat line. The keyboard's "/" (or the keypad's) opens it while the layer runs; meanwhile the
+// keyboard is text for it, not the game's (wiikit's text capture): Backspace, Enter to send, Esc to close.
+// SDL's scancodes:
+enum : int { kScReturn = 40, kScEscape = 41, kScBackspace = 42, kScSlash = 56, kScKpDivide = 84, kScKpEnter = 88 };
+std::mutex g_chat_mx;
+std::string g_chat;
+bool g_chat_open = false;
+std::chrono::steady_clock::time_point g_chat_opened;
+
+void chat_publish(Block* b) {                       // g_chat_mx held
+    b->chat_open = g_chat_open ? 1 : 0;
+    std::memset(b->chat_line, 0, sizeof b->chat_line);
+    std::memcpy(b->chat_line, g_chat.data(), std::min(g_chat.size(), sizeof b->chat_line - 1));
+}
+
+bool chat_key(int scancode, const char* text) {
+    Block* b = g_block;
+    if (!b || !g_layer_up.load(std::memory_order_relaxed)) return false;
+    std::lock_guard<std::mutex> lk(g_chat_mx);
+    auto now = std::chrono::steady_clock::now();
+    if (!g_chat_open) {
+        if (text || (scancode != kScSlash && scancode != kScKpDivide)) return false;
+        g_chat_open = true, g_chat = "/", g_chat_opened = now;
+        video_text_capture(true);
+        chat_publish(b);
+        return true;
+    }
+    if (text) {                                   // the "/" that opened it comes as text too: once
+        if (g_chat == "/" && std::strcmp(text, "/") == 0 && now - g_chat_opened < std::chrono::milliseconds(300))
+            return true;
+        if (g_chat.size() + std::strlen(text) < sizeof b->chat_line - 1) g_chat += text;
+    } else if (scancode == kScBackspace) {
+        while (!g_chat.empty() && (g_chat.back() & 0xC0) == 0x80) g_chat.pop_back();   // a whole UTF-8 character
+        if (!g_chat.empty()) g_chat.pop_back();
+    } else if (scancode == kScReturn || scancode == kScKpEnter) {
+        if (!g_chat.empty()) {
+            std::memset(b->chat_sent, 0, sizeof b->chat_sent);
+            std::memcpy(b->chat_sent, g_chat.data(), std::min(g_chat.size(), sizeof b->chat_sent - 1));
+            std::atomic_thread_fence(std::memory_order_release);
+            b->chat_seq = b->chat_seq + 1;
+        }
+        g_chat_open = false, g_chat.clear();
+        video_text_capture(false);
+    } else if (scancode == kScEscape) {
+        g_chat_open = false, g_chat.clear();
+        video_text_capture(false);
+    }
+    chat_publish(b);
+    return true;                                  // while it's open every key is the line's
 }
 
 // Only RAM is committed in the host's reservation: MEM1 and MEM2.
@@ -744,9 +801,9 @@ void hook_cam_posture(PPCContext& c) {
 // set or, while the hunter's weapon is out, the battle set; and actions over them, on the layer's
 // request (a spell's casting) or the hunter's (Monster Hunter's attacks: hunter_motion).
 // ================================================================================================
-constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 4;     // 'MH3M'
+constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 5;     // 'MH3M'
 constexpr int kModelMaxVerts = 100000, kModelVertFloats = 13, kModelMaxLayers = 16, kModelTex = 256;
-constexpr int kModelMaxJoints = 128, kModelMaxClips = 48, kModelPool = 1 << 20, kXf = 10;
+constexpr int kModelMaxJoints = 128, kModelMaxClips = 96, kModelPool = 1 << 22, kXf = 10;
 enum : uint32_t { kStand = 0, kMove = 1, kAction = 2 };
 enum : uint32_t { kPeace = 0, kBattle = 1 };
 constexpr uint32_t kNone = 0xFFFFFFFF;
@@ -783,7 +840,7 @@ struct ModelBlock {
     float pool[kModelPool];
     uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
 };
-static_assert(sizeof(ModelBlock) == 13590784, "ffxi/port_model.py mirrors this layout");
+static_assert(sizeof(ModelBlock) == 26175232, "ffxi/port_model.py mirrors this layout");
 
 // The character's motions, copied from the block when it changes. Moving: under 15 units a second (30
 // to start) the set's standing one; moving, the one made for the nearest speed, played that much faster
@@ -947,6 +1004,7 @@ struct Animator {
         if (!hunter) speed = 0;
         have_last = hunter, last_x = x, last_z = z;
         moving = moving ? speed > 15.0f : speed > 30.0f;
+        if (moving && act >= 0 && !act_out && (act_loop || act_next >= 0) && !dead) act_out = true;   // moving ends a held one
         int want = locomotion();
         if (want >= 0 && want != cur) {
             bool stride = cur >= 0 && clips[cur].kind == kMove && clips[want].kind == kMove;
@@ -1246,6 +1304,14 @@ void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
         }
         project_name(b);
         serve_music(b, g_layer_up.load(std::memory_order_relaxed));
+        if (!g_layer_up.load(std::memory_order_relaxed)) {
+            std::lock_guard<std::mutex> lk(g_chat_mx);
+            if (g_chat_open) {
+                g_chat_open = false, g_chat.clear();
+                video_text_capture(false);
+                chat_publish(b);
+            }
+        }
         serve_map(b);
         b->player_obj = g_player.load(std::memory_order_relaxed);
         b->monster_obj = g_monster.load(std::memory_order_relaxed);
@@ -1287,6 +1353,7 @@ void install() {
     rt_log("ffxi: serving guest memory to the FFXI layer (shared block mh3-ffxi)");
     g_block = b;
     wpad_set_classic_filter(classic_filter);
+    video_set_key_hook(chat_key);
     OverlayBlock* o = nullptr;
     if (HANDLE oh = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(OverlayBlock),
                                        L"mh3-ffxi-overlay")) {

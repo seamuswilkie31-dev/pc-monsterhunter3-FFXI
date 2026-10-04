@@ -450,32 +450,35 @@ def _gear(face, head, body, hands, legs, feet, main, sub):
             "main": main, "sub": sub}
 
 
+# dances: /dance1-4's, the first file's number (dc0 there, dc1 six files on, dc2 and dc3 after them; the waist
+# parts, dc02..dc32, a little later); emotes: the race's emotes, the first file's number: six files, their
+# waist parts the six after;
 # battle: the race's battle motions, (the first's file number as the client writes it, folder * 1000 + file;
 # how many; the client's tables, as the community's viewers give them), each file's waist part that + how
 # many. Which is a weapon's: the one drawing it as its style does (battle_files)
 RACES = {
-    "hume_male": {"battle": (32013, 9), "label": "Hume (male)", "skeleton": "ROM/27/82.DAT",
+    "hume_male": {"dances": 191054, "emotes": 32040, "battle": (32013, 9), "label": "Hume (male)", "skeleton": "ROM/27/82.DAT",
                   "motions": ["ROM/27/82.DAT", "ROM/27/83.DAT", "ROM/27/85.DAT"],
                   "gear": _gear(7080, 7112, 7368, 7624, 7880, 8136, 8392, 41199), "faces": 16},
-    "hume_female": {"battle": (36117, 8), "label": "Hume (female)", "skeleton": "ROM/32/58.DAT",
+    "hume_female": {"dances": 192002, "emotes": 37013, "battle": (36117, 8), "label": "Hume (female)", "skeleton": "ROM/32/58.DAT",
                     "motions": ["ROM/32/58.DAT", "ROM/32/59.DAT", "ROM/32/61.DAT"],
                     "gear": _gear(10256, 10288, 10544, 10800, 11056, 11312, 11568, 42479), "faces": 16},
-    "elvaan_male": {"battle": (41084, 10), "label": "Elvaan (male)", "skeleton": "ROM/37/31.DAT",
+    "elvaan_male": {"dances": 192078, "emotes": 41114, "battle": (41084, 10), "label": "Elvaan (male)", "skeleton": "ROM/37/31.DAT",
                     "motions": ["ROM/37/31.DAT", "ROM/37/32.DAT", "ROM/37/34.DAT"],
                     "gear": _gear(13432, 13464, 13720, 13976, 14232, 14488, 14744, 43759), "faces": 16},
-    "elvaan_female": {"battle": (46057, 6), "label": "Elvaan (female)", "skeleton": "ROM/42/4.DAT",
+    "elvaan_female": {"dances": 193026, "emotes": 46075, "battle": (46057, 6), "label": "Elvaan (female)", "skeleton": "ROM/42/4.DAT",
                       "motions": ["ROM/42/4.DAT", "ROM/42/5.DAT", "ROM/42/7.DAT"],
                       "gear": _gear(16608, 16640, 16896, 17152, 17408, 17664, 17920, 45039), "faces": 16},
-    "tarutaru_male": {"battle": (51019, 6), "label": "Tarutaru (male)", "skeleton": "ROM/46/93.DAT",
+    "tarutaru_male": {"dances": 193102, "emotes": 51037, "battle": (51019, 6), "label": "Tarutaru (male)", "skeleton": "ROM/46/93.DAT",
                       "motions": ["ROM/46/93.DAT", "ROM/46/94.DAT", "ROM/46/96.DAT"],
                       "gear": _gear(19784, 19816, 20072, 20328, 20584, 20840, 21096, 46319), "faces": 16},
-    "tarutaru_female": {"battle": (51019, 6), "label": "Tarutaru (female)", "skeleton": "ROM/46/93.DAT",
+    "tarutaru_female": {"dances": 193102, "emotes": 51071, "battle": (51019, 6), "label": "Tarutaru (female)", "skeleton": "ROM/46/93.DAT",
                         "motions": ["ROM/46/93.DAT", "ROM/46/94.DAT", "ROM/46/96.DAT"],
                         "gear": _gear(22952, 19816, 20072, 20328, 20584, 20840, 21096, 46319), "faces": 16},
-    "mithra": {"battle": (56014, 9), "label": "Mithra", "skeleton": "ROM/51/89.DAT",
+    "mithra": {"dances": 194050, "emotes": 56041, "battle": (56014, 9), "label": "Mithra", "skeleton": "ROM/51/89.DAT",
                "motions": ["ROM/51/89.DAT", "ROM/51/90.DAT", "ROM/51/92.DAT"],
                "gear": _gear(23184, 23216, 23472, 23728, 23984, 24240, 24496, 47599), "faces": 16},
-    "galka": {"battle": (60112, 8), "label": "Galka", "skeleton": "ROM/56/59.DAT",
+    "galka": {"dances": 195004, "emotes": 61008, "battle": (60112, 8), "label": "Galka", "skeleton": "ROM/56/59.DAT",
               "motions": ["ROM/56/59.DAT", "ROM/56/60.DAT", "ROM/56/62.DAT"],
               "gear": _gear(26360, 26392, 26648, 26904, 27160, 27416, 27672, 48879), "faces": 16},
 }
@@ -566,6 +569,74 @@ CAST_MOTIONS = {"white": "mw", "black": "mb", "ninjutsu": "mn", "summoning": "ms
                 "blue": "mb", "geomancy": "mw"}
 
 
+# FFXI's emotes: the chat line's command -> (the motion, what the log says, held until moving). The motions
+# are the race's emote files' (bow0, bow1, bow2: the lower body, the upper, the waist); /heal kneels to rest
+# (the race's own rx0, rx1 looped).
+EMOTES = {
+    "bow": ("bow", "{me} bows courteously.", False), "kneel": ("kne", "{me} kneels.", False),
+    "laugh": ("lau", "{me} laughs heartily.", False), "point": ("poi", "{me} points.", False),
+    "salute": ("sl1", "{me} salutes.", False), "cry": ("wee", "{me} cries.", False),
+    "cheer": ("che", "{me} cheers!", False), "clap": ("clp", "{me} claps.", False),
+    "no": ("den", "{me} shakes {their} head.", False), "stare": ("gla", "{me} stares.", False),
+    "nod": ("nod", "{me} nods.", False), "yes": ("nod", "{me} nods.", False),
+    "wave": ("wav", "{me} waves.", False), "welcome": ("wel", "{me} welcomes everyone.", False),
+    "comfort": ("cmf", "{me} offers comfort.", False), "poke": ("pok", "{me} pokes.", False),
+    "sigh": ("sig", "{me} sighs.", False), "stagger": ("sta", "{me} staggers.", False),
+    "surprised": ("sur", "{me} is surprised.", False), "angry": ("ang", "{me} is angry.", False),
+    "blush": ("blu", "{me} blushes.", False), "panic": ("pan", "{me} panics.", False),
+    "upset": ("ups", "{me} is upset.", False), "doubt": ("why", "{me} looks doubtful.", False),
+    "fume": ("fum", "{me} fumes.", False), "think": ("thk", "{me} thinks.", False),
+    "praise": ("gut", "{me} gives a thumbs up.", False), "sit": ("rs0", "{me} sits down.", True),
+    "heal": ("rx0", "{me} starts resting.", True),
+    "dance1": ("dc0", "{me} dances.", False), "dance2": ("dc1", "{me} dances.", False),
+    "dance3": ("dc2", "{me} dances.", False), "dance4": ("dc3", "{me} dances.", False),
+    "dance": ("dc0", "{me} dances.", False),
+}
+
+
+def dance_files(root: Path, race: str) -> list[str]:
+    """The race's dance files: dc0, dc1, dc2, dc3's lower and upper body, then their waist parts (the first
+    files holding dc02...dc32 after them)."""
+    first = RACES[race].get("dances")
+    if not first:
+        return []
+    out = [file_number_path(first + i) for i in (0, 6, 12, 13)]
+    want = {"dc02", "dc12", "dc22", "dc32"}
+    for n in range(first + 14, first + 90):
+        p = root / file_number_path(n)
+        if not want or not p.exists():
+            continue
+        names = {nm.decode("latin-1") for _at, nm, typ, _size in A.chunks(p.read_bytes()) if typ == MOTION}
+        if names & want:
+            out.append(file_number_path(n))
+            want -= names
+    return out
+
+
+def emote_clips(own: list[list[dict]], emote_sources: list[list[dict]]) -> list[dict]:
+    """The emotes' motions: each from its parts in the emote files (the race's own files for /heal's)."""
+    def pick(sources, name):
+        out, seen = [], set()
+        for src in sources:
+            for m in src:
+                if m["name"].startswith(name) and len(m["name"]) == len(name) + 1 and m["name"] not in seen:
+                    seen.add(m["name"])
+                    out.append(m)
+        return out
+    clips, done = [], set()
+    for code, _msg, _hold in EMOTES.values():
+        if code in done:
+            continue
+        done.add(code)
+        parts = pick(own if code == "rx0" else emote_sources, code)
+        if parts:
+            clips.append({"name": code, "parts": parts, "kind": ACTION, "set": PEACE})
+    rest = pick(own, "rx1")                                         # resting, held
+    if rest:
+        clips.append({"name": "rx1", "parts": rest, "kind": ACTION, "set": PEACE})
+    return clips
+
+
 def load_character(root: Path, race: str, look: dict, style: int | None = None, file_path=None,
                    loader=None, motions: bool = True) -> dict:
     """A player character: the race's skeleton, its equipment's meshes and textures (look: slot ->
@@ -598,6 +669,12 @@ def load_character(root: Path, race: str, look: dict, style: int | None = None, 
     arms = [load_(root / f)["motions"] for f in files] if files else []
     draws = sorted({m["name"][2] for m in (arms[0] if arms else []) if m["name"][:2] == "in" and m["name"][2].isalpha()})
     model["clips"] = character_clips(own, arms, draws[0] if draws else "")
+    first = r.get("emotes")
+    if first:
+        files = [file_number_path(first + i) for i in list(range(6)) + list(range(6, 12))]
+        emotes = [load_(root / f)["motions"] for f in files if (root / f).exists()]
+        emotes += [load_(root / f)["motions"] for f in dance_files(root, race)]
+        model["clips"] += emote_clips(own, emotes)
     model["style"] = style
     return model
 
