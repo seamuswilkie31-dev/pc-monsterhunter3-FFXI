@@ -8,8 +8,14 @@ backend = "port"         # "port": the native port, run with MH3_FFXI=1 (tools/f
 name = "12345"           # your hunter, as the FFXI interface and its combat log call you
 ffxi_assets = true       # FFXI's own window art from your installation (ffxi_assets.py ui), if extracted
 window_theme = 1         # FFXI's window type: 1 classic navy, 2 silver, 3 dark blue, 4 stone, 5 grey, 6 deep blue
-character_model = "ROM/3/6.DAT"   # FFXI's character in your hunter's place, from your FFXI installation ("" for none)
-character_height = 175   # its height, in the game's units
+# FFXI's character in your hunter's place, from your FFXI installation: choose it with character.py
+# (Play FFXI-MH3.bat: Character...). A race: hume_male, hume_female, elvaan_male, elvaan_female,
+# tarutaru_male, tarutaru_female, mithra, galka; its look: each slot's model number ("" for no character).
+character_race = "hume_male"
+character_look = { face = 0, head = 0, body = 38, hands = 38, legs = 38, feet = 38, main = 4, sub = 24 }
+character_weapon = "sword"   # its battle motions: sword
+character_model = "ROM/3/6.DAT"   # with character_race "": a model file instead (an NPC)
+character_height = 175   # a male Hume's height in the game's units; the other races to scale
 character_yaw = 0        # degrees, if it faces the wrong way
 hide_hunter = true       # hide Monster Hunter's hunter while it's drawn
 sounds = true            # FFXI's sounds from your FFXI installation: each spell's own as it goes off

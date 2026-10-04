@@ -1,10 +1,12 @@
 """FFXI's character in your hunter's place: the model handed to the port, which draws it in the scene.
 
 The port (MH3_FFXI=1) maps a shared block, "mh3-ffxi-model" (tools/ffxi_bridge.cpp, struct ModelBlock),
-version 2: the model's triangle corners on its joints (ffxi_model.pack), the joints' parents, its place
-in the hunter's space, its motions (standing first, then the moving ones, each with the ground speed it
-was made for), its textures as 256x256 layers, and flags: draw it, hide Monster Hunter's hunter. The
-port poses it every frame: the motion that fits the hunter's speed, played at that speed.
+version 3: the model's triangle corners on its joints (ffxi_model.pack), the joints' parents, its place
+in the hunter's space, its motions (each standing, moving or an action, of the peace set or the battle
+set, with the ground speed a moving one was made for and its name's first four letters), its textures as
+256x256 layers, and flags: draw it, hide Monster Hunter's hunter. The port poses it every frame: the
+motion that fits the hunter's speed, from the battle set while the hunter's weapon is out, its attacks
+as they happen; and the actions the layer asks for (request: a spell's casting).
 keep_alive() while running: the port stops drawing it and shows the hunter again 3 s after the layer
 stops.
 """
@@ -16,13 +18,16 @@ import struct
 import numpy as np
 
 TAG = "mh3-ffxi-model"
-MAGIC, VERSION = 0x4D48334D, 2  # 'MH3M'
+MAGIC, VERSION = 0x4D48334D, 3  # 'MH3M'
 MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 100000, 13, 16, 256
-MAX_JOINTS, MAX_CLIPS, POOL = 128, 8, 1 << 20
-# magic, version, serial, n_verts, layers, tex_w, tex_h, flags, alive, n_joints, n_clips, reserved x5
+MAX_JOINTS, MAX_CLIPS, POOL = 128, 32, 1 << 20
+NONE = 0xFFFFFFFF
+# magic, version, serial, n_verts, layers, tex_w, tex_h, flags, alive, n_joints, n_clips,
+# act_seq, act_clip, act_next, battle, reserved
 HEADER = struct.Struct("<16I")
-CLIP = struct.Struct("<IIff")    # frames, first float in the pool, rate (keyframes a game frame), speed
-PLACE_AT = HEADER.size
+CLIP = struct.Struct("<IIffIIII")  # frames, first float in the pool, rate, speed, kind, set, tag, reserved
+MOTION_AT = HEADER.size                                 # the port's: Monster Hunter's hunter's motion's name
+PLACE_AT = MOTION_AT + 16
 PARENTS_AT = PLACE_AT + 12 * 4
 CLIPS_AT = PARENTS_AT + MAX_JOINTS * 4
 VERTS_AT = CLIPS_AT + MAX_CLIPS * CLIP.size
@@ -32,9 +37,14 @@ SIZE = TEX_AT + MAX_LAYERS * TEX * TEX * 4
 DRAW, HIDE_HUNTER = 1, 2
 
 
+def fourcc(name: str) -> int:
+    return int.from_bytes(name.encode("latin-1")[:4].ljust(4, b" "), "little")
+
+
 class PortModel:
     def __init__(self):
         self.mm = mmap.mmap(-1, SIZE, tagname=TAG)
+        self.clips: dict[str, int] = {}                 # a sent clip's name: its number, for request
 
     def _get(self, i: int) -> int:
         return int.from_bytes(self.mm[4 * i:4 * i + 4], "little")
@@ -59,14 +69,17 @@ class PortModel:
         place = np.ascontiguousarray(packed["place"], np.float32).reshape(12)
         self.mm[PLACE_AT:PLACE_AT + 48] = place.tobytes()
         self.mm[PARENTS_AT:PARENTS_AT + 4 * len(parents)] = struct.pack(f"<{len(parents)}i", *parents)
-        first, n_clips = 0, 0
+        first, n_clips, self.clips = 0, 0, {}
         for c in packed["clips"][:MAX_CLIPS]:
             data = np.ascontiguousarray(c["data"], np.float32).reshape(-1)
             if first + data.size > POOL:
+                print(f"[FFXI character: no room for the motion {c['name']} and those after it]")
                 break
             self.mm[POOL_AT + 4 * first:POOL_AT + 4 * (first + data.size)] = data.tobytes()
-            self.mm[CLIPS_AT + CLIP.size * n_clips:CLIPS_AT + CLIP.size * (n_clips + 1)] = \
-                CLIP.pack(int(c["frames"]), first, float(c["rate"]), float(c["speed"]))
+            self.mm[CLIPS_AT + CLIP.size * n_clips:CLIPS_AT + CLIP.size * (n_clips + 1)] = CLIP.pack(
+                int(c["frames"]), first, float(c["rate"]), float(c["speed"]), int(c.get("kind", 0)),
+                int(c.get("set", 0)), fourcc(c["name"]), 0)
+            self.clips.setdefault(c["name"], n_clips)
             first += data.size
             n_clips += 1
         self.mm[VERTS_AT:VERTS_AT + verts.nbytes] = verts.tobytes()
@@ -78,6 +91,24 @@ class PortModel:
         self._set(9, len(parents))
         self._set(10, n_clips)
         self._set(2, self._get(2) + 1)            # serial last: the port reads after it moves
+
+    def request(self, clip: str | None, then: str | None = None) -> bool:
+        """Play the action clip once, then loop then (None: back to standing and moving); clip None
+        ends the one playing. False if the character has no such motion."""
+        if clip is not None and clip not in self.clips:
+            return False
+        self._set(12, NONE if clip is None else self.clips[clip])
+        self._set(13, self.clips.get(then, NONE) if then else NONE)
+        self._set(11, self._get(11) + 1)          # the sequence last: the port reads after it moves
+        return True
+
+    def battle(self) -> bool:
+        """Whether Monster Hunter's hunter has its weapon out (the port's reading)."""
+        return bool(self._get(14))
+
+    def motion(self) -> str:
+        """Monster Hunter's hunter's motion now: its animation's name ("co_0313", "w01_0105"...)."""
+        return bytes(self.mm[MOTION_AT:MOTION_AT + 16]).split(b"\0")[0].decode("latin-1")
 
     def set_flags(self, draw: bool, hide_hunter: bool) -> None:
         self._set(7, (DRAW if draw else 0) | (HIDE_HUNTER if hide_hunter else 0))

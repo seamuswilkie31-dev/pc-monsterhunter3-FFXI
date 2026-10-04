@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <mutex>
 #include <thread>
@@ -416,18 +417,30 @@ void project_name(Block* b) {
 
 // ================================================================================================
 // FFXI's character in your hunter's place (ffxi/ffxi_model.py, port_model.py): the layer sends a model
-// on its skeleton, with its motions, through its own block; the port poses it every frame (Animator:
-// standing, walking or running as fast as the hunter moves) and the renderer skins it and draws it into
-// the scene (video_model_*) where the hunter stands, with the game's camera.
+// on its skeleton, with its motions, through its own block; the port poses it every frame (Animator) and
+// the renderer skins it and draws it into the scene (video_model_*) where the hunter stands, with the
+// game's camera. Its motions: standing and moving ones, picked by the hunter's speed, from the peace
+// set or, while the hunter's weapon is out, the battle set; and actions over them, on the layer's
+// request (a spell's casting) or the hunter's (Monster Hunter's attacks: hunter_motion).
 // ================================================================================================
-constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 2;     // 'MH3M'
+constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 3;     // 'MH3M'
 constexpr int kModelMaxVerts = 100000, kModelVertFloats = 13, kModelMaxLayers = 16, kModelTex = 256;
-constexpr int kModelMaxJoints = 128, kModelMaxClips = 8, kModelPool = 1 << 20, kXf = 10;
+constexpr int kModelMaxJoints = 128, kModelMaxClips = 32, kModelPool = 1 << 20, kXf = 10;
+enum : uint32_t { kStand = 0, kMove = 1, kAction = 2 };
+enum : uint32_t { kPeace = 0, kBattle = 1 };
+constexpr uint32_t kNone = 0xFFFFFFFF;
+constexpr uint32_t fourcc(const char (&s)[5]) {
+    return (uint32_t)(uint8_t)s[0] | (uint32_t)(uint8_t)s[1] << 8 | (uint32_t)(uint8_t)s[2] << 16 | (uint32_t)(uint8_t)s[3] << 24;
+}
 struct ModelClip {
     uint32_t frames;        // keyframes
     uint32_t first;         // its first float in the pool: frames x joints x (rotation x y z w, offset x y z, scale x y z)
     float rate;             // keyframes a game frame (30 a second)
-    float speed;            // the ground speed it was made for, units a second; 0: standing
+    float speed;            // a moving one's: the ground speed it was made for, units a second
+    uint32_t kind;          // kStand, kMove (picked by the hunter's speed) or kAction (on request)
+    uint32_t set;           // kPeace (the weapon away) or kBattle (drawn)
+    uint32_t tag;           // its name's first four letters ("at0 ", "draw", "shea", "mw0 "...)
+    uint32_t reserved;
 };
 struct ModelBlock {
     uint32_t magic, version;
@@ -436,33 +449,43 @@ struct ModelBlock {
     uint32_t flags;         // 1: draw it; 2: hide Monster Hunter's hunter
     uint32_t alive;         // the layer bumps it while it runs
     uint32_t n_joints, n_clips;
-    uint32_t reserved[5];
+    uint32_t act_seq;       // the layer bumps it with each request:
+    uint32_t act_clip;      //   play this action once (kNone: end the one playing),
+    uint32_t act_next;      //   then loop this one until the next request (kNone: back to moving)
+    uint32_t battle;        // the port's: 1 while Monster Hunter's hunter has its weapon out
+    uint32_t reserved;
+    char motion[16];        // the port's: the hunter's motion now (Monster Hunter's animation's name)
     float place[12];                                      // the model's space to the hunter's, 3x4 rows
     int32_t parents[kModelMaxJoints];                     // -1: the root; a parent comes before its children
-    ModelClip clips[kModelMaxClips];                      // the first standing, the others moving
+    ModelClip clips[kModelMaxClips];
     float verts[kModelMaxVerts * kModelVertFloats];       // video_model_mesh's corners
     float pool[kModelPool];
     uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
 };
-static_assert(sizeof(ModelBlock) == 13589360, "ffxi/port_model.py mirrors this layout");
+static_assert(sizeof(ModelBlock) == 13590272, "ffxi/port_model.py mirrors this layout");
 
-// The character's motions, copied from the block when it changes, played by the hunter's speed: under
-// 15 units a second (30 to start) the standing one; moving, the one made for the nearest speed, played
-// that much faster or slower (a half to twice), so the feet keep pace with the ground. A change of
-// motion blends over a quarter of a second; walking and running share their place in the stride.
+// The character's motions, copied from the block when it changes. Moving: under 15 units a second (30
+// to start) the set's standing one; moving, the one made for the nearest speed, played that much faster
+// or slower (a half to twice), so the feet keep pace with the ground. A change blends over a quarter of
+// a second; walking and running share their place in the stride. An action plays over all of it, eased
+// in and out: once, then either looped (a chant) or let go.
 struct Animator {
     int nj = 0;
     std::vector<int32_t> parents;
     std::vector<ModelClip> clips;
     std::vector<float> pool;
     float place[12] = {};
-    int cur = 0, prev = -1;
+    int cur = -1, prev = -1;
     float phase[kModelMaxClips] = {};
     float blend = 1.0f;     // cur's share
     float speed = 0.0f;     // the hunter's over the ground, smoothed
-    bool moving = false, have_last = false;
+    bool moving = false, have_last = false, battle = false;
     float last_x = 0, last_z = 0;
-    std::vector<float> a, b, rows;
+    int act = -1, act_next = -1;                            // the action playing, and the one to loop after
+    float act_phase = 0, act_w = 0;
+    bool act_loop = false, act_out = false;
+    int swing = 0;                                          // the next attack of at0, at1, at2
+    std::vector<float> a, b, c, rows;
 
     bool load(const ModelBlock* mb) {
         nj = (int)std::min<uint32_t>(mb->n_joints, kModelMaxJoints);
@@ -470,8 +493,8 @@ struct Animator {
         std::memcpy(place, mb->place, sizeof place);
         clips.clear();
         pool.clear();
-        for (uint32_t c = 0; c < std::min<uint32_t>(mb->n_clips, kModelMaxClips); ++c) {
-            ModelClip k = mb->clips[c];
+        for (uint32_t i = 0; i < std::min<uint32_t>(mb->n_clips, kModelMaxClips); ++i) {
+            ModelClip k = mb->clips[i];
             size_t n = (size_t)k.frames * nj * kXf;
             if (!k.frames || k.first > (uint32_t)kModelPool || n > (size_t)kModelPool - k.first || !(k.rate > 0)) break;
             uint32_t at = (uint32_t)pool.size();
@@ -479,22 +502,80 @@ struct Animator {
             k.first = at;
             clips.push_back(k);
         }
-        cur = 0, prev = -1, blend = 1.0f;
+        cur = prev = act = act_next = -1, blend = 1.0f, act_w = 0;
         std::fill(std::begin(phase), std::end(phase), 0.0f);
-        a.assign((size_t)nj * kXf, 0.0f), b = a, rows.assign((size_t)nj * 12, 0.0f);
-        return nj > 0 && !clips.empty();
+        a.assign((size_t)nj * kXf, 0.0f), b = a, c = a, rows.assign((size_t)nj * 12, 0.0f);
+        cur = locomotion();
+        return nj > 0 && cur >= 0;
+    }
+
+    int tagged(uint32_t tag) const {
+        for (int i = 0; i < (int)clips.size(); ++i)
+            if (clips[i].tag == tag && clips[i].kind == kAction) return i;
+        return -1;
+    }
+
+    // the set's standing or moving motion for the hunter's speed (the peace set's if the battle set has none)
+    int locomotion() const {
+        auto pick = [&](uint32_t set) {
+            int stand = -1, best = -1;
+            float bd = 1e9f;
+            for (int i = 0; i < (int)clips.size(); ++i) {
+                const ModelClip& k = clips[i];
+                if (k.set != set) continue;
+                if (k.kind == kStand && stand < 0) stand = i;
+                if (k.kind == kMove && moving && k.speed > 0) {
+                    float d = std::fabs(std::log(speed / k.speed));
+                    if (d < bd) bd = d, best = i;
+                }
+            }
+            return best >= 0 ? best : stand;
+        };
+        int w = battle ? pick(kBattle) : -1;
+        return w >= 0 ? w : pick(kPeace);
+    }
+
+    // an action once, then next looped (kNone: none); clip kNone ends the one playing
+    void request(uint32_t clip, uint32_t next) {
+        bool ok = clip < clips.size() && clips[clip].kind == kAction;
+        if (!ok) {
+            if (act >= 0) act_out = true;
+            act_next = -1;
+            return;
+        }
+        act = (int)clip, act_phase = 0, act_loop = false, act_out = false;
+        act_next = next < clips.size() && clips[next].kind == kAction ? (int)next : -1;
+    }
+
+    // Monster Hunter's hunter drew or put away its weapon, or attacked
+    void set_battle(bool on) {
+        if (on == battle) return;
+        battle = on;
+        int t = tagged(on ? fourcc("draw") : fourcc("shea"));
+        if (t >= 0 && (act < 0 || act_out)) request((uint32_t)t, kNone);
+    }
+    void attack() {
+        static const uint32_t tags[3] = {fourcc("at0 "), fourcc("at1 "), fourcc("at2 ")};
+        for (int i = 0; i < 3; ++i) {
+            int t = tagged(tags[(swing + i) % 3]);
+            if (t >= 0) {
+                swing = (swing + i + 1) % 3;
+                request((uint32_t)t, kNone);
+                return;
+            }
+        }
     }
 
     // one clip at phase 0..1: keyframes interpolated (rotations the short way, renormalised)
-    void sample(int c, float ph, float* out) const {
-        const ModelClip& k = clips[c];
+    void sample(int i, float ph, float* out) const {
+        const ModelClip& k = clips[i];
         int last = (int)k.frames - 1;
-        float pos = ph * (float)last;
+        float pos = std::clamp(ph, 0.0f, 1.0f) * (float)last;
         int lo = std::min((int)pos, std::max(last - 1, 0)), hi = std::min(lo + 1, last);
         float f = pos - (float)lo;
         const float* p = &pool[k.first + (size_t)lo * nj * kXf];
         const float* q = &pool[k.first + (size_t)hi * nj * kXf];
-        for (int i = 0; i < nj * kXf; i += kXf) mix(p + i, q + i, f, out + i);
+        for (int j = 0; j < nj * kXf; j += kXf) mix(p + j, q + j, f, out + j);
     }
 
     static void mix(const float* p, const float* q, float f, float* out) {
@@ -503,6 +584,11 @@ struct Animator {
         n = n > 0 ? 1.0f / std::sqrt(n) : 1.0f;
         for (int i = 0; i < 4; ++i) out[i] *= n;
         for (int i = 4; i < kXf; ++i) out[i] = p[i] * (1 - f) + q[i] * f;
+    }
+
+    float advance(int i, float ph, float dt, float pace = 1.0f) const {
+        const ModelClip& k = clips[i];
+        return ph + dt * 30.0f * k.rate * pace / (float)std::max<uint32_t>(k.frames - 1, 1);
     }
 
     // dt seconds on, the hunter at x, z: each joint's 3x4 in the model's space, into rows
@@ -515,30 +601,39 @@ struct Animator {
         if (!hunter) speed = 0;
         have_last = hunter, last_x = x, last_z = z;
         moving = moving ? speed > 15.0f : speed > 30.0f;
-        int want = 0;
-        float best = 1e9f;
-        for (int c = 1; moving && c < (int)clips.size(); ++c) {
-            if (!(clips[c].speed > 0)) continue;
-            float d = std::fabs(std::log(speed / clips[c].speed));
-            if (d < best) best = d, want = c;
-        }
-        if (want != cur) {
-            phase[want] = want && cur ? phase[cur] : 0.0f;
+        int want = locomotion();
+        if (want >= 0 && want != cur) {
+            bool stride = cur >= 0 && clips[cur].kind == kMove && clips[want].kind == kMove;
+            phase[want] = stride ? phase[cur] : 0.0f;
             prev = cur, cur = want, blend = 0.0f;
         }
-        for (int c : {cur, prev}) {
-            if (c < 0) continue;
-            const ModelClip& k = clips[c];
-            float pace = k.speed > 0 ? std::clamp(speed / k.speed, 0.5f, 2.0f) : 1.0f;
-            phase[c] += dt * 30.0f * k.rate * pace / (float)std::max<uint32_t>(k.frames - 1, 1);
-            phase[c] -= std::floor(phase[c]);
+        for (int i : {cur, prev}) {
+            if (i < 0) continue;
+            float pace = clips[i].speed > 0 ? std::clamp(speed / clips[i].speed, 0.5f, 2.0f) : 1.0f;
+            phase[i] = advance(i, phase[i], dt, pace);
+            phase[i] -= std::floor(phase[i]);
         }
         blend = std::min(1.0f, blend + dt / 0.25f);
         if (blend >= 1.0f) prev = -1;
+        if (act >= 0) {
+            act_phase = advance(act, act_phase, dt);
+            if (act_phase >= 1.0f) {
+                if (act_loop) act_phase -= std::floor(act_phase);
+                else if (act_next >= 0) act = act_next, act_next = -1, act_loop = true, act_phase = 0.0f;
+                else act_phase = 1.0f, act_out = true;
+            }
+            act_w = act_out ? std::max(0.0f, act_w - dt / 0.2f) : std::min(1.0f, act_w + dt / 0.12f);
+            if (act_out && act_w <= 0.0f) act = -1;
+        }
+        if (cur < 0) return;
         sample(cur, phase[cur], a.data());
         if (prev >= 0) {
             sample(prev, phase[prev], b.data());
-            for (int i = 0; i < nj * kXf; i += kXf) mix(b.data() + i, a.data() + i, blend, a.data() + i);
+            for (int j = 0; j < nj * kXf; j += kXf) mix(b.data() + j, a.data() + j, blend, a.data() + j);
+        }
+        if (act >= 0 && act_w > 0.0f) {
+            sample(act, act_phase, c.data());
+            for (int j = 0; j < nj * kXf; j += kXf) mix(a.data() + j, c.data() + j, act_w, a.data() + j);
         }
         chain();
     }
@@ -581,6 +676,40 @@ struct Animator {
     }
 };
 Animator g_anim;
+
+// What Monster Hunter's hunter is doing: its body model's animation object (ScnMdl +0x124: a blend of
+// up to six, +0x18 how many, +0x1C them, +0x20 their weights), the heaviest one's resource (+0x2C: a
+// CHR0) and that's name: "co_0313" (common, the weapon away), "w01_0001" (sword and shield's, drawn),
+// "w01_01xx" its attacks.
+std::atomic<uint32_t> g_hunter_body{0};
+
+bool hunter_motion(char out[16]) {
+    uint32_t body = g_hunter_body.load(std::memory_order_relaxed);
+    if (!body || !in_ram(body + 0x124, 4)) return false;
+    uint32_t blend = ld32(body + 0x124);
+    if (!in_ram(blend + 0x18, 12)) return false;
+    uint32_t n = std::min<uint32_t>(ld32(blend + 0x18), 8), slots = ld32(blend + 0x1C), weights = ld32(blend + 0x20);
+    if (!in_ram(slots, 4 * n) || !in_ram(weights, 4 * n)) return false;
+    uint32_t best = 0;
+    float bw = -1.0f;
+    for (uint32_t i = 0; i < n; ++i) {
+        uint32_t s = ld32(slots + 4 * i);
+        float w = f32(weights + 4 * i);
+        if (s && in_ram(s + 0x2C, 4) && w > bw) bw = w, best = s;
+    }
+    if (!best) return false;
+    uint32_t res = ld32(best + 0x2C);
+    if (!in_ram(res, 0x20) || ld32(res) != 0x43485230) return false;              // 'CHR0'
+    uint32_t name = res + ld32(res + (ld32(res + 8) >= 5 ? 0x18 : 0x14));
+    if (!in_ram(name, 16)) return false;
+    for (int i = 0; i < 15; ++i) out[i] = (char)ld8(name + i);
+    out[15] = 0;
+    return out[0] != 0;
+}
+
+// "w01_0001": the weapon out; "w01_01xx": an attack
+bool motion_battle(const char* m) { return m[0] == 'w' && std::isdigit((uint8_t)m[1]) && std::isdigit((uint8_t)m[2]); }
+bool motion_attack(const char* m) { return motion_battle(m) && m[3] == '_' && m[4] == '0' && m[5] == '1'; }
 
 std::mutex g_hunter_mx;
 float g_hunter_mtx[12];                 // the hunter model's world matrix, rows
@@ -632,6 +761,8 @@ void hook_scn_world(PPCContext& c) {
         std::lock_guard<std::mutex> lk(g_hunter_mx);
         for (int i = 0; i < 12; ++i) g_hunter_mtx[i] = f32(obj + 0x3C + 4 * i);
         ++g_hunter_stamp;
+        if (in_ram(obj + 0x124, 4) && in_ram(ld32(obj + 0x124), 0x24))   // the body: its animations
+            g_hunter_body.store(obj, std::memory_order_relaxed);
     } else if (!owned_by_hunter(obj, pl)) {
         return;                                              // not the hunter
     }
@@ -661,8 +792,9 @@ ModelBlock* g_model_block = nullptr;
 
 void model_frame() {
     ModelBlock* mb = g_model_block;
-    static uint32_t shown = 0, alive = 0, stamp = 0;
+    static uint32_t shown = 0, alive = 0, stamp = 0, act_seen = 0;
     static bool loaded = false;
+    static char last_motion[16] = {};
     static auto last_alive = std::chrono::steady_clock::time_point{}, last_frame = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
     // the time in whole fields of the 60 Hz picture (a frame of the game is two at 30 a second): steady,
@@ -678,6 +810,7 @@ void model_frame() {
         uint32_t n = std::min<uint32_t>(mb->n_verts, kModelMaxVerts);
         uint32_t layers = std::min<uint32_t>(mb->layers, kModelMaxLayers);
         loaded = g_anim.load(mb);
+        act_seen = mb->act_seq;                               // a request made before is not played
         if (loaded && mb->tex_w == (uint32_t)kModelTex && mb->tex_h == (uint32_t)kModelTex)
             video_model_mesh(mb->verts, (int)n, mb->tex, (int)layers, kModelTex, kModelTex);
         rt_log("ffxi: a character: %u corners, %d joints, %zu motions%s", n, g_anim.nj, g_anim.clips.size(),
@@ -695,6 +828,18 @@ void model_frame() {
     }
     uint32_t pl = object(kBasePlayer), cam = follow_camera(pl);
     bool visible = up && (mb->flags & 1) && fresh && cam && pl;
+    if (mb->act_seq != act_seen) {                            // the layer's request: a spell's casting
+        act_seen = mb->act_seq;
+        g_anim.request(mb->act_clip, mb->act_next);
+    }
+    char motion[16] = {};
+    if (fresh && pl && hunter_motion(motion)) {              // what Monster Hunter's hunter is doing
+        g_anim.set_battle(motion_battle(motion));
+        if (motion_attack(motion) && std::strcmp(motion, last_motion) != 0) g_anim.attack();
+        std::memcpy(last_motion, motion, sizeof motion);
+        std::memcpy(mb->motion, motion, sizeof motion);
+    }
+    mb->battle = g_anim.battle ? 1 : 0;
     g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
     if (visible) {
         float v[12], hp[12];

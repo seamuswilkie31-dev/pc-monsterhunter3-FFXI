@@ -213,6 +213,7 @@ class App:
         self._rec_hits = self._rec_log = 0
         self._rec_t0 = time.monotonic()
         self.sounds = None             # FFXI's sounds (ffxi_sound.Player), in the game's interface
+        self.character = None          # FFXI's character in the game (port_model.PortModel)
 
     # --- every frame ---
     def step(self):
@@ -255,8 +256,19 @@ class App:
             self._record(now, p)
 
     def _play_events(self):
-        """The engine's events as FFXI's sounds: a spell's own as it goes off, a level gained or lost."""
+        """The engine's events as FFXI's: a spell's casting by the character (its school's motions: start,
+        chant, release) and its sound as it goes off, a level gained or lost."""
         events, self.e.events[:] = list(self.e.events), []
+        if self.character:
+            import ffxi_model as FM
+            for kind, name in events:
+                cast = FM.CAST_MOTIONS.get(D.SPELLS.get(name, {}).get("school", ""), "")
+                if kind == "cast" and cast:
+                    self.character.request(cast + "0", cast + "1")
+                elif kind == "spell" and cast:
+                    self.character.request(cast + "2")
+                elif kind == "interrupted":
+                    self.character.request(None)
         if not self.sounds:
             return
         import ffxi_sound as FS
@@ -523,22 +535,31 @@ class App:
         return tuple((t, k) for t, k, _ in lines)
 
     def _send_character(self):
-        """FFXI's character in your hunter's place (character_model in config.toml): read from your own
-        FFXI installation, handed to the port, which draws it where the hunter stands."""
-        dat = self.cfg.get("character_model")
-        if not dat:
+        """FFXI's character in your hunter's place, read from your own FFXI installation and handed to the
+        port, which draws it where the hunter stands: a player character (character_race and
+        character_look in config.toml: character.py chooses them) or a model file (character_model)."""
+        race, dat = self.cfg.get("character_race"), self.cfg.get("character_model")
+        if not race and not dat:
             return None
         try:
             import ffxi_model as FM
             from port_model import PortModel
-            model = FM.load(FM.ffxi_root(self.cfg.get("ffxi_path")) / dat)
-            packed = FM.pack(model, self.cfg.get("character_height", 175.0), self.cfg.get("character_yaw", 0.0),
-                             self.cfg.get("character_mirror", True))
+            root = FM.ffxi_root(self.cfg.get("ffxi_path"))
+            height, yaw = self.cfg.get("character_height", 175.0), self.cfg.get("character_yaw", 0.0)
+            mirror = self.cfg.get("character_mirror", True)
+            if race:
+                look = {**FM.DEFAULT_LOOK, **self.cfg.get("character_look", {})}
+                model = FM.load_character(root, race, look, self.cfg.get("character_weapon", "sword"))
+                packed = FM.pack(model, yaw=yaw, mirror=mirror, scale=height / FM.HUME_MALE_HEIGHT)
+                what = f"{FM.RACES[race]['label']} " + " ".join(f"{k} {v}" for k, v in look.items())
+            else:
+                packed = FM.pack(FM.load(root / dat), height, yaw, mirror)
+                what = dat
             pm = PortModel()
             pm.send(packed)
             pm.set_flags(True, self.cfg.get("hide_hunter", True))
             moves = ", ".join(f"{c['name']}" + (f" {c['speed']:.0f}/s" if c["speed"] else "") for c in packed["clips"])
-            print(f"FFXI character: {dat}, {len(packed['verts']) // 3} triangles, {len(packed['layers'])} textures, "
+            print(f"FFXI character: {what}, {len(packed['verts']) // 3} triangles, {len(packed['layers'])} textures, "
                   f"{len(packed['parents'])} joints; motions {moves}")
             return pm
         except (Exception, SystemExit) as ex:                      # the layer runs without it
@@ -556,7 +577,7 @@ class App:
         import ffxi_ui as U
         from port_overlay import PortOverlay
         out, ui = PortOverlay(), U.FfxiUi(self.cfg.get("window_theme", 1), self.cfg.get("ffxi_assets", True))
-        model = self._send_character()
+        model = self.character = self._send_character()
         self.sounds = self._start_sounds()
         start, last_draw = time.monotonic(), 0.0
         print("FFXI interface: in the game's window. Ctrl+C to stop.")

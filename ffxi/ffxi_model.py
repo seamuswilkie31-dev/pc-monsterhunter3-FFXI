@@ -434,9 +434,127 @@ def render(model: dict, size: int = 512, yaw: float = 0.0, world: np.ndarray | N
 # ================================================================================================
 MOTIONS = ("idl", "wlk", "run")       # standing, walking, running: the port picks by the hunter's speed
 
+# ================================================================================================
+# player characters: a race's skeleton and motions, and its equipment, each slot a file chosen by the
+# piece's look (its model number), as FFXI's client finds them
+# ================================================================================================
+STAND, MOVE, ACTION = 0, 1, 2          # what a motion is for: the port stands or moves by speed; actions on request
+PEACE, BATTLE = 0, 1                   # the weapon sheathed, or drawn
+
+# Where a race's files are. gear: per slot, the first file of its looks, look n being file first + n (the
+# client's tables, as Atom0s' gear tables give them; the later blocks of newer gear are not used here).
+# motions: the race's own (the lower body, the upper, the hands: a motion's parts, by body region);
+# weapons: per kind, the battle motions and their hands.
+def _gear(face, head, body, hands, legs, feet, main, sub):
+    return {"face": face, "head": head, "body": body, "hands": hands, "legs": legs, "feet": feet,
+            "main": main, "sub": sub}
+
+
+# weapons: per kind, (its battle motions, their hands, the letter of its drawing and sheathing: in?/ot?)
+RACES = {
+    "hume_male": {"label": "Hume (male)", "skeleton": "ROM/27/82.DAT",
+                  "motions": ["ROM/27/82.DAT", "ROM/27/83.DAT", "ROM/27/85.DAT"],
+                  "weapons": {"sword": ("ROM/32/16.DAT", "ROM/32/25.DAT", "c")},
+                  "gear": _gear(7080, 7112, 7368, 7624, 7880, 8136, 8392, 41199), "faces": 16},
+    "hume_female": {"label": "Hume (female)", "skeleton": "ROM/32/58.DAT",
+                    "motions": ["ROM/32/58.DAT", "ROM/32/59.DAT", "ROM/32/61.DAT"],
+                    "weapons": {"sword": ("ROM/36/119.DAT", "ROM/36/127.DAT", "c")},
+                    "gear": _gear(10256, 10288, 10544, 10800, 11056, 11312, 11568, 42479), "faces": 16},
+    "elvaan_male": {"label": "Elvaan (male)", "skeleton": "ROM/37/31.DAT",
+                    "motions": ["ROM/37/31.DAT", "ROM/37/32.DAT", "ROM/37/34.DAT"],
+                    "weapons": {"sword": ("ROM/41/85.DAT", "ROM/41/95.DAT", "c")},
+                    "gear": _gear(13432, 13464, 13720, 13976, 14232, 14488, 14744, 43759), "faces": 16},
+    "elvaan_female": {"label": "Elvaan (female)", "skeleton": "ROM/42/4.DAT",
+                      "motions": ["ROM/42/4.DAT", "ROM/42/5.DAT", "ROM/42/7.DAT"],
+                      "weapons": {"sword": ("ROM/46/59.DAT", "ROM/46/65.DAT", "c")},
+                      "gear": _gear(16608, 16640, 16896, 17152, 17408, 17664, 17920, 45039), "faces": 16},
+    "tarutaru_male": {"label": "Tarutaru (male)", "skeleton": "ROM/46/93.DAT",
+                      "motions": ["ROM/46/93.DAT", "ROM/46/94.DAT", "ROM/46/96.DAT"],
+                      "weapons": {"sword": ("ROM/51/20.DAT", "ROM/51/26.DAT", "c")},
+                      "gear": _gear(19784, 19816, 20072, 20328, 20584, 20840, 21096, 46319), "faces": 16},
+    "tarutaru_female": {"label": "Tarutaru (female)", "skeleton": "ROM/46/93.DAT",
+                        "motions": ["ROM/46/93.DAT", "ROM/46/94.DAT", "ROM/46/96.DAT"],
+                        "weapons": {"sword": ("ROM/51/20.DAT", "ROM/51/26.DAT", "c")},
+                        "gear": _gear(22952, 19816, 20072, 20328, 20584, 20840, 21096, 46319), "faces": 16},
+    "mithra": {"label": "Mithra", "skeleton": "ROM/51/89.DAT",
+               "motions": ["ROM/51/89.DAT", "ROM/51/90.DAT", "ROM/51/92.DAT"],
+               "weapons": {"sword": ("ROM/56/16.DAT", "ROM/56/25.DAT", "c")},
+               "gear": _gear(23184, 23216, 23472, 23728, 23984, 24240, 24496, 47599), "faces": 16},
+    "galka": {"label": "Galka", "skeleton": "ROM/56/59.DAT",
+              "motions": ["ROM/56/59.DAT", "ROM/56/60.DAT", "ROM/56/62.DAT"],
+              "weapons": {"sword": ("ROM/60/113.DAT", "ROM/60/121.DAT", "c")},
+              "gear": _gear(26360, 26392, 26648, 26904, 27160, 27416, 27672, 48879), "faces": 16},
+}
+SLOTS = ("face", "head", "body", "hands", "legs", "feet", "main", "sub")
+# a look to start from: a Red Mage's colours (the red tabard), a rapier and a kite shield
+DEFAULT_LOOK = {"face": 0, "head": 0, "body": 38, "hands": 38, "legs": 38, "feet": 38, "main": 4, "sub": 24}
+HUME_MALE_HEIGHT = 1.80                # a male Hume, in FFXI's units: character_height is his height
+# magic's motions by school: start, chant (looped), release
+CAST_MOTIONS = {"white": "mw", "black": "mb", "ninjutsu": "mn", "summoning": "ms", "song": "mi",
+                "blue": "mb", "geomancy": "mw"}
+
+
+def load_character(root: Path, race: str, look: dict, weapon: str = "sword", file_path=None) -> dict:
+    """A player character: the race's skeleton, its equipment's meshes and textures (look: slot ->
+    model number), and its motions as pack's clips (character_clips)."""
+    import ffxi_sound as S
+    file_path = file_path or S.file_path
+    r = RACES[race]
+    base = load(root / r["skeleton"])
+    model = {"skeletons": base["skeletons"], "meshes": [], "textures": {}, "motions": [], "errors": []}
+    for slot in SLOTS:
+        if slot not in look or look[slot] is None:
+            continue
+        p = file_path(root, r["gear"][slot] + int(look[slot]))
+        if not p or not p.exists():
+            model["errors"].append(f"{slot} {look[slot]}: no file")
+            continue
+        part = load(p)
+        model["meshes"] += part["meshes"]
+        model["textures"].update(part["textures"])
+        model["errors"] += part["errors"]
+    own = [load(root / f)["motions"] for f in r["motions"]]
+    w = r["weapons"].get(weapon)
+    arms = [load(root / f)["motions"] for f in w[:2]] if w else []
+    model["clips"] = character_clips(own, arms, w[2] if w else "")
+    return model
+
+
+def character_clips(own: list[list[dict]], arms: list[list[dict]], letter: str = "") -> list[dict]:
+    """The motions a character plays, each from its parts (lower body, upper body, hands): own, the
+    race's files in that order; arms, its weapon's battle file and that file's hands; letter, the
+    weapon's in its drawing and sheathing (inc/otc: a sword)."""
+    def pick(sources, name):
+        out, seen = [], set()
+        for src in sources:                                   # the first file holding a part wins
+            for m in src:
+                if m["name"].startswith(name) and len(m["name"]) == len(name) + 1 and m["name"] not in seen:
+                    seen.add(m["name"])
+                    out.append(m)
+        return out
+
+    def clip_of(name, kind, mode, sources, label=None):
+        parts = pick(sources, name)
+        return {"name": label or name, "parts": parts, "kind": kind, "set": mode} if parts else None
+
+    battle = arms + own                                       # the weapon's upper body over the race's legs
+    clips = [clip_of("idl", STAND, PEACE, own), clip_of("wlk", MOVE, PEACE, own), clip_of("run", MOVE, PEACE, own),
+             clip_of("btl", STAND, BATTLE, battle), clip_of("wlk", MOVE, BATTLE, battle, "bwlk"),
+             clip_of("run", MOVE, BATTLE, battle, "brun")]
+    for n in ("at0", "at1", "at2"):                           # attacks
+        clips.append(clip_of(n, ACTION, BATTLE, battle))
+    if letter:                                                # drawing and sheathing the weapon
+        clips.append(clip_of("in" + letter, ACTION, BATTLE, battle, "draw"))
+        clips.append(clip_of("ot" + letter, ACTION, BATTLE, battle, "sheathe"))
+    for school in sorted(set(CAST_MOTIONS.values())):         # magic: start, chant, release
+        for i in range(3):
+            clips.append(clip_of(f"{school}{i}", ACTION, PEACE, own))
+    clips.append(clip_of("ded", ACTION, PEACE, own))          # death
+    return [c for c in clips if c]
+
 
 def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = True, size: int = 256,
-         motions: tuple[str, ...] = MOTIONS) -> dict:
+         motions: tuple[str, ...] = MOTIONS, scale: float | None = None) -> dict:
     """The model for the port to skin and animate (port_model.py):
       verts   N x 13 float32, each triangle corner: p0 xyz, p1 xyz (in its joints' spaces, weighted),
               joint 0, joint 1 (-1: one joint), weight 0, weight 1, u, v, texture layer
@@ -446,8 +564,12 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
               mirror: FFXI's space is left-handed, the GX's right-handed, so one axis flips
       parents each joint's (-1: the root)
       clips   per motion found: name, frames, rate (keyframes per game frame, 30 a second), speed
-              (the ground speed it was made for, units a second; 0 standing), data (frames x joints x
-              10: the joint's own rotation x y z w, offset x y z, scale x y z)
+              (the ground speed a moving one was made for, units a second), kind and set (STAND, MOVE
+              or ACTION; PEACE or BATTLE), data (frames x joints x 10: the joint's own rotation x y z
+              w, offset x y z, scale x y z)
+    The motions: a character's own (load_character's clips), else the first of `motions` standing
+    and the others moving. scale: the hunter's units per the model's, else the model made `height`
+    tall (a race's size against another's is kept by giving them the same scale).
     """
     from PIL import Image
     joints = model["skeletons"][0]
@@ -470,7 +592,7 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
     axes = np.array([[0, 0, -1 if mirror else 1], [0, -1, 0], [1, 0, 0]], np.float64)   # forward +Z, up +Y
     up = corners @ axes.T
     lo, hi = up[:, 1].min(), up[:, 1].max()
-    k = height / (hi - lo)
+    k = scale if scale else height / (hi - lo)
     c, s_ = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
     turn = np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
     place = np.zeros((3, 4))
@@ -478,8 +600,10 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
     place[1, 3] = -lo * k                                              # the feet on the ground
 
     clips = []
-    for name in motions:
-        parts = clip(model, name)
+    specs = model.get("clips") or [{"name": n, "parts": clip(model, n), "kind": STAND if i == 0 else MOVE,
+                                    "set": PEACE} for i, n in enumerate(motions)]
+    for spec in specs:
+        name, parts = spec["name"], spec["parts"]
         if not parts:
             continue
         frames, rate = max(m["frames"] for m in parts), parts[0]["rate"] or 1.0
@@ -488,13 +612,15 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
         for f in range(1, frames):                                     # q and -q turn alike: keep each on
             flip = (data[f, :, :4] * data[f - 1, :, :4]).sum(1) < 0    # the previous frame's side, so
             data[f, flip, :4] *= -1                                    # frames blend the short way
-        clips.append({"name": name, "frames": frames, "rate": rate, "data": data,
-                      "speed": 0.0 if name == motions[0] else ground_speed(joints, verts, data, rate, place)})
+        clips.append({"name": name, "frames": frames, "rate": rate, "data": data, "kind": spec["kind"],
+                      "set": spec["set"],
+                      "speed": ground_speed(joints, verts, data, rate, place) if spec["kind"] == MOVE else 0.0})
     if not clips:                                                      # no motion: the rest pose, held
         q = np.array([j["rot"] for j in joints])
         t = np.array([j["trans"] for j in joints])
         data = np.concatenate([q, t, np.ones((len(joints), 3))], 1)[None].astype(np.float32)
-        clips.append({"name": "rest", "frames": 1, "rate": 1.0, "speed": 0.0, "data": data})
+        clips.append({"name": "rest", "frames": 1, "rate": 1.0, "speed": 0.0, "data": data, "kind": STAND,
+                      "set": PEACE})
 
     order = sorted(names, key=names.get)
     layers = np.stack([np.array(Image.fromarray(ps2_alpha(model["textures"][n]), "RGBA").resize((size, size), Image.LANCZOS))
