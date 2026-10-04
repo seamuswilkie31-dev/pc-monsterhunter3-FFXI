@@ -189,10 +189,18 @@ void hook_em_hp(PPCContext& c) {
 
 // fn_802762F0(PLW*, short delta): the Infinite Health code's function. Offline,
 // only the local hunter's HP changes.
+std::atomic<uint32_t> g_hit_seq{0}, g_hit_big{0};    // the hunter hit (FFXI's character flinches): how often, the last big
 void hook_pl_hp(PPCContext& c) {
     uint32_t obj = c.r[3];
+    int delta = (int16_t)(c.r[4] & 0xFFFF);
+    int before = in_ram(obj + 0x370, 4) ? (int16_t)ld16(obj + 0x370) : 0;
     orig_pl_hp(c);
     g_player.store(obj, std::memory_order_relaxed);
+    if (delta < 0 && before > 0 && in_ram(obj + 0x372, 2)) {
+        int max = (int16_t)ld16(obj + 0x372);
+        g_hit_big.store(max > 0 && -delta * 5 >= max ? 1 : 0, std::memory_order_relaxed);
+        g_hit_seq.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 // Pl_master_ck(PLW*): true for the local player's hunter.
@@ -663,9 +671,9 @@ void hook_cam_posture(PPCContext& c) {
 // set or, while the hunter's weapon is out, the battle set; and actions over them, on the layer's
 // request (a spell's casting) or the hunter's (Monster Hunter's attacks: hunter_motion).
 // ================================================================================================
-constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 3;     // 'MH3M'
+constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 4;     // 'MH3M'
 constexpr int kModelMaxVerts = 100000, kModelVertFloats = 13, kModelMaxLayers = 16, kModelTex = 256;
-constexpr int kModelMaxJoints = 128, kModelMaxClips = 32, kModelPool = 1 << 20, kXf = 10;
+constexpr int kModelMaxJoints = 128, kModelMaxClips = 48, kModelPool = 1 << 20, kXf = 10;
 enum : uint32_t { kStand = 0, kMove = 1, kAction = 2 };
 enum : uint32_t { kPeace = 0, kBattle = 1 };
 constexpr uint32_t kNone = 0xFFFFFFFF;
@@ -702,7 +710,7 @@ struct ModelBlock {
     float pool[kModelPool];
     uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
 };
-static_assert(sizeof(ModelBlock) == 13590272, "ffxi/port_model.py mirrors this layout");
+static_assert(sizeof(ModelBlock) == 13590784, "ffxi/port_model.py mirrors this layout");
 
 // The character's motions, copied from the block when it changes. Moving: under 15 units a second (30
 // to start) the set's standing one; moving, the one made for the nearest speed, played that much faster
@@ -792,9 +800,34 @@ struct Animator {
         if (on == battle) return;
         battle = on;
         int t = tagged(on ? fourcc("draw") : fourcc("shea"));
-        if (t >= 0 && (act < 0 || act_out)) request((uint32_t)t, kNone);
+        if (t >= 0 && !dead && (act < 0 || act_out)) request((uint32_t)t, kNone);
     }
+    // Monster Hunter's hunter hit: a flinch, or knocked back (big: a fifth of its health or more)
+    bool dead = false;
+    void hurt(bool big) {
+        if (dead) return;
+        const char* tag = big ? (battle ? "bkno" : "knoc") : (battle ? "bhit" : "hit ");
+        int t = tagged(fourcc4(tag));
+        if (t < 0 && big) t = tagged(fourcc4(battle ? "bhit" : "hit "));
+        if (t >= 0) request((uint32_t)t, kNone);
+    }
+    // fainted: falling, then lying there until it's up again
+    void set_dead(bool d) {
+        if (d == dead) return;
+        dead = d;
+        if (d) {
+            int fall = tagged(fourcc4(battle ? "bded" : "ded ")), lie = tagged(fourcc4(battle ? "bcor" : "cor "));
+            if (fall >= 0) request((uint32_t)fall, lie >= 0 ? (uint32_t)lie : kNone);
+        } else {
+            request(kNone, kNone);
+        }
+    }
+    static uint32_t fourcc4(const char* s) {
+        return (uint32_t)(uint8_t)s[0] | (uint32_t)(uint8_t)s[1] << 8 | (uint32_t)(uint8_t)s[2] << 16 | (uint32_t)(uint8_t)s[3] << 24;
+    }
+
     void attack() {
+        if (dead) return;
         static const uint32_t tags[3] = {fourcc("at0 "), fourcc("at1 "), fourcc("at2 ")};
         for (int i = 0; i < 3; ++i) {
             int t = tagged(tags[(swing + i) % 3]);
@@ -873,7 +906,8 @@ struct Animator {
         }
         if (act >= 0 && act_w > 0.0f) {
             sample(act, act_phase, c.data());
-            for (int j = 0; j < nj * kXf; j += kXf) mix(a.data() + j, c.data() + j, act_w, a.data() + j);
+            for (int j = 0; j < nj * kXf; j += kXf)
+                if (!std::isnan(c[j])) mix(a.data() + j, c.data() + j, act_w, a.data() + j);
         }
         chain();
     }
@@ -1077,6 +1111,12 @@ void model_frame() {
         act_seen = mb->act_seq;
         g_anim.request(mb->act_clip, mb->act_next);
     }
+    static uint32_t hit_seen = 0;
+    if (uint32_t hs = g_hit_seq.load(std::memory_order_relaxed); hs != hit_seen) {
+        hit_seen = hs;
+        if (pl) g_anim.hurt(g_hit_big.load(std::memory_order_relaxed) != 0);
+    }
+    if (pl) g_anim.set_dead((int16_t)ld16(pl + 0x370) <= 0);
     char motion[16] = {};
     if (fresh && pl && hunter_motion(motion)) {              // what Monster Hunter's hunter is doing
         g_anim.set_battle(motion_battle(motion));

@@ -538,9 +538,16 @@ def character_clips(own: list[list[dict]], arms: list[list[dict]], letter: str =
                     out.append(m)
         return out
 
-    def clip_of(name, kind, mode, sources, label=None):
+    def clip_of(name, kind, mode, sources, label=None, hold=0.0, then=None):
+        """hold: its first part lasts at least that many seconds (a pose held); then: a motion played
+        after it, in the same clip (knocked back, then getting up)."""
         parts = pick(sources, name)
-        return {"name": label or name, "parts": parts, "kind": kind, "set": mode} if parts else None
+        if not parts:
+            return None
+        spec = {"name": label or name, "parts": parts, "kind": kind, "set": mode, "hold": hold}
+        if then:
+            spec["then"] = pick(sources, then)
+        return spec
 
     battle = arms + own                                       # the weapon's upper body over the race's legs
     clips = [clip_of("idl", STAND, PEACE, own), clip_of("wlk", MOVE, PEACE, own), clip_of("run", MOVE, PEACE, own),
@@ -554,7 +561,13 @@ def character_clips(own: list[list[dict]], arms: list[list[dict]], letter: str =
     for school in sorted(set(CAST_MOTIONS.values())):         # magic: start, chant, release
         for i in range(3):
             clips.append(clip_of(f"{school}{i}", ACTION, PEACE, own))
-    clips.append(clip_of("ded", ACTION, PEACE, own))          # death
+    # hurt: a flinch held a moment; knocked back, then up again; falling dead, then lying there (looped).
+    # Each in peace and in battle (the weapon in hand or away), the port picking by the hunter's
+    for prefix, mode, src in (("", PEACE, own), ("b", BATTLE, battle)):
+        clips.append(clip_of("dfm", ACTION, mode, src, prefix + "hit", hold=0.3))
+        clips.append(clip_of("bb0", ACTION, mode, src, prefix + "knock", hold=0.45, then="bb1"))
+        clips.append(clip_of("ded", ACTION, mode, src, prefix + "ded"))
+        clips.append(clip_of("cor", ACTION, mode, src, prefix + "cor"))
     return [c for c in clips if c]
 
 
@@ -571,7 +584,8 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
       clips   per motion found: name, frames, rate (keyframes per game frame, 30 a second), speed
               (the ground speed a moving one was made for, units a second), kind and set (STAND, MOVE
               or ACTION; PEACE or BATTLE), data (frames x joints x 10: the joint's own rotation x y z
-              w, offset x y z, scale x y z)
+              w, offset x y z, scale x y z; an action's joints it doesn't move: NaN, the port keeping
+              those as standing or moving has them)
     The motions: a character's own (load_character's clips), else the first of `motions` standing
     and the others moving. scale: the hunter's units per the model's, else the model made `height`
     tall (a race's size against another's is kept by giving them the same scale).
@@ -612,8 +626,22 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
         if not parts:
             continue
         frames, rate = max(m["frames"] for m in parts), parts[0]["rate"] or 1.0
-        data = np.stack([np.concatenate(local_pose(joints, parts, f / max(frames - 1, 1)), 1)
-                         for f in range(frames)]).astype(np.float32)
+        then = spec.get("then") or []
+        if then:                                                       # played at the second's rate
+            rate = then[0]["rate"] or 1.0
+        frames = max(frames, int(round(spec.get("hold", 0.0) * 30 * rate)) + 1)
+
+        def sampled(ps, n):
+            return np.stack([np.concatenate(local_pose(joints, ps, f / max(n - 1, 1)), 1) for f in range(n)])
+        data = sampled(parts, frames)
+        if then:
+            more = max(m["frames"] for m in then)
+            data = np.concatenate([data, sampled(then, more)])
+            frames += more
+        data = data.astype(np.float32)
+        if spec["kind"] == ACTION:                                     # an action moves only its own joints:
+            driven = {j for m in parts + then for j in m["tracks"]}    # the others stay as the hunter moves
+            data[:, [j for j in range(len(joints)) if j not in driven]] = np.nan
         for f in range(1, frames):                                     # q and -q turn alike: keep each on
             flip = (data[f, :, :4] * data[f - 1, :, :4]).sum(1) < 0    # the previous frame's side, so
             data[f, flip, :4] *= -1                                    # frames blend the short way
