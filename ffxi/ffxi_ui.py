@@ -134,6 +134,8 @@ class UiState:
     palette: tuple = ()                   # ((key, name, usable, detail), ...)
     menu: tuple = ()                      # per level: (title, ((label, usable, detail), ...), cursor, more above, more below)
     nameplate: tuple | None = None        # where your head is in the picture (-1..1, y up): your name above it
+    target_arrow: tuple | None = None     # (x, y, locked, bob 0..1): FFXI's arrow above the target's head
+    target_locked: bool = False
     status: str = ""
 
 
@@ -155,6 +157,8 @@ class FfxiUi:
         d = ImageDraw.Draw(img)
         if s.nameplate:
             self._nameplate(d, s)
+        if s.target_arrow:
+            self._arrow(d, s)
         self._status(img, d, s)
         if s.effects:
             self._effects(img, d, s)
@@ -211,6 +215,24 @@ class FfxiUi:
         if 0 <= x < W and 0 <= y < H:
             self._text(d, (int(x), int(y)), s.name, self.f_name, WHITE, anchor="ms")
 
+    def _arrow(self, d, s: UiState) -> None:
+        """FFXI's target arrow: pointing down at the target's head, bobbing; ringed while locked on."""
+        import math
+        ax, ay, locked, bob = s.target_arrow
+        x = (ax + 1) / 2 * W
+        y = (1 - ay) / 2 * H - 6 - 7 * math.sin(bob * 2 * math.pi)
+        if not (0 <= x < W and 0 <= y < H):
+            return
+        w, h = 16, 32
+        tip, left, right = (x, y), (x - w, y - h), (x + w, y - h)
+        notch = (x, y - h + 8)
+        if locked:                                   # the lock: a light rim, pulsing
+            glow = int(150 + 100 * math.sin(bob * 4 * math.pi))
+            d.polygon([(x, y + 5), (x - w - 6, y - h - 4), (x, y - h + 3), (x + w + 6, y - h - 4)],
+                      outline=(255, 245, 200, glow), width=3)
+        d.polygon([tip, left, notch, right], fill=(222, 64, 36, 245), outline=(255, 214, 120, 255), width=2)
+        d.polygon([tip, (x - w * 0.45, y - h * 0.62), (x, y - h * 0.5)], fill=(255, 150, 90, 200))
+
     def _status(self, img, d, s: UiState) -> None:
         x0, y0, x1, y1 = W - 300, H - 98, W - 12, H - 12
         self.window(img, (x0, y0, x1, y1))
@@ -263,6 +285,8 @@ class FfxiUi:
         line = " ".join(([s.target_check[0]] if s.target_check else []) + list(s.target_effects))
         if line:
             self._text(d, (x0 + 12, y0 + 27), line[:44], self.f_small, DIM)
+        if s.target_locked:
+            self._text(d, (x1 - 12, y0 + 27), "LOCK", self.f_small, (255, 214, 120), anchor="ra")
 
     def _log(self, img, d, s: UiState) -> None:
         lines = s.log[-7:]

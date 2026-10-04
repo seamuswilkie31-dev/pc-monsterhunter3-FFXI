@@ -13,3 +13,5 @@ mh3_CockpitDraw        # the hunt HUD (MH3_HIDE_HUD=1: not drawn)
 nwAddResource__FPcPv   # a loaded file's resources registered (MH3_RES_TRACE=1: logged)
 SetPerspective__Q34nw4r3g3d6CameraFffff   # the 3D camera, for the FFXI nameplate
 mh3_ScnMdlCalcWorldMtx    # a scene model's world matrix: the hunter's, for FFXI's character (and hiding it)
+SetPosition__Q34nw4r3g3d6CameraFRCQ34nw4r4math4VEC3   # the camera's eye: FFXI's lock-on
+SetPosture__Q34nw4r3g3d6CameraFRCQ44nw4r3g3d6Camera11PostureInfo   # where it looks: FFXI's lock-on

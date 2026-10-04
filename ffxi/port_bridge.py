@@ -12,6 +12,9 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     player_obj, monster_obj, monster_hits, monster_delta: what the port's hooks saw
     menu_open, menu_close_seq/ack, item_seq/ack, ev_head, reserved[2], events[32]: the command menu
     name_x, name_y, name_ok, name_height, camera, reserved: your nameplate (the head through the camera)
+    target_x, target_y, target_ok, target_locked, target_model, target_name[16], target_dist: FFXI's target
+        (the monster nearest the hunter, or the one locked on with the Classic's L held) and where its
+        arrow goes
 
 A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
 local hunter's object, or in the monster whose HP the game last changed).
@@ -24,7 +27,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 5
+VERSION = 6
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -41,8 +44,10 @@ MENU = struct.Struct("<8I")              # menu_open, close_seq, close_ack, item
 EVENTS_AT = MENU_AT + MENU.size
 NAME_AT = EVENTS_AT + 32 * 4
 NAME = struct.Struct("<ffIfII")         # name_x, name_y, name_ok, name_height, camera, reserved
-SIZE = NAME_AT + NAME.size
-assert SIZE == 936, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+TARGET_AT = NAME_AT + NAME.size
+TARGET = struct.Struct("<ffIII16sf")    # x, y, ok, locked, model, name, dist
+SIZE = TARGET_AT + TARGET.size
+assert SIZE == 976, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
 # the Classic's buttons, as the port's filter reports them (the pad's: by position)
 CL_UP, CL_LEFT, CL_X, CL_A, CL_Y, CL_B, CL_DOWN, CL_RIGHT = 0x0001, 0x0002, 0x0008, 0x0010, 0x0020, 0x0040, 0x4000, 0x8000
@@ -206,6 +211,15 @@ class PortBackend:
     # --- your nameplate: the hunter's head projected through the game's 3D camera, by the port ---
     def set_name_height(self, h: float) -> None:
         self.mm[NAME_AT + 12:NAME_AT + 16] = struct.pack("<f", float(h))
+
+    def target(self) -> dict | None:
+        """FFXI's target, as the port picks it: where its arrow goes in the picture (-1..1, y up; None
+        if it can't be seen), whether the camera is locked on it, its model's name, its distance."""
+        x, y, ok, locked, model, name, dist = TARGET.unpack_from(self.mm, TARGET_AT)
+        if not model:
+            return None
+        return {"arrow": (x, y) if ok else None, "locked": bool(locked), "model": model,
+                "name": name.split(b"\0")[0].decode("latin-1"), "dist": dist}
 
     def nameplate(self) -> tuple[float, float] | None:
         """Where your head is in the picture (-1..1, y up), or None when it can't be seen."""

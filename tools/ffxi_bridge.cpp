@@ -36,7 +36,7 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 5;
+constexpr uint32_t kVersion = 6;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -90,8 +90,16 @@ struct Block {
     float name_height;                  // layer: the head's height above the hunter's feet (world units)
     uint32_t camera;                    // port: the 3D camera's CameraData, 0 until the game sets one
     uint32_t reserved2;
+    // FFXI's target (target_frame): the monster nearest the hunter, or the one the camera is locked on
+    // (the Classic's L held: lock_filter), its arrow's place above its head through the camera.
+    float target_x, target_y;           // port: -1..1, y up
+    uint32_t target_ok;                 // port: 1 when there's a target in front of the camera
+    uint32_t target_locked;             // port: 1 while the camera is locked on it
+    uint32_t target_model;              // port: its scene model (0: none)
+    char target_name[16];               // port: its model's name ("em027")
+    float target_dist;                  // port: from the hunter, in the game's units
 };
-static_assert(sizeof(Block) == 936, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 976, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -196,7 +204,8 @@ void hook_master(PPCContext& c) {
 
 // The Classic's buttons (KPAD_CL_*, as video.cpp's).
 enum : uint32_t { kClUp = 0x0001, kClLeft = 0x0002, kClX = 0x0008, kClA = 0x0010, kClY = 0x0020,
-                  kClB = 0x0040, kClDown = 0x4000, kClRight = 0x8000 };
+                  kClB = 0x0040, kClL = 0x2000, kClDown = 0x4000, kClRight = 0x8000 };
+std::atomic<bool> g_lock_toggle{false};  // the Classic's L held: lock on (or off), for target_frame
 constexpr uint32_t kMenuButtons = kClUp | kClDown | kClLeft | kClRight | kClA | kClB | kClX | kClY;
 
 Block* g_block = nullptr;
@@ -255,6 +264,22 @@ void classic_filter(int chan, ClassicState& s) {
     }
     if (now < y_until) s.buttons |= kClY;         // a tap, or the layer's Items: the game's own Y
     else s.buttons &= ~kClY;                      // otherwise the filter's, until it knows
+
+    // L, the game's camera behind the hunter: a tap is the game's, as Y's is; held, FFXI's lock-on
+    static bool l_held = false;
+    static clock::time_point l_since{}, l_until{};
+    if (pressed & kClL) {
+        l_held = true;
+        l_since = now;
+    } else if (l_held && (released & kClL)) {
+        l_held = false;
+        l_until = now + std::chrono::milliseconds(120);
+    } else if (l_held && now - l_since >= kHoldForMenu) {
+        l_held = false;
+        g_lock_toggle.store(true, std::memory_order_relaxed);
+    }
+    if (now < l_until) s.buttons |= kClL, s.lt = 1.0f;
+    else s.buttons &= ~kClL, s.lt = 0.0f;
 }
 
 // Only RAM is committed in the host's reservation: MEM1 and MEM2.
@@ -412,6 +437,220 @@ void project_name(Block* b) {
     b->name_x = clip[0] / clip[3];
     b->name_y = clip[1] / clip[3];
     b->name_ok = std::fabs(b->name_x) < 1.1f && std::fabs(b->name_y) < 1.1f;
+}
+
+// ================================================================================================
+// FFXI's target and lock-on. Monsters are scene models whose resource is named em<number> ("em027"):
+// each one's place is noted as the scene computes it (note_enemy, from hook_scn_world, the game's
+// thread). Each frame (target_frame) the target is the one locked on, else the nearest within reach;
+// its arrow goes above the highest of its joints (the model's world matrices, ScnMdl +0xEC, as many as
+// its +0x102 says). Locked on, the gameplay camera stands behind the hunter facing the target, at the
+// game's own distance and height (lock_camera, after the game's Camera::SetPosition and SetPosture:
+// NW4R keeps the eye at CameraData +0x74 and the point looked at at +0x8C, the view built from them
+// later, while +0x70's bit 8 is clear); the game's idea of where the camera looks follows
+// (get_camera_direction reads the camera), so the stick does too.
+// ================================================================================================
+struct Enemy {
+    uint32_t obj;
+    float x, y, z;
+    uint32_t frame;         // the frame it was last placed in
+    char name[16];
+};
+std::vector<Enemy> g_enemies;            // the game's thread only
+uint32_t g_frame = 0;                    // frames finished (target_frame)
+constexpr float kTargetReach = 2500.0f, kLockReach = 5000.0f;
+
+// a monster's model: its resource (ScnMdl +0xE8, an MDL0) named em and a digit
+bool enemy_model(uint32_t obj, char name[16]) {
+    if (!in_ram(obj + 0xE8, 4)) return false;
+    uint32_t mdl = ld32(obj + 0xE8);
+    if (!in_ram(mdl, 0x50) || ld32(mdl) != 0x4D444C30) return false;              // 'MDL0'
+    uint32_t sections = ld32(mdl + 8) >= 10 ? 14 : 11;
+    uint32_t at = mdl + ld32(mdl + 0x10 + 4 * sections);
+    if (!in_ram(at, 16) || ld8(at) != 'e' || ld8(at + 1) != 'm' || !std::isdigit(ld8(at + 2))) return false;
+    for (int i = 0; i < 15; ++i) name[i] = (char)ld8(at + i);
+    name[15] = 0;
+    return true;
+}
+
+void note_enemy(uint32_t obj) {
+    char name[16];
+    if (!enemy_model(obj, name) || !in_ram(obj + 0x3C, 48)) return;
+    float x = f32(obj + 0x48), y = f32(obj + 0x58), z = f32(obj + 0x68);
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
+    for (Enemy& e : g_enemies)
+        if (e.obj == obj) {
+            e.x = x, e.y = y, e.z = z, e.frame = g_frame;
+            std::memcpy(e.name, name, sizeof name);
+            return;
+        }
+    if (g_enemies.size() >= 64) return;
+    Enemy e{obj, x, y, z, g_frame, {}};
+    std::memcpy(e.name, name, sizeof name);
+    g_enemies.push_back(e);
+}
+
+// the highest of a model's joints (its world matrices' translations), or its root's height and more
+float enemy_top(const Enemy& e) {
+    uint32_t arr = ld32(e.obj + 0xEC), n = std::min<uint32_t>(ld16(e.obj + 0x102), 512);
+    if (!n || !in_ram(arr, n * 0x30)) return e.y + 150.0f;
+    float top = -1e9f;
+    for (uint32_t i = 0; i < n; ++i) {
+        float y = f32(arr + i * 0x30 + 0x1C);
+        if (std::isfinite(y) && std::fabs(y - e.y) < 5000.0f) top = std::max(top, y);
+    }
+    return top > -1e9f ? top : e.y + 150.0f;
+}
+
+// a point of the world through a camera (its view, then its projection): -1..1, y up; false behind it
+bool project(uint32_t cam, const float w[3], float& sx, float& sy) {
+    if (!in_ram(cam, 0x70)) return false;
+    float v[3], clip[4];
+    for (int r = 0; r < 3; ++r)
+        v[r] = f32(cam + 16 * r) * w[0] + f32(cam + 16 * r + 4) * w[1] + f32(cam + 16 * r + 8) * w[2] + f32(cam + 16 * r + 12);
+    for (int r = 0; r < 4; ++r)
+        clip[r] = f32(cam + 0x30 + 16 * r) * v[0] + f32(cam + 0x30 + 16 * r + 4) * v[1]
+                + f32(cam + 0x30 + 16 * r + 8) * v[2] + f32(cam + 0x30 + 16 * r + 12);
+    if (!(clip[3] > 0.001f) || !std::isfinite(clip[0]) || !std::isfinite(clip[1])) return false;
+    sx = clip[0] / clip[3], sy = clip[1] / clip[3];
+    return std::fabs(sx) < 1.1f && std::fabs(sy) < 1.1f;
+}
+
+// what lock_camera needs, from target_frame (both on the game's thread)
+struct Lock {
+    bool on = false;
+    float weight = 0;                    // 1 locked; easing in and out
+    uint32_t camera = 0;                 // the gameplay camera's CameraData
+    float tx = 0, ty = 0, tz = 0;        // the target: its middle
+    float arrow = 0;                     // its arrow's height (above its head)
+    float yaw = 0;                       // the camera's, around the hunter, eased toward the target
+    bool have_game = false;
+    float eye[3] = {}, look[3] = {};     // the game's own, as it last set them
+} g_lock;
+uint32_t g_target_obj = 0;
+PPCFunc orig_cam_position, orig_cam_posture;
+
+void target_frame(uint32_t pl, uint32_t cam, float dt) {
+    ++g_frame;
+    Block* b = g_block;
+    g_enemies.erase(std::remove_if(g_enemies.begin(), g_enemies.end(),
+                                   [](const Enemy& e) { return g_frame - e.frame > 30; }), g_enemies.end());
+    auto live = [&](uint32_t obj) -> Enemy* {
+        for (Enemy& e : g_enemies)
+            if (e.obj == obj && g_frame - e.frame <= 3) return &e;
+        return nullptr;
+    };
+    float hx = pl ? f32(pl + 0x3C) : 0, hy = pl ? f32(pl + 0x40) : 0, hz = pl ? f32(pl + 0x44) : 0;
+    auto dist = [&](const Enemy& e) { return std::hypot(e.x - hx, e.z - hz); };
+    bool toggle = g_lock_toggle.exchange(false, std::memory_order_relaxed);
+    Enemy* t = g_lock.on ? live(g_target_obj) : nullptr;
+    if (g_lock.on && (!t || !pl || dist(*t) > kLockReach)) g_lock.on = false, t = nullptr;   // gone: let go
+    if (!t && pl) {
+        float best = kTargetReach;
+        for (Enemy& e : g_enemies)
+            if (g_frame - e.frame <= 3 && dist(e) < best) best = dist(e), t = &e;
+    }
+    if (toggle) {
+        if (g_lock.on) g_lock.on = false;
+        else if (t && cam) {
+            g_lock.on = true;
+            if (g_lock.weight <= 0.0f && g_lock.have_game)     // from where the game's camera is
+                g_lock.yaw = std::atan2(g_lock.look[0] - g_lock.eye[0], g_lock.look[2] - g_lock.eye[2]);
+        }
+        rt_log("ffxi: lock-on %s %s", g_lock.on ? "on" : "off", t ? t->name : "(no target)");
+    }
+    g_target_obj = t ? t->obj : 0;
+    g_lock.camera = cam;
+    float top = t ? enemy_top(*t) : 0;
+    if (t) {
+        g_lock.tx = t->x, g_lock.ty = (t->y + top) * 0.5f, g_lock.tz = t->z, g_lock.arrow = top + 40.0f;
+        float want = std::atan2(t->x - hx, t->z - hz), d = want - g_lock.yaw;
+        d -= 6.2831853f * std::floor((d + 3.14159265f) / 6.2831853f);   // the short way round
+        if (g_lock.on) g_lock.yaw += d * std::min(1.0f, dt * 5.0f);
+    }
+    g_lock.weight = g_lock.on ? std::min(1.0f, g_lock.weight + dt / 0.3f) : std::max(0.0f, g_lock.weight - dt / 0.3f);
+    if (!b) return;
+    b->target_model = t ? t->obj : 0;
+    b->target_locked = g_lock.on ? 1 : 0;
+    std::memset(b->target_name, 0, sizeof b->target_name);
+    if (t) std::memcpy(b->target_name, t->name, sizeof b->target_name);
+    b->target_dist = t ? std::hypot(dist(*t), t->y - hy) : 0;
+    float w[3] = {t ? t->x : 0, top + 40.0f, t ? t->z : 0}, sx = 0, sy = 0;
+    bool ok = t && cam && project(cam, w, sx, sy);
+    b->target_x = sx, b->target_y = sy;
+    b->target_ok = ok ? 1 : 0;
+}
+
+// The gameplay camera locked on: behind the hunter on the line from the target, at the game's own
+// distance and height above the point it looks at (its zoom and its tilt kept), that point drawn toward
+// the target, so both are in sight; eased in and out over 0.3 s.
+void lock_camera(uint32_t data) {
+    if (!(g_lock.weight > 0.0f) || data != g_lock.camera || !g_lock.have_game || !in_ram(data, 0x98)) return;
+    uint32_t pl = object(kBasePlayer);
+    if (!pl) return;
+    float h[3] = {f32(pl + 0x3C), f32(pl + 0x40), f32(pl + 0x44)};
+    const float* e0 = g_lock.eye;
+    const float* l0 = g_lock.look;
+    float off[3] = {l0[0] - h[0], l0[1] - h[1], l0[2] - h[2]};             // where the game looks, by the hunter
+    float dx = e0[0] - l0[0], dy = e0[1] - l0[1], dz = e0[2] - l0[2];
+    float flat = std::hypot(dx, dz);
+    if (!(flat > 1.0f)) return;
+    float c = h[0] + off[0], cy = h[1] + off[1], cz = h[2] + off[2];      // the game's point, the hunter's
+    // toward the target: a third of the way across (300 units at most), a quarter of the way up or down
+    // (120 at most): FFXI's lock turns the camera, it hardly tilts it
+    float ax = g_lock.tx - c, az = g_lock.tz - cz, across = std::hypot(ax, az);
+    float k = across > 900.0f ? 300.0f / across : 1.0f / 3.0f;
+    float look[3] = {c + ax * k, cy + std::clamp((g_lock.ty - cy) * 0.25f, -120.0f, 120.0f), cz + az * k};
+    float sx = std::sin(g_lock.yaw), sz = std::cos(g_lock.yaw);
+    float eye[3] = {c - sx * flat, cy + dy, cz - sz * flat};
+    // and tilted as far as needed, no further, to keep the target's arrow within 17 degrees of the view's
+    // middle (a monster up a slope, or below): in sight
+    float dl = std::hypot(look[0] - eye[0], look[2] - eye[2]), de = std::hypot(g_lock.tx - eye[0], g_lock.tz - eye[2]);
+    if (dl > 1.0f && de > 1.0f) {
+        float pv = std::atan2(look[1] - eye[1], dl), pt = std::atan2(g_lock.arrow - eye[1], de);
+        pv = std::clamp(pv, pt - 0.30f, pt + 0.30f);
+        look[1] = eye[1] + dl * std::tan(pv);
+    }
+    float w = g_lock.weight;
+    for (int i = 0; i < 3; ++i) {
+        float ev = e0[i] + (eye[i] - e0[i]) * w, lv = l0[i] + (look[i] - l0[i]) * w;
+        uint32_t ui, ul;
+        std::memcpy(&ui, &ev, 4), std::memcpy(&ul, &lv, 4);
+        st32(data + 0x74 + 4 * i, ui);
+        st32(data + 0x8C + 4 * i, ul);
+    }
+    st32(data + 0x70, ld32(data + 0x70) & ~8u);                            // the view built again from them
+}
+
+// nw4r::g3d::Camera::SetPosition(const VEC3&): r3 the Camera (a handle to its CameraData), r4 the eye
+void hook_cam_position(PPCContext& c) {
+    uint32_t cam = c.r[3], v = c.r[4];
+    uint32_t data = in_ram(cam, 4) ? ld32(cam) : 0;
+    if (data && data == g_lock.camera && in_ram(v, 12))                    // the game's eye, before ours
+        for (int i = 0; i < 3; ++i) g_lock.eye[i] = f32(v + 4 * i);
+    orig_cam_position(c);
+    if (data) lock_camera(data);
+}
+
+// Camera::SetPosture(const PostureInfo&): r4 the posture (+0 its kind: 0 looking at a point, 2 aiming at one
+// with a twist, as the game does; +0x10 that point)
+void hook_cam_posture(PPCContext& c) {
+    uint32_t cam = c.r[3], p = c.r[4];
+    uint32_t data = in_ram(cam, 4) ? ld32(cam) : 0;
+    if (data && data == g_lock.camera && in_ram(p, 0x1C)) {
+        static bool told = false;
+        if (!told) told = true, rt_log("ffxi: the gameplay camera's posture: kind %u", ld32(p));
+        uint32_t kind = ld32(p);
+        if (kind == 0 || kind == 2) {                        // looking at a point; aiming at one (the game's)
+            for (int i = 0; i < 3; ++i) g_lock.look[i] = f32(p + 0x10 + 4 * i);
+            if (in_ram(data + 0x74, 12))
+                for (int i = 0; i < 3; ++i)
+                    if (g_lock.weight <= 0.0f) g_lock.eye[i] = f32(data + 0x74 + 4 * i);
+            g_lock.have_game = true;
+        }
+    }
+    orig_cam_posture(c);
+    if (data) lock_camera(data);
 }
 
 
@@ -749,6 +988,7 @@ bool owned_by_hunter(uint32_t obj, uint32_t pl) {
 void hook_scn_world(PPCContext& c) {
     uint32_t obj = c.r[3];
     orig_scn_world(c);
+    note_enemy(obj);                                         // a monster: FFXI's targets
     uint32_t pl = object(kBasePlayer);
     bool hide = g_hide_hunter.load(std::memory_order_relaxed);
     if (!hide && !g_hidden.empty()) {                         // shown again: our bits off
@@ -817,6 +1057,10 @@ void model_frame() {
                loaded ? "" : " (not drawn: no joints or motions)");
     }
     g_hide_hunter.store(up && loaded && (mb->flags & 2), std::memory_order_relaxed);
+    {
+        uint32_t tp = object(kBasePlayer);
+        target_frame(tp, follow_camera(tp), dt);             // FFXI's target, and the lock-on
+    }
     if (!loaded) return;
     float view[12] = {}, proj[6] = {}, h[12];
     bool fresh;
@@ -947,6 +1191,9 @@ void install() {
         }
     }
     orig_scn_world = ppc_hook("mh3_ScnMdlCalcWorldMtx", hook_scn_world);
+    orig_cam_position = ppc_hook("SetPosition__Q34nw4r3g3d6CameraFRCQ34nw4r4math4VEC3", hook_cam_position);
+    orig_cam_posture = ppc_hook("SetPosture__Q34nw4r3g3d6CameraFRCQ44nw4r3g3d6Camera11PostureInfo", hook_cam_posture);
+    if (!orig_cam_position || !orig_cam_posture) rt_log("ffxi: the camera's hooks are missing (tools/mh3-hooks.txt): no lock-on");
     g_model_block = mb;
     if (mb) video_set_frame_hook(model_frame);
     std::thread(serve, b, o, mb).detach();

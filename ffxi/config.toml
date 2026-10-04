@@ -23,6 +23,7 @@ sound_volume = 0.7       # 0 to 1
 log_fade = 10            # the combat log's lines go this many seconds after they appear (0: they stay)
 nameplate = true         # your name above your head, as in FFXI
 nameplate_height = 200   # how high above your feet, in the game's units (the camera looks at 170)
+target_arrow = true      # FFXI's arrow above your target (the nearest monster); hold L (the pad's LB) to lock on
 ui = "game"              # game: the FFXI interface in the game's window (the port); window; console
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
 weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,

@@ -523,8 +523,17 @@ class App:
             target_check=check, target_effects=tuple(sorted({s for s, _ in e.debuffs})),
             casting=e.casting, cast_frac=round(cast_frac, 2),
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now),
-            nameplate=self._nameplate(),
+            nameplate=self._nameplate(), **self._target_arrow(now),
             status="" if self.status == "connected" else self.status)
+
+    def _target_arrow(self, now: float) -> dict:
+        """FFXI's arrow above the port's target (the nearest monster, or the one locked on), bobbing."""
+        t = self.mem.target() if hasattr(self.mem, "target") and self.cfg.get("target_arrow", True) else None
+        if not t or not t["arrow"]:
+            return {"target_locked": bool(t and t["locked"])}
+        bob = round((now * 1.2) % 1.0, 2)                       # a little over a second up and down
+        return {"target_arrow": (round(t["arrow"][0], 3), round(t["arrow"][1], 3), t["locked"], bob),
+                "target_locked": t["locked"]}
 
     def _log_lines(self, now: float) -> tuple:
         """The combat log's last lines, each gone log_fade seconds after it was said (0: they stay)."""
