@@ -39,10 +39,23 @@ it can sit inside scenery.
 **Sounds** (2026-10-04): each spell's own as it goes off (its effect file, 2800 + its animation number,
 names it: `ffxi_sound.py`), the level-up fanfare and the level-down (`ROM/13/35`, `34`).
 
-Next: spell visual effects (FFXI's particle generators, 0x05, with their meshes and textures, scheduled by
-a 0x07 routine: a renderer of their own in the port); hit, faint and death motions from Monster Hunter's
-motion names (`co_*` numbers to map);
-the lock-on's camera against walls; more weapons than the sword (each race's battle file and draw letter).
+**Hits, music, weapons** (2026-10-04, checked in play). Hurt (the bridge's `hook_pl_hp`: the game's own
+damage), the character flinches (`dfm` held 0.3 s over the moving legs: an action moves only its joints,
+the rest NaN in its frames), is knocked back for a fifth of its health or more (`bb0` then `bb1`), and
+fainted falls and lies there (`ded`, `cor` looped). FFXI's music (`ffxi_sound.read_bgw`, `Player.play_music`)
+plays by the map (the bridge's `serve_map`: wiikit's RSO table, `map_village`, `map01`...) and while
+engaged (weapon out near a monster, blows in the last 6 s): config.toml's `music_tracks`; the game's own
+music is held silent meanwhile (`set_str_bgm_main_vol`'s variable, r13-0x4460, at 0) and given back when the
+layer stops; FFXI's audio follows the game's level in Windows' mixer (pycaw). The battle motions are the
+weapon style's (`weapon_style`: the weapon file's info chunk; `battle_files`: the race's file drawing that
+style), Monster Hunter's weapon read from its motion set (w00-w08: `MH_WEAPONS`) and the character rebuilt
+when it changes. Known: some races' polearm and great sword files aren't found by the draw letter (they
+hold a sword and shield then); the music's track numbers are from memory (config.toml to change them).
+
+Next: spell visual effects. FFXI's particle generators (0x05) with their keyframe curves (0x19), meshes
+(0x1F) and textures (0x20), scheduled by a 0x07 routine: a generator has sections of opcodes
+(initialisers, generator updaters, particle updaters, expiration), as the community's viewers port them from
+xim; a renderer of their own in the port (billboards and meshes, additive). The lock-on's camera against walls.
 
 **Open: a crash on entering a quest's area the second time** (2026-10-03, in play). The Deserted
 Island (`map01`) loaded for a quest, back to the village, then `map01` again: during that load the game
