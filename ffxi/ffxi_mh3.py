@@ -562,8 +562,14 @@ class App:
                 packed = FM.pack(model, yaw=yaw, mirror=mirror, scale=height / FM.HUME_MALE_HEIGHT)
                 what = f"{FM.RACES[race]['label']} " + " ".join(f"{k} {v}" for k, v in look.items())
             else:
-                packed = FM.pack(FM.load(root / dat), height, yaw, mirror)
+                model = FM.load(root / dat)
+                packed = FM.pack(model, height, yaw, mirror)
                 what = dat
+            if hasattr(self.mem, "set_name_height"):             # your name 25 units above its head
+                place = packed["place"]
+                rest = FM.skin_corners(packed["verts"], FM.joint_world(model["skeletons"][0]))
+                top = float((rest @ place[:, :3].T + place[:, 3])[:, 1].max())
+                self.mem.set_name_height(top + 25)
             pm = PortModel()
             pm.send(packed)
             pm.set_flags(True, self.cfg.get("hide_hunter", True))
