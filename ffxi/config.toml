@@ -20,6 +20,10 @@ character_yaw = 0        # degrees, if it faces the wrong way
 hide_hunter = true       # hide Monster Hunter's hunter while it's drawn
 sounds = true            # FFXI's sounds from your FFXI installation: each spell's own as it goes off
 sound_volume = 0.7       # 0 to 1
+music = true             # FFXI's music in place of Monster Hunter's: the village's, the field's, battle music when
+                         # engaged (the pieces: [music_tracks] below)
+music_volume = 1.0       # 1: as loud as Monster Hunter's own music; FFXI's sounds and music follow the game's
+                         # level in Windows' volume mixer
 log_fade = 10            # the combat log's lines go this many seconds after they appear (0: they stay)
 nameplate = true         # your name above your head, as in FFXI
 nameplate_height = 200   # how high above your feet, in the game's units, with no FFXI character (with one: above its head)
@@ -80,3 +84,13 @@ type = "u16"
 weapon_skills = [0x33, 0x34, 0x35, 0x36]                   # 3 4 5 6 -> your weapon's 4 WS
 spells = [0x37, 0x38, 0x39, 0x30, 0xBD, 0xBB, 0xDB, 0xDD]  # 7 8 9 0 - = [ ] -> job spells in order
 pause = 0x50                                               # P: pause / resume the layer
+
+
+[music_tracks]
+# FFXI's music for each place: the numbers of sound/win/music/data/musicNNN.bgw in your FFXI installation
+# (ffxi_sound.py music N decodes one to listen to)
+village = 112            # Selbina
+town = 110               # The Grand Duchy of Jeuno
+field = 109              # Ronfaure
+battle = 101             # Battle Theme
+tough_battle = 125       # Tough Battle (a large monster)

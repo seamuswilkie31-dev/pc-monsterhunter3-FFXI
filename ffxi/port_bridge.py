@@ -15,6 +15,9 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     target_x, target_y, target_ok, target_locked, target_model, target_name[16], target_dist: FFXI's target
         (the monster nearest the hunter, or the one locked on with the Classic's L held) and where its
         arrow goes
+    bgm_stream, bgm_seq, bgm_mute, reserved: the game's music (what its player was last asked for), and
+        the layer's word that it be silent while FFXI's plays
+    map[16]: the map's code module linked now
 
 A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
 local hunter's object, or in the monster whose HP the game last changed).
@@ -27,7 +30,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 6
+VERSION = 7
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -46,8 +49,11 @@ NAME_AT = EVENTS_AT + 32 * 4
 NAME = struct.Struct("<ffIfII")         # name_x, name_y, name_ok, name_height, camera, reserved
 TARGET_AT = NAME_AT + NAME.size
 TARGET = struct.Struct("<ffIII16sf")    # x, y, ok, locked, model, name, dist
-SIZE = TARGET_AT + TARGET.size
-assert SIZE == 976, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+BGM_AT = TARGET_AT + TARGET.size
+BGM = struct.Struct("<4I")              # stream, seq, mute, reserved
+MAP_AT = BGM_AT + BGM.size              # the map's code module linked now: "map_village", "map01"; "": none
+SIZE = MAP_AT + 16
+assert SIZE == 1008, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
 # the Classic's buttons, as the port's filter reports them (the pad's: by position)
 CL_UP, CL_LEFT, CL_X, CL_A, CL_Y, CL_B, CL_DOWN, CL_RIGHT = 0x0001, 0x0002, 0x0008, 0x0010, 0x0020, 0x0040, 0x4000, 0x8000
@@ -220,6 +226,18 @@ class PortBackend:
             return None
         return {"arrow": (x, y) if ok else None, "locked": bool(locked), "model": model,
                 "name": name.split(b"\0")[0].decode("latin-1"), "dist": dist}
+
+    def game_music(self) -> tuple[int, int]:
+        """What Monster Hunter's music player was last asked to play: (its stream, a count of requests)."""
+        stream, seq, _, _ = BGM.unpack_from(self.mm, BGM_AT)
+        return stream, seq
+
+    def map_name(self) -> str:
+        """The map the game has loaded ("map_village", "map01"...; "" in the menus)."""
+        return bytes(self.mm[MAP_AT:MAP_AT + 16]).split(bytes(1))[0].decode("latin-1")
+
+    def mute_game_music(self, on: bool) -> None:
+        put_u32(self.mm, BGM_AT + 8, 1 if on else 0)
 
     def nameplate(self) -> tuple[float, float] | None:
         """Where your head is in the picture (-1..1, y up), or None when it can't be seen."""

@@ -6,6 +6,7 @@
 #     "pillow>=10",
 #     "numpy>=1.26",
 #     "sounddevice>=0.4",
+#     "pycaw>=20240210",
 # ]
 # ///
 """FFXI's combat for Monster Hunter Tri (Wii): the native PC port, or Dolphin.
@@ -198,6 +199,16 @@ def start_hotkeys(cfg: dict, actions: queue.Queue):
 MENU_ROWS = 10           # a menu list shows this many entries, and scrolls
 
 
+# FFXI's music for each place (music_tracks in config.toml: the numbers of sound/win/music/data/musicNNN.bgw)
+MUSIC_TRACKS = {"village": 112,       # Selbina, a fishing town's
+                "town": 110,          # The Grand Duchy of Jeuno
+                "field": 109,         # Ronfaure
+                "battle": 101,        # Battle Theme
+                "tough_battle": 125}  # Tough Battle
+# Monster Hunter's large monsters, by their number (em001...): the tough battle's
+LARGE_MONSTERS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 14, 15, 16, 18, 19, 20, 24, 25}
+
+
 class App:
     def __init__(self, engine: Engine, mem, cfg: dict, save_path: Path | None = None):
         self.e, self.mem, self.cfg = engine, mem, cfg
@@ -215,6 +226,10 @@ class App:
         self.sounds = None             # FFXI's sounds (ffxi_sound.Player), in the game's interface
         self.character = None          # FFXI's character in the game (port_model.PortModel)
         self.port_target = None        # the port's target (port_bridge.target): its arrow, lock, model
+        self.music_now = "unset"       # FFXI's piece playing (None: the game's own), and when to leave battle
+        self.engaged_until = 0.0
+        self._hits_seen = None
+        self._hp_seen = None
         import mh3_text
         self.monster_names = mh3_text.monster_names(cfg.get("mh3_extract"))   # em027: "Aptonoth"
 
@@ -259,6 +274,7 @@ class App:
         self.monster_hp = writes.get("monster_hp", m)
         self.player_hp = writes.get("player_hp", p)
         self._play_events()
+        self._music(now, p)
         if self.e.dirty and now - self._saved_at > 5:
             self.save()
         if self.rec:
@@ -290,6 +306,43 @@ class App:
             elif kind == "level_down":
                 self.sounds.play_effect(FS.LEVEL_DOWN)
 
+    def _music(self, now: float, player_hp) -> None:
+        """FFXI's music in place of Monster Hunter's: the village's, the field's, or, engaged (the weapon
+        out with a monster near, or blows traded in the last 6 seconds), battle music, tougher for a large
+        monster; in the menus the game's own."""
+        if not self.sounds or self.cfg.get("music", True) is False or not hasattr(self.mem, "map_name"):
+            return
+        tracks = {**MUSIC_TRACKS, **self.cfg.get("music_tracks", {})}
+        where = self.mem.map_name()
+        hits = self.mem.objects().get("monster_hits") if hasattr(self.mem, "objects") else None
+        if hits != self._hits_seen and self._hits_seen is not None:
+            self.engaged_until = now + 6
+        self._hits_seen = hits
+        if player_hp is not None and self._hp_seen is not None and player_hp < self._hp_seen:
+            self.engaged_until = now + 6
+        self._hp_seen = player_hp
+        t = self.port_target
+        if t and t["dist"] < 1500 and self.character and self.character.battle():
+            self.engaged_until = now + 6
+        town = any(w in where for w in ("village", "town", "lobby"))
+        if not where:
+            want = None
+        elif now < self.engaged_until and not town:
+            import mh3_text
+            big = t and (mh3_text.model_number(t["name"]) or 0) in LARGE_MONSTERS
+            want = tracks["tough_battle" if big else "battle"]
+        elif town:
+            want = tracks["town" if "town" in where or "lobby" in where else "village"]
+        else:
+            want = tracks["field"]
+        if want != self.music_now:
+            self.music_now = want
+            self.sounds.play_music(want)
+            name = next((k for k, v in tracks.items() if v == want), "")
+            piece = f"{want} ({name})" if want is not None else "the game's own"
+            print(f"FFXI music: {piece} in {where or 'the menus'}")
+        self.mem.mute_game_music(want is not None)
+
     def _start_sounds(self):
         """FFXI's sounds from your own installation (sounds in config.toml), the known spells' made
         ready ahead."""
@@ -298,8 +351,11 @@ class App:
         try:
             import ffxi_model as FM
             import ffxi_sound as FS
-            player = FS.Player(FM.ffxi_root(self.cfg.get("ffxi_path")), float(self.cfg.get("sound_volume", 0.7)))
+            player = FS.Player(FM.ffxi_root(self.cfg.get("ffxi_path")), float(self.cfg.get("sound_volume", 0.7)),
+                               float(self.cfg.get("music_volume", 1.0)))
             player.prepare(D.SPELL_ANIMATION[n] for n in self.e.known_spells() if n in D.SPELL_ANIMATION)
+            if self.cfg.get("music", True) is not False:            # decoded ahead, so a change doesn't wait
+                player.prepare_music({**MUSIC_TRACKS, **self.cfg.get("music_tracks", {})}.values())
             return player
         except (Exception, SystemExit) as ex:                      # the layer runs without them
             print(f"[FFXI sounds unavailable: {ex}]")

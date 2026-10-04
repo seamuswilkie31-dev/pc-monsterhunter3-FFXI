@@ -15,3 +15,5 @@ SetPerspective__Q34nw4r3g3d6CameraFffff   # the 3D camera, for the FFXI nameplat
 mh3_ScnMdlCalcWorldMtx    # a scene model's world matrix: the hunter's, for FFXI's character (and hiding it)
 SetPosition__Q34nw4r3g3d6CameraFRCQ34nw4r4math4VEC3   # the camera's eye: FFXI's lock-on
 SetPosture__Q34nw4r3g3d6CameraFRCQ44nw4r3g3d6Camera11PostureInfo   # where it looks: FFXI's lock-on
+PlayStream__FUlUl        # the game's music started: FFXI's in its place
+set_str_bgm_main_vol__Ff # the game's music volume: held at 0 while FFXI's plays

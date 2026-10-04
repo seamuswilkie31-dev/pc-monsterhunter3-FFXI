@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy>=1.26", "pillow>=10", "pynput>=1.7", "dolphin-memory-engine>=1.3", "sounddevice>=0.4"]
+# dependencies = ["numpy>=1.26", "pillow>=10", "pynput>=1.7", "dolphin-memory-engine>=1.3", "sounddevice>=0.4", "pycaw>=20240210"]
 # ///
 """The launcher: your FFXI's assets first, then Monster Hunter Tri with the FFXI layer.
 

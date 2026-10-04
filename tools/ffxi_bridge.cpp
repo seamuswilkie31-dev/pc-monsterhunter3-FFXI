@@ -33,10 +33,15 @@
 #include <algorithm>
 #include <unordered_map>
 
+// the recompiled RSO modules' table (the recompiler's output; wiikit's rso.cpp fills g_rso_base)
+extern const RsoModule g_rso_modules[];
+extern const size_t g_rso_nmodules;
+extern uint32_t g_rso_base[];
+
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 6;
+constexpr uint32_t kVersion = 7;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -98,8 +103,16 @@ struct Block {
     uint32_t target_model;              // port: its scene model (0: none)
     char target_name[16];               // port: its model's name ("em027")
     float target_dist;                  // port: from the hunter, in the game's units
+    // Music: what Monster Hunter's music player was last asked to play (PlayStream's stream), for the
+    // layer to play FFXI's in its place; and the layer's word that the game's own be silent (its
+    // stream music's volume, set_str_bgm_main_vol's, held at 0, given back when the layer stops).
+    uint32_t bgm_stream;                // port: the stream's number
+    uint32_t bgm_seq;                   // port: bumped with each
+    uint32_t bgm_mute;                  // layer: 1 while FFXI's music plays
+    uint32_t reserved3;
+    char map[16];                       // port: the map's code module linked now ("map_village", "map01"; "": none)
 };
-static_assert(sizeof(Block) == 976, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 1008, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -145,6 +158,66 @@ void hook_set_perspective(PPCContext& c) {
 PPCFunc orig_font_ex, orig_font, orig_item_name;
 PPCFunc orig_cockpit;
 PPCFunc orig_add_resource;
+PPCFunc orig_play_stream, orig_bgm_vol;
+std::atomic<uint32_t> g_bgm_stream{0}, g_bgm_seq{0}, g_sda{0};   // g_sda: the game's r13 (its small data)
+std::atomic<uint32_t> g_game_bgm_vol{0x3F800000};                 // the game's own music volume (a float's bits)
+
+// PlayStream(stream, ?): the game's music (and its other streams) started
+void hook_play_stream(PPCContext& c) {
+    uint32_t id = c.r[3], arg = c.r[4], lr = c.lr;
+    g_sda.store(c.r[13], std::memory_order_relaxed);
+    orig_play_stream(c);
+    g_bgm_stream.store(id, std::memory_order_relaxed);
+    g_bgm_seq.fetch_add(1, std::memory_order_relaxed);
+    rt_log("ffxi: the game plays stream %u (%u), from %08X", id, arg, lr);
+}
+
+// set_str_bgm_main_vol(float): the game's stream music volume, kept at r13 - 0x4460, read as it mixes
+constexpr uint32_t kBgmVolSda = 0x4460;
+void hook_bgm_vol(PPCContext& c) {
+    float v = (float)c.f[1];
+    uint32_t bits;
+    std::memcpy(&bits, &v, 4);
+    g_game_bgm_vol.store(bits, std::memory_order_relaxed);
+    g_sda.store(c.r[13], std::memory_order_relaxed);
+    orig_bgm_vol(c);
+}
+
+// The map: the game links one code module per map (wiikit's RSO table: "...\\map01.plf"); its name's last
+// part, without ".plf"
+void serve_map(Block* b) {
+    char out[16] = {};
+    for (size_t k = 0; k < g_rso_nmodules; ++k) {
+        if (!g_rso_base[k]) continue;
+        const char* n = g_rso_modules[k].name;
+        const char* base = n;
+        for (const char* q = n; *q; ++q)
+            if (*q == '\\' || *q == '/') base = q + 1;
+        if (std::strncmp(base, "map", 3) != 0) continue;
+        size_t len = 0;
+        while (base[len] && base[len] != '.' && len < sizeof out - 1) ++len;
+        std::memcpy(out, base, len);
+        break;
+    }
+    std::memcpy(b->map, out, sizeof out);
+}
+
+// the layer's music on or off: the game's held at 0 meanwhile, its own value given back after
+void serve_music(Block* b, bool layer_up) {
+    static bool muted = false;
+    uint32_t sda = g_sda.load(std::memory_order_relaxed);
+    b->bgm_stream = g_bgm_stream.load(std::memory_order_relaxed);
+    b->bgm_seq = g_bgm_seq.load(std::memory_order_relaxed);
+    bool mute = layer_up && b->bgm_mute;
+    if (!sda || !in_ram(sda - kBgmVolSda, 4)) return;
+    if (mute) {
+        st32(sda - kBgmVolSda, 0);
+        muted = true;
+    } else if (muted) {
+        st32(sda - kBgmVolSda, g_game_bgm_vol.load(std::memory_order_relaxed));
+        muted = false;
+    }
+}
 
 // MH3_RES_TRACE=1: every resource the game registers once a file is loaded (nwAddResource), to name
 // the one that arrives damaged when NW4R panics (ResTex::ref: Object not valid).
@@ -1172,6 +1245,8 @@ void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
             b->snap_ack = b->snap_seq;
         }
         project_name(b);
+        serve_music(b, g_layer_up.load(std::memory_order_relaxed));
+        serve_map(b);
         b->player_obj = g_player.load(std::memory_order_relaxed);
         b->monster_obj = g_monster.load(std::memory_order_relaxed);
         b->monster_delta = g_delta.load(std::memory_order_relaxed);
@@ -1232,6 +1307,8 @@ void install() {
         }
     }
     orig_scn_world = ppc_hook("mh3_ScnMdlCalcWorldMtx", hook_scn_world);
+    orig_play_stream = ppc_hook("PlayStream__FUlUl", hook_play_stream);
+    orig_bgm_vol = ppc_hook("set_str_bgm_main_vol__Ff", hook_bgm_vol);
     orig_cam_position = ppc_hook("SetPosition__Q34nw4r3g3d6CameraFRCQ34nw4r4math4VEC3", hook_cam_position);
     orig_cam_posture = ppc_hook("SetPosture__Q34nw4r3g3d6CameraFRCQ44nw4r3g3d6Camera11PostureInfo", hook_cam_posture);
     if (!orig_cam_position || !orig_cam_posture) rt_log("ffxi: the camera's hooks are missing (tools/mh3-hooks.txt): no lock-on");
