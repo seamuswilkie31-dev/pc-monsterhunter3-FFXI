@@ -574,7 +574,7 @@ Animator g_anim;
 
 std::mutex g_hunter_mx;
 float g_hunter_mtx[12];                 // the hunter model's world matrix, rows
-bool g_hunter_seen = false;
+uint32_t g_hunter_stamp = 0;            // bumped as it is computed (once a frame while the hunter is in a scene)
 std::atomic<bool> g_hide_hunter{false};
 PPCFunc orig_scn_world;
 
@@ -621,7 +621,7 @@ void hook_scn_world(PPCContext& c) {
     if (at_hunter(obj + 0x48, 0x10, pl)) {                   // the body, the weapons: their place is the hunter's
         std::lock_guard<std::mutex> lk(g_hunter_mx);
         for (int i = 0; i < 12; ++i) g_hunter_mtx[i] = f32(obj + 0x3C + 4 * i);
-        g_hunter_seen = true;
+        ++g_hunter_stamp;
     } else if (!owned_by_hunter(obj, pl)) {
         return;                                              // not the hunter
     }
@@ -642,13 +642,24 @@ void mul34(const float* a, const float* b, float* out) {
             out[r * 4 + c] = a[r * 4] * b[c] + a[r * 4 + 1] * b[4 + c] + a[r * 4 + 2] * b[8 + c] + (c == 3 ? a[r * 4 + 3] : 0.0f);
 }
 
-void serve_model(ModelBlock* mb) {
-    static uint32_t shown = 0, alive = 0;
+// Each frame as the game finishes it (video_set_frame_hook, on the game's thread, before its XFB copy is
+// recorded): the hunter's place and the camera are then what this frame showed, and the model is posed
+// and recorded with the frame's own draws, so it keeps step with the scene however far behind the game
+// the renderer runs. Shown only if the hunter's model was placed since the last frame (in a scene, not
+// a loading screen or a fade between areas).
+ModelBlock* g_model_block = nullptr;
+
+void model_frame() {
+    ModelBlock* mb = g_model_block;
+    static uint32_t shown = 0, alive = 0, stamp = 0;
     static bool loaded = false;
-    static auto last_alive = std::chrono::steady_clock::time_point{}, last_step = std::chrono::steady_clock::now();
+    static auto last_alive = std::chrono::steady_clock::time_point{}, last_frame = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
-    float dt = std::clamp(std::chrono::duration<float>(now - last_step).count(), 0.0f, 0.1f);
-    last_step = now;
+    // the time in whole fields of the 60 Hz picture (a frame of the game is two at 30 a second): steady,
+    // where the clock's own reading wavers by a few milliseconds
+    float fields = std::round(std::chrono::duration<float>(now - last_frame).count() * 60.0f);
+    float dt = std::clamp(fields, 1.0f, 6.0f) / 60.0f;
+    last_frame = now;
     if (mb->alive != alive) { alive = mb->alive; last_alive = now; }
     bool up = now - last_alive < std::chrono::seconds(3);
     if (mb->serial != shown) {
@@ -663,19 +674,18 @@ void serve_model(ModelBlock* mb) {
                loaded ? "" : " (not drawn: no joints or motions)");
     }
     g_hide_hunter.store(up && loaded && (mb->flags & 2), std::memory_order_relaxed);
-    float view[12], proj[6], h[12];
-    bool have;
+    if (!loaded) return;
+    float view[12] = {}, proj[6] = {}, h[12];
+    bool fresh;
     {
         std::lock_guard<std::mutex> lk(g_hunter_mx);
-        have = g_hunter_seen;
+        fresh = g_hunter_stamp != stamp;
+        stamp = g_hunter_stamp;
         std::memcpy(h, g_hunter_mtx, sizeof h);
     }
     uint32_t pl = object(kBasePlayer), cam = follow_camera(pl);
-    bool visible = up && loaded && (mb->flags & 1) && have && cam && pl;
-    if (loaded) {
-        g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
-        video_model_joints(g_anim.rows.data(), g_anim.nj);
-    }
+    bool visible = up && (mb->flags & 1) && fresh && cam && pl;
+    g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
     if (visible) {
         float v[12], hp[12];
         for (int i = 0; i < 12; ++i) v[i] = f32(cam + 4 * i);
@@ -690,13 +700,12 @@ void serve_model(ModelBlock* mb) {
                    view[3], view[7], view[11], proj[0], proj[1], proj[2], proj[3], proj[4], proj[5]);
         }
     }
-    video_model_pose(view, proj, visible);
+    video_model_frame(view, proj, visible, g_anim.rows.data(), g_anim.nj);
 }
 
 void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
     for (;;) {
         if (o) serve_overlay(o);
-        if (mb) serve_model(mb);
         for (int i = 0; i < kWatches; ++i) {
             Watch w;
             std::memcpy(&w, (const void*)&b->watch[i], sizeof w);
@@ -783,6 +792,8 @@ void install() {
         }
     }
     orig_scn_world = ppc_hook("mh3_ScnMdlCalcWorldMtx", hook_scn_world);
+    g_model_block = mb;
+    if (mb) video_set_frame_hook(model_frame);
     std::thread(serve, b, o, mb).detach();
 }
 
