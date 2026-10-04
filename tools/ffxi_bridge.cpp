@@ -29,6 +29,8 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <algorithm>
+#include <unordered_map>
 
 namespace {
 
@@ -422,61 +424,46 @@ struct ModelBlock {
 static_assert(sizeof(ModelBlock) == 8994368, "ffxi/port_model.py mirrors this layout");
 
 std::mutex g_hunter_mx;
-float g_hunter_mtx[12];                 // the hunter model's world matrix (MHchar::move2's), rows
+float g_hunter_mtx[12];                 // the hunter model's world matrix, rows
 bool g_hunter_seen = false;
 std::atomic<bool> g_hide_hunter{false};
-PPCFunc orig_char_move2;
-constexpr uint32_t kGetJointNum = 0x800E0C44;            // MHchar::get_joint_num()
+PPCFunc orig_scn_world;
 
-// The hunter's model hidden: every node's visibility byte (nw4r ScnMdl: its CopiedVisAccess buffer at
-// +0x148, its "changed" flag +0x13C bit 0, as MHchar::setVisibility writes them) to 0, the game's own
-// values kept to be put back.
-void hide_hunter(PPCContext& c, uint32_t chr, bool hide) {
-    static uint32_t hidden_chr = 0;
-    static std::vector<uint8_t> saved;
-    uint32_t mdl = in_ram(chr + 0x118, 4) ? ld32(chr + 0x118) : 0;
-    uint32_t vis = mdl && in_ram(mdl + 0x148, 4) ? ld32(mdl + 0x148) : 0;
-    if (hidden_chr && (!hide || hidden_chr != chr)) {          // put the game's own values back
-        uint32_t m = ld32(hidden_chr + 0x118), v = m ? ld32(m + 0x148) : 0;
-        if (v && in_ram(v, (uint32_t)saved.size())) {
-            for (size_t i = 0; i < saved.size(); ++i) st8(v + (uint32_t)i, saved[i]);
-            st32(m + 0x13C, ld32(m + 0x13C) | 1);
-        }
-        hidden_chr = 0;
-    }
-    if (!hide || !vis) return;
-    if (hidden_chr != chr) {
-        PPCContext t = c;                                     // the game's own count of its nodes
-        t.r[3] = chr;
-        if (PPCFunc f = ppc_lookup(kGetJointNum)) f(t);
-        uint32_t n = t.r[3];
-        if (n == 0 || n > 512 || !in_ram(vis, n)) return;
-        saved.resize(n);
-        for (uint32_t i = 0; i < n; ++i) saved[i] = ld8(vis + i);
-        hidden_chr = chr;
-    }
-    bool changed = false;
-    for (uint32_t i = 0; i < saved.size(); ++i)
-        if (ld8(vis + i)) { st8(vis + i, 0); changed = true; }
-    if (changed) st32(mdl + 0x13C, ld32(mdl + 0x13C) | 1);
-}
+// The hunter's model is a few NW4R scene models standing where the hunter object stands (its body, its
+// armour's pieces). Each computes its world matrix in ScnMdl::CalcWorldMtx (vtable slot 12: the
+// parent's, its local +0xC, the extra +0xDC, into +0x3C). Right after, one at the hunter gives FFXI's
+// character its place and facing, and is hidden by its draw flags (ScnObj +0xCC, mScnObjFlags:
+// 0x20 no opaque draw, 0x40 no translucent draw, as ScnObj::SetScnObjOption sets them), its skeleton
+// still computed: weapons and hits as they were.
+constexpr uint32_t kNoDraw = 0x20 | 0x40;
+std::vector<std::pair<uint32_t, uint32_t>> g_hidden;   // scene models we hid, with their vtables (guest thread only)
 
-// MHchar::move2(MTX34*, u16): a character's world matrix, every frame. The hunter's is the one where the
-// hunter object stands.
-void hook_char_move2(PPCContext& c) {
-    uint32_t chr = c.r[3], mtx = c.r[4];
-    orig_char_move2(c);
+void hook_scn_world(PPCContext& c) {
+    uint32_t obj = c.r[3];
+    orig_scn_world(c);
     uint32_t pl = object(kBasePlayer);
-    if (!pl || !in_ram(mtx, 48)) return;
-    float tx = f32(mtx + 12), ty = f32(mtx + 28), tz = f32(mtx + 44);
-    float dx = tx - f32(pl + 0x3C), dy = ty - f32(pl + 0x40), dz = tz - f32(pl + 0x44);
+    bool hide = g_hide_hunter.load(std::memory_order_relaxed);
+    if (!hide && !g_hidden.empty()) {                         // shown again: our bits off
+        for (auto [o, vt] : g_hidden)                        // still that object (not memory reused)
+            if (in_ram(o, 0xD0) && ld32(o) == vt) st32(o + 0xCC, ld32(o + 0xCC) & ~kNoDraw);
+        g_hidden.clear();
+    }
+    if (!pl || !in_ram(obj + 0x3C, 48)) return;
+    float dx = f32(obj + 0x48) - f32(pl + 0x3C), dy = f32(obj + 0x58) - f32(pl + 0x40), dz = f32(obj + 0x68) - f32(pl + 0x44);
     if (dx * dx + dy * dy + dz * dz > 4.0f) return;          // not the hunter
     {
         std::lock_guard<std::mutex> lk(g_hunter_mx);
-        for (int i = 0; i < 12; ++i) g_hunter_mtx[i] = f32(mtx + 4 * i);
+        for (int i = 0; i < 12; ++i) g_hunter_mtx[i] = f32(obj + 0x3C + 4 * i);
         g_hunter_seen = true;
     }
-    hide_hunter(c, chr, g_hide_hunter.load(std::memory_order_relaxed));
+    if (hide && in_ram(obj + 0xCC, 4) && (ld32(obj + 0xCC) & kNoDraw) != kNoDraw) {
+        st32(obj + 0xCC, ld32(obj + 0xCC) | kNoDraw);
+        if (std::none_of(g_hidden.begin(), g_hidden.end(), [&](auto& h) { return h.first == obj; })) {
+            if (g_hidden.size() >= 64) g_hidden.erase(g_hidden.begin());
+            g_hidden.emplace_back(obj, ld32(obj));
+            if (g_hidden.size() <= 8) rt_log("ffxi: a piece of the hunter's model hidden: scene model %08X", obj);
+        }
+    }
 }
 
 void serve_model(ModelBlock* mb) {
@@ -512,6 +499,12 @@ void serve_model(ModelBlock* mb) {
                                     + (col == 3 ? v[r * 4 + 3] : 0.0f);
         const int pi[6] = {0, 2, 5, 6, 10, 11};               // GX's six: P00 P02 P11 P12 P22 P23
         for (int i = 0; i < 6; ++i) proj[i] = f32(cam + 0x30 + 4 * pi[i]);
+        static bool told = false;
+        if (!told) {
+            told = true;
+            rt_log("ffxi: the character's origin in the camera's space: %.1f %.1f %.1f; projection %g %g %g %g %g %g",
+                   view[3], view[7], view[11], proj[0], proj[1], proj[2], proj[3], proj[4], proj[5]);
+        }
     }
     video_model_pose(view, proj, visible);
 }
@@ -605,7 +598,7 @@ void install() {
             mb->magic = kModelMagic;
         }
     }
-    orig_char_move2 = ppc_hook("move2__6MHcharFPQ34nw4r4math5MTX34Us", hook_char_move2);
+    orig_scn_world = ppc_hook("mh3_ScnMdlCalcWorldMtx", hook_scn_world);
     std::thread(serve, b, o, mb).detach();
 }
 
