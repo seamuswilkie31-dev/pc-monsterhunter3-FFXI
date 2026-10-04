@@ -226,6 +226,8 @@ class App:
         self.sounds = None             # FFXI's sounds (ffxi_sound.Player), in the game's interface
         self.character = None          # FFXI's character in the game (port_model.PortModel)
         self.port_target = None        # the port's target (port_bridge.target): its arrow, lock, model
+        self.mh_weapon = cfg.get("weapon", "sword_and_shield")   # Monster Hunter's weapon: FFXI's like is held
+        self._rebuilding = False
         self.music_now = "unset"       # FFXI's piece playing (None: the game's own), and when to leave battle
         self.engaged_until = 0.0
         self._hits_seen = None
@@ -275,6 +277,7 @@ class App:
         self.player_hp = writes.get("player_hp", p)
         self._play_events()
         self._music(now, p)
+        self._weapon_watch()
         if self.e.dirty and now - self._saved_at > 5:
             self.save()
         if self.rec:
@@ -610,6 +613,31 @@ class App:
             lines = [(t, k, at) for t, k, at in lines if now - at < fade]
         return tuple((t, k) for t, k, _ in lines)
 
+    def _weapon_watch(self) -> None:
+        """Monster Hunter's weapon, from its hunter's motion's name (w03_*: the lance): when it changes,
+        the character is built again holding FFXI's like of it, on a thread of its own."""
+        import threading
+        import ffxi_model as FM
+        if not self.character or not self.cfg.get("character_race"):
+            return
+        m = self.character.motion()
+        if not (len(m) > 3 and m[0] == "w" and m[1:3].isdigit()):
+            return
+        kind = FM.MH_WEAPONS.get(int(m[1:3]))
+        if not kind or kind == self.mh_weapon or self._rebuilding:
+            return
+        self.mh_weapon = kind
+        self._rebuilding = True
+
+        def rebuild():
+            try:
+                pm = self._send_character()
+                if pm:
+                    self.character = pm
+            finally:
+                self._rebuilding = False
+        threading.Thread(target=rebuild, daemon=True).start()
+
     def _send_character(self):
         """FFXI's character in your hunter's place, read from your own FFXI installation and handed to the
         port, which draws it where the hunter stands: a player character (character_race and
@@ -625,9 +653,11 @@ class App:
             mirror = self.cfg.get("character_mirror", True)
             if race:
                 look = {**FM.DEFAULT_LOOK, **self.cfg.get("character_look", {})}
-                model = FM.load_character(root, race, look, self.cfg.get("character_weapon", "sword"))
+                look, style = FM.look_for_weapon(root, race, look, self.mh_weapon)
+                model = FM.load_character(root, race, look, style)
                 packed = FM.pack(model, yaw=yaw, mirror=mirror, scale=height / FM.HUME_MALE_HEIGHT)
-                what = f"{FM.RACES[race]['label']} " + " ".join(f"{k} {v}" for k, v in look.items())
+                what = (f"{FM.RACES[race]['label']} " + " ".join(f"{k} {v}" for k, v in look.items())
+                        + f", holding a {FM.STYLES.get(style, '?')} for Monster Hunter's {self.mh_weapon.replace('_', ' ')}")
             else:
                 model = FM.load(root / dat)
                 packed = FM.pack(model, height, yaw, mirror)

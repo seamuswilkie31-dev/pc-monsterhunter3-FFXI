@@ -13,7 +13,6 @@ window_theme = 1         # FFXI's window type: 1 classic navy, 2 silver, 3 dark 
 # tarutaru_male, tarutaru_female, mithra, galka; its look: each slot's model number ("" for no character).
 character_race = "hume_male"
 character_look = { face = 0, head = 0, body = 38, hands = 38, legs = 38, feet = 38, main = 4, sub = 24 }
-character_weapon = "sword"   # its battle motions: sword
 character_model = "ROM/3/6.DAT"   # with character_race "": a model file instead (an NPC)
 character_height = 175   # a male Hume's height in the game's units; the other races to scale
 character_yaw = 0        # degrees, if it faces the wrong way

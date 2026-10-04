@@ -450,42 +450,114 @@ def _gear(face, head, body, hands, legs, feet, main, sub):
             "main": main, "sub": sub}
 
 
-# weapons: per kind, (its battle motions, their hands, the letter of its drawing and sheathing: in?/ot?)
+# battle: the race's battle motions, (the first's file number as the client writes it, folder * 1000 + file;
+# how many; the client's tables, as the community's viewers give them), each file's waist part that + how
+# many. Which is a weapon's: the one drawing it as its style does (battle_files)
 RACES = {
-    "hume_male": {"label": "Hume (male)", "skeleton": "ROM/27/82.DAT",
+    "hume_male": {"battle": (32013, 9), "label": "Hume (male)", "skeleton": "ROM/27/82.DAT",
                   "motions": ["ROM/27/82.DAT", "ROM/27/83.DAT", "ROM/27/85.DAT"],
-                  "weapons": {"sword": ("ROM/32/16.DAT", "ROM/32/25.DAT", "c")},
                   "gear": _gear(7080, 7112, 7368, 7624, 7880, 8136, 8392, 41199), "faces": 16},
-    "hume_female": {"label": "Hume (female)", "skeleton": "ROM/32/58.DAT",
+    "hume_female": {"battle": (36117, 8), "label": "Hume (female)", "skeleton": "ROM/32/58.DAT",
                     "motions": ["ROM/32/58.DAT", "ROM/32/59.DAT", "ROM/32/61.DAT"],
-                    "weapons": {"sword": ("ROM/36/119.DAT", "ROM/36/127.DAT", "c")},
                     "gear": _gear(10256, 10288, 10544, 10800, 11056, 11312, 11568, 42479), "faces": 16},
-    "elvaan_male": {"label": "Elvaan (male)", "skeleton": "ROM/37/31.DAT",
+    "elvaan_male": {"battle": (41084, 10), "label": "Elvaan (male)", "skeleton": "ROM/37/31.DAT",
                     "motions": ["ROM/37/31.DAT", "ROM/37/32.DAT", "ROM/37/34.DAT"],
-                    "weapons": {"sword": ("ROM/41/85.DAT", "ROM/41/95.DAT", "c")},
                     "gear": _gear(13432, 13464, 13720, 13976, 14232, 14488, 14744, 43759), "faces": 16},
-    "elvaan_female": {"label": "Elvaan (female)", "skeleton": "ROM/42/4.DAT",
+    "elvaan_female": {"battle": (46057, 6), "label": "Elvaan (female)", "skeleton": "ROM/42/4.DAT",
                       "motions": ["ROM/42/4.DAT", "ROM/42/5.DAT", "ROM/42/7.DAT"],
-                      "weapons": {"sword": ("ROM/46/59.DAT", "ROM/46/65.DAT", "c")},
                       "gear": _gear(16608, 16640, 16896, 17152, 17408, 17664, 17920, 45039), "faces": 16},
-    "tarutaru_male": {"label": "Tarutaru (male)", "skeleton": "ROM/46/93.DAT",
+    "tarutaru_male": {"battle": (51019, 6), "label": "Tarutaru (male)", "skeleton": "ROM/46/93.DAT",
                       "motions": ["ROM/46/93.DAT", "ROM/46/94.DAT", "ROM/46/96.DAT"],
-                      "weapons": {"sword": ("ROM/51/20.DAT", "ROM/51/26.DAT", "c")},
                       "gear": _gear(19784, 19816, 20072, 20328, 20584, 20840, 21096, 46319), "faces": 16},
-    "tarutaru_female": {"label": "Tarutaru (female)", "skeleton": "ROM/46/93.DAT",
+    "tarutaru_female": {"battle": (51019, 6), "label": "Tarutaru (female)", "skeleton": "ROM/46/93.DAT",
                         "motions": ["ROM/46/93.DAT", "ROM/46/94.DAT", "ROM/46/96.DAT"],
-                        "weapons": {"sword": ("ROM/51/20.DAT", "ROM/51/26.DAT", "c")},
                         "gear": _gear(22952, 19816, 20072, 20328, 20584, 20840, 21096, 46319), "faces": 16},
-    "mithra": {"label": "Mithra", "skeleton": "ROM/51/89.DAT",
+    "mithra": {"battle": (56014, 9), "label": "Mithra", "skeleton": "ROM/51/89.DAT",
                "motions": ["ROM/51/89.DAT", "ROM/51/90.DAT", "ROM/51/92.DAT"],
-               "weapons": {"sword": ("ROM/56/16.DAT", "ROM/56/25.DAT", "c")},
                "gear": _gear(23184, 23216, 23472, 23728, 23984, 24240, 24496, 47599), "faces": 16},
-    "galka": {"label": "Galka", "skeleton": "ROM/56/59.DAT",
+    "galka": {"battle": (60112, 8), "label": "Galka", "skeleton": "ROM/56/59.DAT",
               "motions": ["ROM/56/59.DAT", "ROM/56/60.DAT", "ROM/56/62.DAT"],
-              "weapons": {"sword": ("ROM/60/113.DAT", "ROM/60/121.DAT", "c")},
               "gear": _gear(26360, 26392, 26648, 26904, 27160, 27416, 27672, 48879), "faces": 16},
 }
 SLOTS = ("face", "head", "body", "hands", "legs", "feet", "main", "sub")
+# a weapon's style (its info chunk, 0x45, the byte at +3): the battle motions it's held with
+STYLES = {0: "club / staff", 1: "sword", 2: "hand-to-hand", 3: "dagger", 4: "great sword", 5: "axe / scythe",
+          6: "katana", 7: "kunai", 8: "polearm"}
+# Monster Hunter's weapons, by their motion set (w00_*...: mot_we00 ... mot_we08), as FFXI holds them: a
+# style, and a weapon and shield to show (model numbers) when the look's own isn't of that style
+MH_WEAPONS = {0: "great_sword", 1: "sword_and_shield", 2: "hammer", 3: "lance", 4: "bowgun", 5: "bowgun",
+              6: "bowgun", 7: "long_sword", 8: "switch_axe"}
+WEAPON_STYLE = {"great_sword": 4, "sword_and_shield": 1, "hammer": 5, "lance": 8, "bowgun": 0, "long_sword": 6,
+                "switch_axe": 5}
+WEAPON_LOOK = {"great_sword": (7, None), "sword_and_shield": (4, 24), "hammer": (10, None), "lance": (12, 24),
+               "bowgun": (9, None), "long_sword": (13, None), "switch_axe": (11, None)}
+
+
+def file_number_path(n: int) -> str:
+    """A file number as the client writes it (folder * 1000 + file; a file past 127 is the next folder's)."""
+    folder, f = divmod(n, 1000)
+    folder += f // 128
+    return f"ROM/{folder}/{f % 128}.DAT"
+
+
+# the letter of the motions drawing and sheathing a weapon of each style (in?, ot?): the same in every race's
+# files, though the files themselves differ (a male Hume has one per style, a Tarutaru six for them all)
+STYLE_DRAW = {0: "d", 1: "b", 2: "a", 3: "c", 4: "e", 5: "f", 6: "g", 7: "i", 8: "k"}
+
+
+def draw_letters(path: Path) -> set[str]:
+    """The letters of the drawing motions in a battle file (its motions' names only: quick)."""
+    try:
+        b = path.read_bytes()
+    except OSError:
+        return set()
+    return {nm.decode("latin-1")[2] for _at, nm, typ, _size in A.chunks(b)
+            if typ == MOTION and nm[:2] == b"in" and chr(nm[2]).isalpha()}
+
+
+def battle_files(race: str, style: int, root: Path | None = None) -> tuple[str, str] | None:
+    """The battle motions (the lower and upper body) and their waist part for a weapon of that style:
+    the race's file drawing it, the one drawing nothing else first; without root, the style's place."""
+    first, num = RACES[race]["battle"]
+    if root is None:
+        return (file_number_path(first + style), file_number_path(first + num + style)) if 0 <= style < num else None
+    want = STYLE_DRAW.get(style, "b")
+    best = None
+    for i in range(num):
+        letters = draw_letters(root / file_number_path(first + i))
+        if want in letters and (best is None or len(letters) < best[1]):
+            best = (i, len(letters))
+    if best is None:
+        return None
+    return file_number_path(first + best[0]), file_number_path(first + num + best[0])
+
+
+def weapon_style(root: Path, race: str, main: int | None, file_path=None) -> int | None:
+    """A main-hand weapon's style: its file's info chunk."""
+    import ffxi_sound as S
+    if main is None:
+        return None
+    p = (file_path or S.file_path)(root, RACES[race]["gear"]["main"] + int(main))
+    if not p or not p.exists():
+        return None
+    b = p.read_bytes()
+    for at, _nm, typ, size in A.chunks(b):
+        if typ == 0x45 and size >= 20 and b[at + 19] != 0xFF:
+            return b[at + 19]
+    return None
+
+
+def look_for_weapon(root: Path, race: str, look: dict, weapon: str) -> tuple[dict, int]:
+    """The look with a weapon held as FFXI would hold Monster Hunter's: its own main hand if that's of the
+    weapon's style, else the style's own (and a shield for a sword or a lance); and that style."""
+    style = WEAPON_STYLE.get(weapon, 1)
+    out = dict(look)
+    if battle_files(race, style, root) is None:                       # the race has no motions for it: a sword
+        weapon, style = "sword_and_shield", 1
+    if weapon_style(root, race, look.get("main")) != style:
+        main, sub = WEAPON_LOOK.get(weapon, (4, 24))
+        out["main"], out["sub"] = main, sub
+    return out, style
 # a look to start from: a Red Mage's colours (the red tabard), a rapier and a kite shield
 DEFAULT_LOOK = {"face": 0, "head": 0, "body": 38, "hands": 38, "legs": 38, "feet": 38, "main": 4, "sub": 24}
 HUME_MALE_HEIGHT = 1.80                # a male Hume, in FFXI's units: character_height is his height
@@ -494,11 +566,12 @@ CAST_MOTIONS = {"white": "mw", "black": "mb", "ninjutsu": "mn", "summoning": "ms
                 "blue": "mb", "geomancy": "mw"}
 
 
-def load_character(root: Path, race: str, look: dict, weapon: str = "sword", file_path=None,
+def load_character(root: Path, race: str, look: dict, style: int | None = None, file_path=None,
                    loader=None, motions: bool = True) -> dict:
     """A player character: the race's skeleton, its equipment's meshes and textures (look: slot ->
-    model number), and its motions as pack's clips (character_clips; motions False: none). loader:
-    load, or one that keeps what it read (character.py's previews)."""
+    model number), and its motions as pack's clips (character_clips; motions False: none), its battle
+    motions those of a weapon of that style (None: its main hand's). loader: load, or one that keeps
+    what it read (character.py's previews)."""
     import ffxi_sound as S
     file_path = file_path or S.file_path
     load_ = loader or load
@@ -519,9 +592,13 @@ def load_character(root: Path, race: str, look: dict, weapon: str = "sword", fil
     if not motions:
         return model
     own = [load_(root / f)["motions"] for f in r["motions"]]
-    w = r["weapons"].get(weapon)
-    arms = [load_(root / f)["motions"] for f in w[:2]] if w else []
-    model["clips"] = character_clips(own, arms, w[2] if w else "")
+    if style is None:
+        style = weapon_style(root, race, look.get("main"), file_path)
+    files = battle_files(race, style if style is not None else 1, root) or battle_files(race, 1, root)
+    arms = [load_(root / f)["motions"] for f in files] if files else []
+    draws = sorted({m["name"][2] for m in (arms[0] if arms else []) if m["name"][:2] == "in" and m["name"][2].isalpha()})
+    model["clips"] = character_clips(own, arms, draws[0] if draws else "")
+    model["style"] = style
     return model
 
 
