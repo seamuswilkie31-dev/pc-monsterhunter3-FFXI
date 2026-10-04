@@ -214,6 +214,9 @@ class App:
         self._rec_t0 = time.monotonic()
         self.sounds = None             # FFXI's sounds (ffxi_sound.Player), in the game's interface
         self.character = None          # FFXI's character in the game (port_model.PortModel)
+        self.port_target = None        # the port's target (port_bridge.target): its arrow, lock, model
+        import mh3_text
+        self.monster_names = mh3_text.monster_names(cfg.get("mh3_extract"))   # em027: "Aptonoth"
 
     # --- every frame ---
     def step(self):
@@ -233,6 +236,12 @@ class App:
             self.monster_max = mm
         else:
             self.monster_max = max(self.monster_max, m)
+        self.port_target = self.mem.target() if hasattr(self.mem, "target") else None
+        if self.port_target:                                       # the target's own name, as the game has it
+            import mh3_text
+            name = self.monster_names.get(mh3_text.model_number(self.port_target["name"]) or -1)
+            if name:
+                self.e.target = name
         mid = None
         if m is not None:
             mid = self.mem.objects()["monster"] if hasattr(self.mem, "objects") else 1
@@ -515,6 +524,8 @@ class App:
         if self.monster_hp is not None and self.monster_max:
             target = max(0.0, min(1.0, self.monster_hp / self.monster_max))
             check = e._mob_label()
+        elif self.port_target:                                     # targeted, not yet hit: as FFXI, unhurt
+            target = 1.0
         return U.UiState(
             name=e.me, job=e.job_label(), hp=self.player_hp, max_hp=e.player_max_hp,
             mp=int(e.mp), max_mp=e.max_mp, tp=int(e.tp), exp=e.exp_now, tnl=e.tnl,
@@ -528,7 +539,7 @@ class App:
 
     def _target_arrow(self, now: float) -> dict:
         """FFXI's arrow above the port's target (the nearest monster, or the one locked on), bobbing."""
-        t = self.mem.target() if hasattr(self.mem, "target") and self.cfg.get("target_arrow", True) else None
+        t = self.port_target if self.cfg.get("target_arrow", True) else None
         if not t or not t["arrow"]:
             return {"target_locked": bool(t and t["locked"])}
         bob = round((now * 1.2) % 1.0, 2)                       # a little over a second up and down
