@@ -429,14 +429,34 @@ bool g_hunter_seen = false;
 std::atomic<bool> g_hide_hunter{false};
 PPCFunc orig_scn_world;
 
-// The hunter's model is a few NW4R scene models standing where the hunter object stands (its body, its
-// armour's pieces). Each computes its world matrix in ScnMdl::CalcWorldMtx (vtable slot 12: the
+// The hunter's model is a few NW4R scene models: its body and weapons standing where the hunter object
+// stands, its armour's pieces (owned_by_hunter). Each computes its world matrix in ScnMdl::CalcWorldMtx (vtable slot 12: the
 // parent's, its local +0xC, the extra +0xDC, into +0x3C). Right after, one at the hunter gives FFXI's
 // character its place and facing, and is hidden by its draw flags (ScnObj +0xCC, mScnObjFlags:
 // 0x20 no opaque draw, 0x40 no translucent draw, as ScnObj::SetScnObjOption sets them), its skeleton
 // still computed: weapons and hits as they were.
 constexpr uint32_t kNoDraw = 0x20 | 0x40;
 std::vector<std::pair<uint32_t, uint32_t>> g_hidden;   // scene models we hid, with their vtables (guest thread only)
+
+// x, y, z at a (each `stride` apart) within 2 units of the hunter object's position
+bool at_hunter(uint32_t a, uint32_t stride, uint32_t pl) {
+    if (!in_ram(a, 2 * stride + 4)) return false;
+    float dx = f32(a) - f32(pl + 0x3C), dy = f32(a + stride) - f32(pl + 0x40), dz = f32(a + 2 * stride) - f32(pl + 0x44);
+    return dx * dx + dy * dy + dz * dz <= 4.0f;
+}
+
+// The armour's pieces stand at the world's origin, posed through the body's skeleton by their callback
+// (ScnMdl +0x11C: the game's record of the piece). That record names the model the piece belongs to
+// (+8 for armour, +4 for a weapon), whose position is at its +4: a piece of the model standing where
+// the hunter stands is the hunter's.
+bool owned_by_hunter(uint32_t obj, uint32_t pl) {
+    if (!in_ram(obj + 0x11C, 4)) return false;
+    uint32_t cb = ld32(obj + 0x11C);
+    if (!in_ram(cb, 12)) return false;
+    for (uint32_t k : {4u, 8u})
+        if (at_hunter(ld32(cb + k) + 4, 4, pl)) return true;
+    return false;
+}
 
 void hook_scn_world(PPCContext& c) {
     uint32_t obj = c.r[3];
@@ -449,12 +469,12 @@ void hook_scn_world(PPCContext& c) {
         g_hidden.clear();
     }
     if (!pl || !in_ram(obj + 0x3C, 48)) return;
-    float dx = f32(obj + 0x48) - f32(pl + 0x3C), dy = f32(obj + 0x58) - f32(pl + 0x40), dz = f32(obj + 0x68) - f32(pl + 0x44);
-    if (dx * dx + dy * dy + dz * dz > 4.0f) return;          // not the hunter
-    {
+    if (at_hunter(obj + 0x48, 0x10, pl)) {                   // the body, the weapons: their place is the hunter's
         std::lock_guard<std::mutex> lk(g_hunter_mx);
         for (int i = 0; i < 12; ++i) g_hunter_mtx[i] = f32(obj + 0x3C + 4 * i);
         g_hunter_seen = true;
+    } else if (!owned_by_hunter(obj, pl)) {
+        return;                                              // not the hunter
     }
     if (hide && in_ram(obj + 0xCC, 4) && (ld32(obj + 0xCC) & kNoDraw) != kNoDraw) {
         st32(obj + 0xCC, ld32(obj + 0xCC) | kNoDraw);

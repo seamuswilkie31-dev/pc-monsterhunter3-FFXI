@@ -359,9 +359,21 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
     px, pz = p[..., 0].copy(), p[..., 2].copy()
     p[..., 0], p[..., 2] = c * px + s_ * pz, -s_ * px + c * pz
     verts = np.concatenate([p, uv, lay[..., None]], -1).reshape(-1, 6).astype(np.float32)
-    layers = np.stack([np.array(Image.fromarray(model["textures"][n], "RGBA").resize((size, size), Image.LANCZOS))
+    layers = np.stack([np.array(Image.fromarray(ps2_alpha(model["textures"][n]), "RGBA").resize((size, size), Image.LANCZOS))
                        for n in names]) if names else np.zeros((1, size, size, 4), np.uint8)
     return verts, layers
+
+
+def ps2_alpha(img: np.ndarray) -> np.ndarray:
+    """FFXI keeps the PlayStation 2's alpha, 0x80 opaque: a texture whose alpha stays in that range
+    (DXT's rounding a little over it) is put on the usual scale, 0xFF opaque. Read as it is, half
+    its pixels fall under the renderer's cut-out and the cloth shows a lattice of holes."""
+    a = img[..., 3]
+    if a.max() > 0x90:
+        return img
+    out = img.copy()
+    out[..., 3] = np.minimum(a.astype(np.int32) * 2, 255).astype(np.uint8)
+    return out
 
 
 # ================================================================================================
