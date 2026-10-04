@@ -317,7 +317,7 @@ class Engine:
         if p is not None and p > 0 and self.effect("regen"):
             p = min(self.player_max_hp, p + int(self.effect("regen")))
         if self.max_mp:
-            self.mp = min(self.max_mp, self.mp + 1 + self.effect("refresh"))     # 1: MP comes back slowly
+            self.mp = min(self.max_mp, self.mp + max(1, self.max_mp // 100) + self.effect("refresh"))  # MP comes back slowly
         if self.effect("regain"):
             self.tp = min(D.TP_MAX, self.tp + self.effect("regain"))
         if m is not None and m > self._floor():
@@ -798,12 +798,12 @@ def selftest() -> int:
     e = Engine("SMN", "hammer", levels={"SMN": 30}, rng=rng)
     e.tick(0, 3000, 150, 150, 1, 3000)
     e.use("Ifrit", 0, 3000, 150)
-    e.tick(1.5, 3000, 150, 150, 1, 3000)
+    e.tick(D.SPELLS["Ifrit"]["cast"] + 0.1, 3000, 150, 150, 1, 3000)
     check(e.pet and e.pet["name"] == "Ifrit", "Ifrit summoned")
     mp0 = e.mp
     m = 3000
     for i in range(3):
-        m = e.tick(4 + 3 * i, m, 150, 150, 1, 3000).get("monster_hp", m)
+        m = e.tick(9 + 3 * i, m, 150, 150, 1, 3000).get("monster_hp", m)
     check(m < 3000 and e.mp < mp0 + 6, f"the avatar fights and costs MP ({m}, MP {mp0}->{e.mp})")
     w = e.use("Burning Strike", 20, m, 150)
     check(w.get("monster_hp", m) < m, "a blood pact hits")
