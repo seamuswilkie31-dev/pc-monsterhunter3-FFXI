@@ -34,6 +34,7 @@ sys.path.insert(0, str(HERE))
 import ffxi_assets as A  # noqa: E402
 
 SPELL_FILE_BASE = 2800                     # a spell's effect: file 2800 + its animation number
+LEVEL_UP, LEVEL_DOWN = "ROM/13/35.DAT", "ROM/13/34.DAT"   # the client's own effects for them ("lvup", "lvdw")
 # the filters, as fractions of 64 of the two samples before
 FILTERS = np.array([(0, 0), (60, 0), (115, -52), (98, -55), (122, -60)], np.int64)
 
@@ -206,6 +207,9 @@ class Player:
         import threading
 
         def run():
+            for rel in (LEVEL_UP, LEVEL_DOWN):
+                for n in self.effect_sounds(rel):
+                    self.sound(n)
             for a in animations:
                 for n in self.spell_sounds(a):
                     self.sound(n)
@@ -219,6 +223,21 @@ class Player:
 
     def play_spell(self, animation: int) -> None:
         for n in self.spell_sounds(animation):
+            self.play(n)
+
+    def effect_sounds(self, rel: str) -> list[int]:
+        """The sounds an effect file of the installation names (rel: ROM/.../n.DAT), found once."""
+        key = ("file", rel)
+        if key not in self.spells:
+            try:
+                self.spells[key] = effect_sounds((self.root / rel).read_bytes())
+            except Exception as e:                                     # noqa: BLE001
+                print(f"[FFXI effect {rel}: {e}]")
+                self.spells[key] = []
+        return self.spells[key]
+
+    def play_effect(self, rel: str) -> None:
+        for n in self.effect_sounds(rel):
             self.play(n)
 
     def close(self) -> None:

@@ -67,7 +67,8 @@ class Engine:
     cast_done: float = 0.0
     cast_total: float = 0.0
     recasts: dict = field(default_factory=dict)      # action -> when it is ready again
-    events: list = field(default_factory=list)       # ("cast" | "spell" | "interrupted", name): for sounds, effects
+    events: list = field(default_factory=list)       # ("cast" | "spell" | "interrupted" | "level_up" | "level_down",
+                                                     # name): for sounds, effects
     buffs: dict = field(default_factory=dict)        # (source, effect) -> {"power", "until"}
     debuffs: dict = field(default_factory=dict)      # on the monster: (source, effect) -> {"power", "until"}
     pet: dict | None = None                          # {"name", "power", "until", "upkeep"}
@@ -394,6 +395,7 @@ class Engine:
             self.exp[self.job] = self.exp_now - self.tnl
             self.levels[self.job] = self.level + 1
             self.say(f"{self.me} attains level {self.level}!", "burst")
+            self._event("level_up", self.job)
         if self.level >= D.LEVEL_CAP:
             self.exp[self.job] = 0
         self.dirty = True
@@ -411,6 +413,7 @@ class Engine:
                 self.levels[self.job] = self.level - 1
                 self.exp[self.job] = self.exp_now + self.tnl
                 self.say(f"{self.me} falls to level {self.level}.", "warn")
+                self._event("level_down", self.job)
             self.dirty = True
 
     # ================================================================================================

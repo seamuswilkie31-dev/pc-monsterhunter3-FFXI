@@ -255,14 +255,19 @@ class App:
             self._record(now, p)
 
     def _play_events(self):
-        """The engine's casts as FFXI's sounds: a spell's own, as it goes off."""
+        """The engine's events as FFXI's sounds: a spell's own as it goes off, a level gained or lost."""
         events, self.e.events[:] = list(self.e.events), []
         if not self.sounds:
             return
-        for kind, name in events:
+        import ffxi_sound as FS
+        for kind, name in dict.fromkeys(events):                    # several levels at once: one fanfare
             anim = D.SPELL_ANIMATION.get(name)
             if kind == "spell" and anim is not None:
                 self.sounds.play_spell(anim)
+            elif kind == "level_up":
+                self.sounds.play_effect(FS.LEVEL_UP)
+            elif kind == "level_down":
+                self.sounds.play_effect(FS.LEVEL_DOWN)
 
     def _start_sounds(self):
         """FFXI's sounds from your own installation (sounds in config.toml), the known spells' made
