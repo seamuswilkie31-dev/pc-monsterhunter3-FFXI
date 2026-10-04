@@ -67,6 +67,7 @@ class Engine:
     cast_done: float = 0.0
     cast_total: float = 0.0
     recasts: dict = field(default_factory=dict)      # action -> when it is ready again
+    events: list = field(default_factory=list)       # ("cast" | "spell" | "interrupted", name): for sounds, effects
     buffs: dict = field(default_factory=dict)        # (source, effect) -> {"power", "until"}
     debuffs: dict = field(default_factory=dict)      # on the monster: (source, effect) -> {"power", "until"}
     pet: dict | None = None                          # {"name", "power", "until", "upkeep"}
@@ -314,6 +315,7 @@ class Engine:
                     self._use_count("aquaveil", 1)
                 else:
                     self.say(f"{self.me}'s casting of {self.casting} is interrupted.", "warn")
+                    self._event("interrupted", self.casting)
                     self.casting = None
         return max(1, min(self.player_max_hp, prev - after))
 
@@ -469,6 +471,7 @@ class Engine:
             cast = sp["cast"] * max(0.0, 1 - self.effect("fast_cast"))
             self.casting, self.cast_total, self.cast_done = name, cast, now + cast
             self.say(f"{self.me} starts casting {name}.", "magic")
+            self._event("cast", name)
             if cast <= 0:
                 m, p = self._finish_cast(now, m, p)
         writes = {}
@@ -527,11 +530,16 @@ class Engine:
             self.last_ws_time, self.last_ws_props = now, props
         return bonus
 
+    def _event(self, kind: str, name: str) -> None:
+        self.events.append((kind, name))
+        del self.events[:-32]                                # nobody listening: the last few kept
+
     def _finish_cast(self, now: float, m, p):
         name, self.casting = self.casting, None
         sp = D.SPELLS[name]
         self.mp -= self._mp_cost(name)                       # FFXI: MP is spent when the spell goes off
         self.recasts[name] = now + sp["recast"]
+        self._event("spell", name)
         physical = any(f[0] == "damage" and f[2] == "physical" for f in sp["fx"])
         m, p = self._apply(sp["fx"], name, now, m, p, physical=physical, spell=True)
         if sp.get("props") and m is not None:                # blue magic can skillchain

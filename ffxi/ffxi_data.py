@@ -512,6 +512,41 @@ SPELLS = {
     "Indi-Slow":    _debuff("geomancy", 94, 2, 12, "slow", 0.15, 180),
 }
 
+# Each spell's effect in FFXI's own files: its animation number (LandSandBoat's spell_list, a reference),
+# the effect being file 2800 + it (ffxi_sound.py). Mostly the spell's number; not for every spell.
+SPELL_ANIMATION = {
+    "Cure": 1, "Cure II": 2, "Cure III": 3, "Cure IV": 4, "Cure V": 5, "Regen": 108, "Regen II": 139,
+    "Regen III": 140, "Protect": 43, "Protect II": 44, "Protect III": 45, "Protect IV": 46, "Shell": 48,
+    "Shell II": 49, "Haste": 57, "Blink": 53, "Stoneskin": 54, "Aquaveil": 55, "Auspice": 142, "Dia": 23,
+    "Dia II": 24, "Paralyze": 58, "Slow": 56, "Flash": 486, "Repose": 482, "Banish": 28, "Banish II": 29,
+    "Holy": 21, "Phalanx": 106, "Refresh": 109, "Enfire": 100, "Enblizzard": 101, "Enthunder": 104,
+    "Reprisal": 143, "Stone": 159, "Water": 169, "Aero": 154, "Fire": 144, "Blizzard": 149, "Thunder": 164,
+    "Stone II": 160, "Water II": 170, "Aero II": 155, "Fire II": 145, "Blizzard II": 150, "Thunder II": 165,
+    "Stone III": 161, "Water III": 171, "Aero III": 156, "Fire III": 146, "Blizzard III": 151,
+    "Thunder III": 166, "Fire IV": 147, "Blizzard IV": 152, "Thunder IV": 167, "Flare": 204, "Freeze": 206,
+    "Burst": 212, "Quake": 210, "Tornado": 208, "Flood": 214, "Drain": 245, "Drain II": 246, "Aspir": 247,
+    "Poison": 220, "Poison II": 221, "Bio": 230, "Bio II": 231, "Burn": 235, "Frost": 236, "Shock": 239,
+    "Drown": 240, "Blind": 254, "Bind": 258, "Gravity": 216, "Sleep": 253, "Sleep II": 265, "Stun": 252,
+    "Absorb-TP": 125, "Dread Spikes": 484, "Pyrohelix": 781, "Cryohelix": 786, "Ionohelix": 783,
+    "Noctohelix": 788, "Luminohelix": 787, "Valor Minuet": 393, "Valor Minuet II": 394,
+    "Valor Minuet III": 395, "Valor Minuet IV": 396, "Sword Madrigal": 398, "Blade Madrigal": 399,
+    "Advancing March": 434, "Victory March": 435, "Mage's Ballad": 385, "Mage's Ballad II": 386,
+    "Army's Paeon": 378, "Army's Paeon II": 379, "Army's Paeon III": 380, "Knight's Minne": 388,
+    "Knight's Minne II": 389, "Foe Requiem": 368, "Foe Requiem II": 369, "Foe Lullaby": 376,
+    "Battlefield Elegy": 436, "Carnage Elegy": 437, "Utsusemi: Ichi": 338, "Utsusemi: Ni": 339,
+    "Katon: Ichi": 320, "Hyoton: Ichi": 323, "Raiton: Ichi": 332, "Doton: Ichi": 329, "Huton: Ichi": 326,
+    "Suiton: Ichi": 335, "Katon: Ni": 321, "Hyoton: Ni": 324, "Raiton: Ni": 333, "Doton: Ni": 330,
+    "Huton: Ni": 327, "Suiton: Ni": 336, "Kurayami: Ichi": 347, "Hojo: Ichi": 344, "Jubaku: Ichi": 341,
+    "Dokumori: Ichi": 350, "Carbuncle": 288, "Ifrit": 288, "Shiva": 288, "Garuda": 288, "Titan": 288,
+    "Ramuh": 288, "Leviathan": 288, "Foot Kick": 639, "Sprout Smack": 653, "Power Attack": 675,
+    "Head Butt": 665, "Bludgeon": 643, "Death Scissors": 681, "Frenetic Rip": 748, "Vertical Cleave": 739,
+    "Firespit": 758, "Ice Break": 721, "Maelstrom": 690, "Pollen": 650, "Wild Carrot": 640,
+    "Magic Fruit": 708, "Cocoon": 654, "Refueling": 718, "Metallic Body": 638, "Diamondhide": 753,
+    "Feather Barrier": 731, "Sheep Song": 672, "Blank Gaze": 707, "Indi-Regen": 861, "Indi-Refresh": 863,
+    "Indi-Fury": 872, "Indi-Barrier": 873, "Indi-Acumen": 874, "Indi-Haste": 864, "Indi-Frailty": 881,
+    "Indi-Poison": 862, "Indi-Slow": 888,
+}
+
 # ================================================================================================
 # Job abilities
 # ================================================================================================

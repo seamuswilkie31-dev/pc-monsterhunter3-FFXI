@@ -363,9 +363,15 @@ bool camera_block(uint32_t a) {
     return fovy > 5 && fovy < 150 && aspect > 0.5f && aspect < 3 && n > 0 && fa > n;
 }
 
+// The array also holds cameras never set up, looking at the world's origin from their defaults: near
+// the origin one of them would be nearer the hunter than the following camera's target (170 above its
+// feet), so a camera looking at exactly 0, 0, 0 is never the one. (The serve thread and the frame hook
+// both ask.)
 uint32_t follow_camera(uint32_t pl) {
+    static std::mutex mx;
     static uint32_t chosen = 0;
     static int age = 0;
+    std::lock_guard<std::mutex> lk(mx);
     uint32_t seen = g_camera.load(std::memory_order_relaxed);
     if (!seen || !pl) return 0;
     if (chosen && camera_block(chosen) && ++age < 60) return chosen;
@@ -375,6 +381,10 @@ uint32_t follow_camera(uint32_t pl) {
     uint32_t pick = 0;
     for (uint32_t a = seen > 0x4000 ? seen - 0x4000 : seen; a < seen + 0x4000; a += 4) {
         if (!camera_block(a)) continue;
+        if (ld32(a + 0x8C) == 0 && ld32(a + 0x90) == 0 && ld32(a + 0x94) == 0) {
+            a += 0x100;                           // a default camera, never aimed
+            continue;
+        }
         float dx = f32(a + 0x8C) - hx, dy = f32(a + 0x90) - hy, dz = f32(a + 0x94) - hz;
         float d = dx * dx + dy * dy + dz * dz;
         if (std::isfinite(d) && d < best) { best = d; pick = a; }

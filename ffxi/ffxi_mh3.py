@@ -5,6 +5,7 @@
 #     "pynput>=1.7",
 #     "pillow>=10",
 #     "numpy>=1.26",
+#     "sounddevice>=0.4",
 # ]
 # ///
 """FFXI's combat for Monster Hunter Tri (Wii): the native PC port, or Dolphin.
@@ -211,6 +212,7 @@ class App:
         self.rec = None                # --record: the fight, one JSON line per event
         self._rec_hits = self._rec_log = 0
         self._rec_t0 = time.monotonic()
+        self.sounds = None             # FFXI's sounds (ffxi_sound.Player), in the game's interface
 
     # --- every frame ---
     def step(self):
@@ -246,10 +248,36 @@ class App:
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
         self.player_hp = writes.get("player_hp", p)
+        self._play_events()
         if self.e.dirty and now - self._saved_at > 5:
             self.save()
         if self.rec:
             self._record(now, p)
+
+    def _play_events(self):
+        """The engine's casts as FFXI's sounds: a spell's own, as it goes off."""
+        events, self.e.events[:] = list(self.e.events), []
+        if not self.sounds:
+            return
+        for kind, name in events:
+            anim = D.SPELL_ANIMATION.get(name)
+            if kind == "spell" and anim is not None:
+                self.sounds.play_spell(anim)
+
+    def _start_sounds(self):
+        """FFXI's sounds from your own installation (sounds in config.toml), the known spells' made
+        ready ahead."""
+        if self.cfg.get("sounds", True) is False:
+            return None
+        try:
+            import ffxi_model as FM
+            import ffxi_sound as FS
+            player = FS.Player(FM.ffxi_root(self.cfg.get("ffxi_path")), float(self.cfg.get("sound_volume", 0.7)))
+            player.prepare(D.SPELL_ANIMATION[n] for n in self.e.known_spells() if n in D.SPELL_ANIMATION)
+            return player
+        except (Exception, SystemExit) as ex:                      # the layer runs without them
+            print(f"[FFXI sounds unavailable: {ex}]")
+            return None
 
     def save(self):
         """Levels, EXP and jobs, kept between sessions."""
@@ -524,6 +552,7 @@ class App:
         from port_overlay import PortOverlay
         out, ui = PortOverlay(), U.FfxiUi(self.cfg.get("window_theme", 1), self.cfg.get("ffxi_assets", True))
         model = self._send_character()
+        self.sounds = self._start_sounds()
         start, last_draw = time.monotonic(), 0.0
         print("FFXI interface: in the game's window. Ctrl+C to stop.")
         try:
