@@ -1,6 +1,6 @@
 # FFXI layer — next session
 
-Where it stands (2026-10-04): **the FFXI interface runs in the game.** Monster Hunter's HUD is switched
+Where it stands (2026-10-04): **the FFXI interface runs in the game, with an FFXI character of any race in your hunter's place.** Monster Hunter's HUD is switched
 off (`MH3_HIDE_HUD=1`); the layer draws FFXI's classic windows into the game's own window (status, target
 with the monster's HP percent, combat log, casting bar, macro palette); the pad's **X held** opens the FFXI
 command menu (a tap of X is still the game's: sheathe, use an item) (Weapon Skills / Magic / Items: d-pad, A to choose, B back), Items passing one press to the
@@ -8,25 +8,41 @@ game's own item use. Saving works. Checked in play.
 
 Run: the port with `MH3_FFXI=1 MH3_HIDE_HUD=1`, then `uv run ffxi_mh3.py` (in-game interface by default).
 
-**FFXI's character in the hunter's place** (stages A, B and C done, 2026-10-04, checked in play): the
-layer reads `character_model` (a male Hume NPC, `ROM/3/6.DAT`) from the FFXI installation
-(`ffxi_model.py`), packs it on its skeleton (`pack`: triangle corners on one or two joints, the place in
-the hunter's space with feet at 0 and 175 tall, FFXI's PS2 alpha put on the usual scale) with its motions
-(`idl`, `wlk`, `run`: each FFXI motion is split by body region, `wlk0` legs, `wlk1` upper body, `wlk2`
-hands; each with the ground speed it was made for, measured from the sliding sole: 130 and 466 units a
-second) and hands it to the port (`port_model.py`, block `mh3-ffxi-model` version 2). The bridge's
-`Animator` plays the motion that fits the hunter's speed, paced to it, blending changes over 0.25 s, and
-chains the joints every 16 ms; wiikit skins it on the GPU (joints in uniform block 8) and draws it into
-the scene before each XFB copy (`video_model_*`), depth-tested, with the gameplay camera's view and
-projection. The bridge
-hooks `ScnMdl::CalcWorldMtx` (`mh3_ScnMdlCalcWorldMtx`): the body's world matrix places the Hume, and
-every piece of Monster Hunter's hunter gets the no-draw flags (ScnObj `+0xCC` |= 0x60). The body and
-weapons stand at the hunter; the armour's pieces stand at the origin and are found through their
-callback (ScnMdl `+0x11C`, whose `+8`, or `+4` for a weapon, is the model owner with the hunter's
-position at `+4`). Skeletons still run: hits and weapons as before.
-Next for it: **stage D**, a player character built from FFXI's equipment DATs (face, head, body, hands,
-legs, feet on the player race's skeleton), the sword and shield in hand, and attack, hit and death
-motions following what Monster Hunter's hunter is doing (its action state: to be found).
+**FFXI's character in the hunter's place** (stages A-D done, 2026-10-04, checked in play). A player
+character of any race (`character.py`, the launcher's Character... button: race, face, each slot's look by
+model number; saved as `character_race`/`character_look` in config.toml) is built as FFXI's client does
+(`ffxi_model.load_character`, `RACES`): the race's skeleton and motions (lower body, upper body, hands: a
+file each, e.g. Hume male `ROM/27/82`, `83`, `85`), each equipment slot's piece through the client's gear
+tables (look n = the slot's first file + n), and the sword's battle motions and their hands (Hume male
+`ROM/32/16`, `25`; the draw letter `c`). `pack` gives the port the corners on their joints, the place (a
+male Hume `character_height` tall, the races to scale), and 27 motions, each standing, moving or an action,
+of the peace or the battle set (`port_model.py`, block version 3). The bridge's `Animator` picks standing
+or moving motions by the hunter's speed, from the battle set while Monster Hunter's hunter has its weapon
+out, and plays actions over them: the layer's (a spell's casting: start, chant looped, release, by its
+school) and the hunter's own, read from its body's animation (ScnMdl `+0x124`, an NW4R AnmObjChrBlend; the
+heaviest slot's CHR0 name: `co_*` the weapon away, `w01_*` sword and shield drawn, `w01_01xx` an attack):
+the draw and sheathe between the sets, an FFXI swing per attack. The model is posed and recorded with each
+frame (wiikit's frame hook, VC_MODEL), shown only in a frame where the hunter's body was placed. Its
+nameplate goes 25 units above its head. Monster Hunter's hunter is hidden by its scene models' draw flags
+(`hook_scn_world`; the armour's pieces found through their callback, ScnMdl `+0x11C`).
+
+**FFXI's target and lock-on** (2026-10-04, checked in play in Moga Woods). Monsters are the scene models
+named `em<number>` (`note_enemy`); the target is the locked one, else the nearest within 2500 units; its
+arrow (drawn by the layer, `ffxi_ui._arrow`) goes above its highest joint, projected for the layer (main
+block version 6). The Classic's L held (the pad's LB; a tap stays the game's) locks on and off: the
+gameplay camera behind the hunter facing the target, at the game's distance and height, tilted only to keep
+the arrow in sight (`lock_camera`, after the hooked `Camera::SetPosition`/`SetPosture`; the game's posture
+is kind 2, aim). The game reads its camera for the stick, so forward runs at the target. Known: the
+locked camera doesn't avoid walls (Monster Hunter's own does, in its own direction), so in a narrow place
+it can sit inside scenery.
+
+**Sounds** (2026-10-04): each spell's own as it goes off (its effect file, 2800 + its animation number,
+names it: `ffxi_sound.py`), the level-up fanfare and the level-down (`ROM/13/35`, `34`).
+
+Next: spell visual effects (FFXI's particle generators, 0x05, with their meshes and textures, scheduled by
+a 0x07 routine: a renderer of their own in the port); hit, faint and death motions from Monster Hunter's
+motion names (`co_*` numbers to map); monster names for the target window (`em027`: which monster);
+the lock-on's camera against walls; more weapons than the sword (each race's battle file and draw letter).
 
 **Open: a crash on entering a quest's area the second time** (2026-10-03, in play). The Deserted
 Island (`map01`) loaded for a quest, back to the village, then `map01` again: during that load the game
