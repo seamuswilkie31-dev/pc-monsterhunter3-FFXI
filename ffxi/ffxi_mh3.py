@@ -477,7 +477,14 @@ class App:
             target_check=check, target_effects=tuple(sorted({s for s, _ in e.debuffs})),
             casting=e.casting, cast_frac=round(cast_frac, 2),
             log=tuple(zip(e.log[-7:], e.kinds[-7:])), palette=tuple(pal), menu=self.menu_view(now),
+            nameplate=self._nameplate(),
             status="" if self.status == "connected" else self.status)
+
+    def _nameplate(self):
+        if not hasattr(self.mem, "nameplate") or self.cfg.get("nameplate", True) is False:
+            return None
+        p = self.mem.nameplate()
+        return None if p is None else (round(p[0], 3), round(p[1], 3))
 
     def run_game_ui(self, seconds: float | None = None):
         """The FFXI interface drawn in the game's window, through the port (port_overlay.py)."""
@@ -662,6 +669,8 @@ def main() -> int:
             sys.exit(f"unknown backend {backend}; pick port or dolphin")
 
     app = App(engine, mem, cfg, save_path)
+    if hasattr(mem, "set_name_height"):
+        mem.set_name_height(cfg.get("nameplate_height", 180))
     if a.record:
         app.start_recording(a.record)
     start_hotkeys(cfg, app.actions)

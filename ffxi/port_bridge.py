@@ -11,6 +11,7 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     snap_seq, snap_ack, snap_ok, snap_path[260]: a snapshot of RAM on request (MEM1, then MEM2)
     player_obj, monster_obj, monster_hits, monster_delta: what the port's hooks saw
     menu_open, menu_close_seq/ack, item_seq/ack, ev_head, reserved[2], events[32]: the command menu
+    name_x, name_y, name_ok, name_height, camera, reserved: your nameplate (the head through the camera)
 
 A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
 local hunter's object, or in the monster whose HP the game last changed).
@@ -23,7 +24,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 4
+VERSION = 5
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -38,8 +39,10 @@ OBJ = struct.Struct("<3Ii")
 MENU_AT = OBJ_AT + OBJ.size
 MENU = struct.Struct("<8I")              # menu_open, close_seq, close_ack, item_seq, item_ack, ev_head, reserved x2
 EVENTS_AT = MENU_AT + MENU.size
-SIZE = EVENTS_AT + 32 * 4
-assert SIZE == 912, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+NAME_AT = EVENTS_AT + 32 * 4
+NAME = struct.Struct("<ffIfII")         # name_x, name_y, name_ok, name_height, camera, reserved
+SIZE = NAME_AT + NAME.size
+assert SIZE == 936, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
 # the Classic's buttons, as the port's filter reports them (the pad's: by position)
 CL_UP, CL_LEFT, CL_X, CL_A, CL_Y, CL_B, CL_DOWN, CL_RIGHT = 0x0001, 0x0002, 0x0008, 0x0010, 0x0020, 0x0040, 0x4000, 0x8000
@@ -199,3 +202,12 @@ class PortBackend:
     def use_item(self) -> None:
         """One press of the button the menu took (the Classic's Y): Monster Hunter's own item use."""
         put_u32(self.mm, MENU_AT + 12, u32(self.mm, MENU_AT + 12) + 1)
+
+    # --- your nameplate: the hunter's head projected through the game's 3D camera, by the port ---
+    def set_name_height(self, h: float) -> None:
+        self.mm[NAME_AT + 12:NAME_AT + 16] = struct.pack("<f", float(h))
+
+    def nameplate(self) -> tuple[float, float] | None:
+        """Where your head is in the picture (-1..1, y up), or None when it can't be seen."""
+        x, y, ok, _, _, _ = NAME.unpack_from(self.mm, NAME_AT)
+        return (x, y) if ok else None

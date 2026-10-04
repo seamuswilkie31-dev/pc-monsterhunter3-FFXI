@@ -88,6 +88,8 @@ def serve_once(mm, ram: FakeRam) -> None:
         P.put_u32(mm, P.SNAP_AT + 8, 1)
         P.put_u32(mm, P.SNAP_AT + 4, seq)
     P.OBJ.pack_into(mm, P.OBJ_AT, ram.player_obj, ram.monster_obj, ram.monster_hits, ram.monster_delta)
+    _, _, _, height, _, _ = P.NAME.unpack_from(mm, P.NAME_AT)   # a fixed camera: the head at the centre, high
+    P.NAME.pack_into(mm, P.NAME_AT, 0.0, 0.3, int(bool(ram.player_obj)), height, 0x80500000, 0)
     # the command menu, as classic_filter: the layer's close and item requests
     m = list(P.MENU.unpack_from(mm, P.MENU_AT))
     if m[1] != m[2]:
@@ -246,6 +248,10 @@ def test() -> int:
         f.seek(MONSTER_DATA + MONSTER_HP_OFF - P.MEM1)
         check(int.from_bytes(f.read(2), "big") == 4000, "...with RAM at its addresses, big-endian")
     os.remove(path)
+    be2.set_name_height(160)
+    serve_once(mm, ram)
+    check(be2.nameplate() == (0.0, 0.30000001192092896) and P.NAME.unpack_from(mm, P.NAME_AT)[3] == 160,
+          "the nameplate's place comes back; its height goes to the port")
 
     # the command menu, driven as the pad would, through the layer's app
     import ffxi_mh3 as M

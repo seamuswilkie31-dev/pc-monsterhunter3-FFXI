@@ -66,6 +66,7 @@ class UiState:
     log: tuple = ()                       # ((text, kind), ...), oldest first
     palette: tuple = ()                   # ((key, name, usable, detail), ...)
     menu: tuple = ()                      # per level: (title, ((label, usable, detail), ...), cursor, more above, more below)
+    nameplate: tuple | None = None        # where your head is in the picture (-1..1, y up): your name above it
     status: str = ""
 
 
@@ -84,6 +85,8 @@ class FfxiUi:
         self._last = s
         img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
+        if s.nameplate:
+            self._nameplate(d, s)
         self._status(img, d, s)
         if s.effects:
             self._effects(img, d, s)
@@ -129,6 +132,13 @@ class FfxiUi:
             fx = x + 1 + int((w - 2) * frac)
             d.rectangle([x + 1, y + 1, fx, y + h - 1], fill=(*col, 255))
             d.line([(x + 1, y + 1), (fx, y + 1)], fill=(*[min(255, c + 50) for c in col], 255))
+
+    def _nameplate(self, d, s: UiState) -> None:
+        """Your name above your head, as FFXI shows it: white, outlined, centred."""
+        x = (s.nameplate[0] + 1) / 2 * W
+        y = (1 - s.nameplate[1]) / 2 * H
+        if 0 <= x < W and 0 <= y < H:
+            self._text(d, (int(x), int(y)), s.name, self.f_name, WHITE, anchor="ms")
 
     def _status(self, img, d, s: UiState) -> None:
         x0, y0, x1, y1 = W - 300, H - 98, W - 12, H - 12

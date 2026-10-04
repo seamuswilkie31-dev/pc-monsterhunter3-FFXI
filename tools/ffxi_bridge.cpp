@@ -23,6 +23,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -31,7 +32,7 @@
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 4;
+constexpr uint32_t kVersion = 5;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -78,8 +79,15 @@ struct Block {
     uint32_t ev_head;                   // port: events written so far
     uint32_t reserved[2];
     uint32_t events[32];                // port: the buttons newly pressed, a ring
+    // Your nameplate, FFXI's name above your head: the hunter's head projected through the game's
+    // 3D camera, in the picture's normalised coordinates (-1..1, y up).
+    float name_x, name_y;               // port
+    uint32_t name_ok;                   // port: 1 when the head is in front of the camera
+    float name_height;                  // layer: the head's height above the hunter's feet (world units)
+    uint32_t camera;                    // port: the 3D camera's CameraData, 0 until the game sets one
+    uint32_t reserved2;
 };
-static_assert(sizeof(Block) == 912, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 936, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -97,7 +105,29 @@ struct OverlayBlock {
 // Set by the hooks, on guest threads; published by serve().
 std::atomic<uint32_t> g_player{0}, g_monster{0}, g_hits{0};
 std::atomic<int32_t> g_delta{0};
-PPCFunc orig_em_hp, orig_pl_hp, orig_master;
+PPCFunc orig_em_hp, orig_pl_hp, orig_master, orig_set_perspective;
+std::atomic<uint32_t> g_camera{0};       // the 3D camera's nw4r::g3d::CameraData
+bool in_ram(uint32_t a, uint32_t n);      // below
+
+float f32(uint32_t a) {
+    uint32_t v = ld32(a);
+    float f;
+    std::memcpy(&f, &v, 4);
+    return f;
+}
+
+// nw4r::g3d::Camera::SetPerspective(fovy, aspect, near, far): r3 the Camera, a handle to its
+// CameraData (+0x00 the view matrix, 3x4; +0x30 the projection, 4x4; +0xA8 the projection's type,
+// +0xAC fovy ... +0xB8 far: as the function writes them). A 3D camera is remembered.
+void hook_set_perspective(PPCContext& c) {
+    uint32_t cam = c.r[3];
+    double fovy = c.f[1];
+    orig_set_perspective(c);
+    if (fovy < 5 || fovy > 150 || !in_ram(cam, 4)) return;
+    uint32_t data = ld32(cam);
+    if (in_ram(data, 0xBC) && ld32(data + 0xA8) == 0 && std::fabs(f32(data + 0xAC) - fovy) < 0.01)
+        g_camera.store(data, std::memory_order_relaxed);
+}
 // MH3_HUD_TRACE=1: who draws text (font_print_ex, font_print) and item names (ItemName): each new
 // caller once, with its call chain and its text, to find the code that draws the HUD.
 PPCFunc orig_font_ex, orig_font, orig_item_name;
@@ -320,6 +350,25 @@ void serve_overlay(OverlayBlock* o) {
     up = w && h;
 }
 
+// The hunter's head (its position, +0x3C of its _PLW, raised) through the camera: view, then projection.
+void project_name(Block* b) {
+    uint32_t cam = g_camera.load(std::memory_order_relaxed), pl = object(kBasePlayer);
+    b->camera = cam;
+    if (!cam || !pl || !in_ram(cam, 0x70) || !in_ram(pl + 0x3C, 12)) { b->name_ok = 0; return; }
+    float h = b->name_height > 0 && b->name_height < 10000 ? b->name_height : 180.0f;
+    float w[3] = {f32(pl + 0x3C), f32(pl + 0x40) + h, f32(pl + 0x44)};
+    float v[3], clip[4];
+    for (int r = 0; r < 3; ++r)
+        v[r] = f32(cam + 16 * r) * w[0] + f32(cam + 16 * r + 4) * w[1] + f32(cam + 16 * r + 8) * w[2] + f32(cam + 16 * r + 12);
+    for (int r = 0; r < 4; ++r)
+        clip[r] = f32(cam + 0x30 + 16 * r) * v[0] + f32(cam + 0x30 + 16 * r + 4) * v[1]
+                + f32(cam + 0x30 + 16 * r + 8) * v[2] + f32(cam + 0x30 + 16 * r + 12);
+    if (!(clip[3] > 0.001f) || !std::isfinite(clip[0]) || !std::isfinite(clip[1])) { b->name_ok = 0; return; }
+    b->name_x = clip[0] / clip[3];
+    b->name_y = clip[1] / clip[3];
+    b->name_ok = std::fabs(b->name_x) < 1.1f && std::fabs(b->name_y) < 1.1f;
+}
+
 void serve(Block* b, OverlayBlock* o) {
     for (;;) {
         if (o) serve_overlay(o);
@@ -348,6 +397,7 @@ void serve(Block* b, OverlayBlock* o) {
             std::atomic_thread_fence(std::memory_order_release);
             b->snap_ack = b->snap_seq;
         }
+        project_name(b);
         b->player_obj = g_player.load(std::memory_order_relaxed);
         b->monster_obj = g_monster.load(std::memory_order_relaxed);
         b->monster_delta = g_delta.load(std::memory_order_relaxed);
@@ -368,6 +418,7 @@ void install() {
     orig_em_hp = ppc_hook("mh3_EmHpAdd", hook_em_hp);
     orig_pl_hp = ppc_hook("mh3_PlHpAdd", hook_pl_hp);
     orig_master = ppc_hook("Pl_master_ck__FP4_PLW", hook_master);
+    orig_set_perspective = ppc_hook("SetPerspective__Q34nw4r3g3d6CameraFffff", hook_set_perspective);
     if (const char* h = std::getenv("MH3_HIDE_HUD"); h && !std::strcmp(h, "1")) {
         orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
         rt_log("ffxi: Monster Hunter's HUD hidden (MH3_HIDE_HUD=1)");
