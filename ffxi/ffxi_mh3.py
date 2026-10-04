@@ -4,6 +4,7 @@
 #     "dolphin-memory-engine>=1.3",
 #     "pynput>=1.7",
 #     "pillow>=10",
+#     "numpy>=1.26",
 # ]
 # ///
 """FFXI's combat for Monster Hunter Tri (Wii): the native PC port, or Dolphin.
@@ -488,6 +489,27 @@ class App:
             lines = [(t, k, at) for t, k, at in lines if now - at < fade]
         return tuple((t, k) for t, k, _ in lines)
 
+    def _send_character(self):
+        """FFXI's character in your hunter's place (character_model in config.toml): read from your own
+        FFXI installation, handed to the port, which draws it where the hunter stands."""
+        dat = self.cfg.get("character_model")
+        if not dat:
+            return None
+        try:
+            import ffxi_model as FM
+            from port_model import PortModel
+            model = FM.load(FM.ffxi_root(self.cfg.get("ffxi_path")) / dat)
+            verts, layers = FM.pack(model, self.cfg.get("character_height", 175.0), self.cfg.get("character_yaw", 0.0),
+                                    self.cfg.get("character_mirror", True))
+            pm = PortModel()
+            pm.send(verts, layers)
+            pm.set_flags(True, self.cfg.get("hide_hunter", True))
+            print(f"FFXI character: {dat}, {len(verts) // 3} triangles, {len(layers)} textures")
+            return pm
+        except (Exception, SystemExit) as ex:                      # the layer runs without it
+            print(f"[FFXI character unavailable: {ex}]")
+            return None
+
     def _nameplate(self):
         if not hasattr(self.mem, "nameplate") or self.cfg.get("nameplate", True) is False:
             return None
@@ -499,6 +521,7 @@ class App:
         import ffxi_ui as U
         from port_overlay import PortOverlay
         out, ui = PortOverlay(), U.FfxiUi(self.cfg.get("window_theme", 1), self.cfg.get("ffxi_assets", True))
+        model = self._send_character()
         start, last_draw = time.monotonic(), 0.0
         print("FFXI interface: in the game's window. Ctrl+C to stop.")
         try:
@@ -511,6 +534,8 @@ class App:
                     if img is not None:
                         out.show(img)
                 out.keep_alive()
+                if model:
+                    model.keep_alive()
                 time.sleep(1 / 60)
         except KeyboardInterrupt:
             pass

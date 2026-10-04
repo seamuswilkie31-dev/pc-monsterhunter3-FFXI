@@ -335,6 +335,36 @@ def render(model: dict, size: int = 512, yaw: float = 0.0) -> np.ndarray:
 
 
 # ================================================================================================
+# for the game: the model in the hunter's space, its textures as layers (port_model.py sends them)
+# ================================================================================================
+def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = True, size: int = 256):
+    """The model posed, in Monster Hunter's convention for the hunter's own space: Y up, feet at 0,
+    `height` tall, facing +Z (FFXI's models face +X with Y down), turned by yaw degrees. mirror: FFXI's
+    space is left-handed, the GX's right-handed, so one axis flips. Returns (vertices: N x 6 float32,
+    x y z u v layer; layers: L x size x size x 4 uint8)."""
+    from PIL import Image
+    tris = [t for t in triangles(model) if t[2] in model["textures"]]
+    names = sorted({t[2] for t in tris})
+    layer = {n: i for i, n in enumerate(names)}
+    pos = np.array([t[0] for t in tris], dtype=np.float64)            # (T, 3, 3)
+    uv = np.array([t[1] for t in tris], dtype=np.float64)             # (T, 3, 2)
+    lay = np.repeat(np.array([layer[t[2]] for t in tris], dtype=np.float64)[:, None], 3, 1)
+    x, y, z = pos[..., 0], pos[..., 1], pos[..., 2]
+    p = np.stack([-z if mirror else z, -y, x], -1)                    # forward +Z, up +Y
+    lo, hi = p[..., 1].min(), p[..., 1].max()
+    k = height / (hi - lo)
+    p *= k
+    p[..., 1] -= lo * k                                               # the feet on the ground
+    c, s_ = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
+    px, pz = p[..., 0].copy(), p[..., 2].copy()
+    p[..., 0], p[..., 2] = c * px + s_ * pz, -s_ * px + c * pz
+    verts = np.concatenate([p, uv, lay[..., None]], -1).reshape(-1, 6).astype(np.float32)
+    layers = np.stack([np.array(Image.fromarray(model["textures"][n], "RGBA").resize((size, size), Image.LANCZOS))
+                       for n in names]) if names else np.zeros((1, size, size, 4), np.uint8)
+    return verts, layers
+
+
+# ================================================================================================
 def ffxi_root(arg: str | None) -> Path:
     if arg:
         return Path(arg)

@@ -28,6 +28,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -400,9 +401,125 @@ void project_name(Block* b) {
     b->name_ok = std::fabs(b->name_x) < 1.1f && std::fabs(b->name_y) < 1.1f;
 }
 
-void serve(Block* b, OverlayBlock* o) {
+
+// ================================================================================================
+// FFXI's character in your hunter's place (ffxi/ffxi_model.py, port_model.py): the layer sends a model,
+// already in the hunter's own space (Y up, feet at 0, facing +Z), through its own block; the renderer
+// draws it into the scene (video_model_*) where the hunter stands, with the game's camera.
+// ================================================================================================
+constexpr uint32_t kModelMagic = 0x4D48334D;     // 'MH3M'
+constexpr int kModelMaxVerts = 200000, kModelMaxLayers = 16, kModelTex = 256;
+struct ModelBlock {
+    uint32_t magic, version;
+    uint32_t serial;        // the layer bumps it once the mesh below is written
+    uint32_t n_verts, layers, tex_w, tex_h;
+    uint32_t flags;         // 1: draw it; 2: hide Monster Hunter's hunter
+    uint32_t alive;         // the layer bumps it while it runs
+    uint32_t reserved[7];
+    float verts[kModelMaxVerts * 6];                      // x y z u v layer
+    uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
+};
+static_assert(sizeof(ModelBlock) == 8994368, "ffxi/port_model.py mirrors this layout");
+
+std::mutex g_hunter_mx;
+float g_hunter_mtx[12];                 // the hunter model's world matrix (MHchar::move2's), rows
+bool g_hunter_seen = false;
+std::atomic<bool> g_hide_hunter{false};
+PPCFunc orig_char_move2;
+constexpr uint32_t kGetJointNum = 0x800E0C44;            // MHchar::get_joint_num()
+
+// The hunter's model hidden: every node's visibility byte (nw4r ScnMdl: its CopiedVisAccess buffer at
+// +0x148, its "changed" flag +0x13C bit 0, as MHchar::setVisibility writes them) to 0, the game's own
+// values kept to be put back.
+void hide_hunter(PPCContext& c, uint32_t chr, bool hide) {
+    static uint32_t hidden_chr = 0;
+    static std::vector<uint8_t> saved;
+    uint32_t mdl = in_ram(chr + 0x118, 4) ? ld32(chr + 0x118) : 0;
+    uint32_t vis = mdl && in_ram(mdl + 0x148, 4) ? ld32(mdl + 0x148) : 0;
+    if (hidden_chr && (!hide || hidden_chr != chr)) {          // put the game's own values back
+        uint32_t m = ld32(hidden_chr + 0x118), v = m ? ld32(m + 0x148) : 0;
+        if (v && in_ram(v, (uint32_t)saved.size())) {
+            for (size_t i = 0; i < saved.size(); ++i) st8(v + (uint32_t)i, saved[i]);
+            st32(m + 0x13C, ld32(m + 0x13C) | 1);
+        }
+        hidden_chr = 0;
+    }
+    if (!hide || !vis) return;
+    if (hidden_chr != chr) {
+        PPCContext t = c;                                     // the game's own count of its nodes
+        t.r[3] = chr;
+        if (PPCFunc f = ppc_lookup(kGetJointNum)) f(t);
+        uint32_t n = t.r[3];
+        if (n == 0 || n > 512 || !in_ram(vis, n)) return;
+        saved.resize(n);
+        for (uint32_t i = 0; i < n; ++i) saved[i] = ld8(vis + i);
+        hidden_chr = chr;
+    }
+    bool changed = false;
+    for (uint32_t i = 0; i < saved.size(); ++i)
+        if (ld8(vis + i)) { st8(vis + i, 0); changed = true; }
+    if (changed) st32(mdl + 0x13C, ld32(mdl + 0x13C) | 1);
+}
+
+// MHchar::move2(MTX34*, u16): a character's world matrix, every frame. The hunter's is the one where the
+// hunter object stands.
+void hook_char_move2(PPCContext& c) {
+    uint32_t chr = c.r[3], mtx = c.r[4];
+    orig_char_move2(c);
+    uint32_t pl = object(kBasePlayer);
+    if (!pl || !in_ram(mtx, 48)) return;
+    float tx = f32(mtx + 12), ty = f32(mtx + 28), tz = f32(mtx + 44);
+    float dx = tx - f32(pl + 0x3C), dy = ty - f32(pl + 0x40), dz = tz - f32(pl + 0x44);
+    if (dx * dx + dy * dy + dz * dz > 4.0f) return;          // not the hunter
+    {
+        std::lock_guard<std::mutex> lk(g_hunter_mx);
+        for (int i = 0; i < 12; ++i) g_hunter_mtx[i] = f32(mtx + 4 * i);
+        g_hunter_seen = true;
+    }
+    hide_hunter(c, chr, g_hide_hunter.load(std::memory_order_relaxed));
+}
+
+void serve_model(ModelBlock* mb) {
+    static uint32_t shown = 0, alive = 0;
+    static auto last_alive = std::chrono::steady_clock::time_point{};
+    auto now = std::chrono::steady_clock::now();
+    if (mb->alive != alive) { alive = mb->alive; last_alive = now; }
+    bool up = now - last_alive < std::chrono::seconds(3);
+    if (mb->serial != shown) {
+        std::atomic_thread_fence(std::memory_order_acquire);
+        shown = mb->serial;
+        uint32_t n = std::min<uint32_t>(mb->n_verts, kModelMaxVerts);
+        uint32_t layers = std::min<uint32_t>(mb->layers, kModelMaxLayers);
+        if (mb->tex_w == (uint32_t)kModelTex && mb->tex_h == (uint32_t)kModelTex)
+            video_model_mesh(mb->verts, (int)n, mb->tex, (int)layers, kModelTex, kModelTex);
+    }
+    g_hide_hunter.store(up && (mb->flags & 2), std::memory_order_relaxed);
+    float view[12], proj[6], h[12];
+    bool have;
+    {
+        std::lock_guard<std::mutex> lk(g_hunter_mx);
+        have = g_hunter_seen;
+        std::memcpy(h, g_hunter_mtx, sizeof h);
+    }
+    uint32_t pl = object(kBasePlayer), cam = follow_camera(pl);
+    bool visible = up && (mb->flags & 1) && have && cam && pl;
+    if (visible) {
+        float v[12];
+        for (int i = 0; i < 12; ++i) v[i] = f32(cam + 4 * i);
+        for (int r = 0; r < 3; ++r)                           // the camera's view, then the hunter's place
+            for (int col = 0; col < 4; ++col)
+                view[r * 4 + col] = v[r * 4] * h[col] + v[r * 4 + 1] * h[4 + col] + v[r * 4 + 2] * h[8 + col]
+                                    + (col == 3 ? v[r * 4 + 3] : 0.0f);
+        const int pi[6] = {0, 2, 5, 6, 10, 11};               // GX's six: P00 P02 P11 P12 P22 P23
+        for (int i = 0; i < 6; ++i) proj[i] = f32(cam + 0x30 + 4 * pi[i]);
+    }
+    video_model_pose(view, proj, visible);
+}
+
+void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
     for (;;) {
         if (o) serve_overlay(o);
+        if (mb) serve_model(mb);
         for (int i = 0; i < kWatches; ++i) {
             Watch w;
             std::memcpy(&w, (const void*)&b->watch[i], sizeof w);
@@ -479,7 +596,17 @@ void install() {
         }
     }
     if (!o) rt_log("ffxi: no overlay block: the FFXI interface won't show in the game");
-    std::thread(serve, b, o).detach();
+    ModelBlock* mb = nullptr;
+    if (HANDLE mh = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(ModelBlock),
+                                       L"mh3-ffxi-model")) {
+        mb = static_cast<ModelBlock*>(MapViewOfFile(mh, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ModelBlock)));
+        if (mb) {
+            mb->version = 1;
+            mb->magic = kModelMagic;
+        }
+    }
+    orig_char_move2 = ppc_hook("move2__6MHcharFPQ34nw4r4math5MTX34Us", hook_char_move2);
+    std::thread(serve, b, o, mb).detach();
 }
 
 RtGameLayer layer("FFXI bridge", install);
