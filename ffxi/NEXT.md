@@ -52,6 +52,21 @@ style), Monster Hunter's weapon read from its motion set (w00-w08: `MH_WEAPONS`)
 when it changes. Known: some races' polearm and great sword files aren't found by the draw letter (they
 hold a sword and shield then); the music's track numbers are from memory (config.toml to change them).
 
+**Chat line and emotes** (River's list, 2026-10-04, checked in play). "/" in the game's window opens FFXI's
+chat line (the bridge's `chat_key` through wiikit's `video_set_key_hook`/`video_text_capture`: the game sees no
+keys meanwhile, nor the Enter that sends; the macro hotkeys pause). `App.chat_command`: the 33 emotes
+(`ffxi_model.EMOTES`: every race's emote files after its battle files, the dances in ROM/191-195, /heal the
+race's resting kneel), /say and plain words, /ma /ja /ws by name, /echo.
+
+**Equipment, inventory, drops** (River's list, 2026-10-04, checked in play). `ffxi_items.py` reads FFXI's
+14,099 armor pieces and weapons from the installation (stats from their descriptions; their looks from
+LandSandBoat's item_equipment MId, fetched once) into the asset folder's items.json; `ffxi_gear.py` decides
+who wears what, the starter kit, stats (`Engine.set_gear`: DEF, STR, Attack, AGI, INT, MND, MP, Regen,
+Refresh, Haste, Store TP act), the look (worn pieces over the creator's), and drops (the monster's level to
+three above; a large monster always). Menus: Equipment (16 slots) and Inventory (equip, drop), the
+highlighted piece's stats beside them. Ideas next: FFXI's item icons (each item block holds a 32x32 one at
+0x280), the Equipment window as FFXI's 4x4 grid, HP+ gear (Monster Hunter's max HP), a treasure pool.
+
 Next: spell visual effects (started 2026-10-04: the format studied, nothing written yet). What's known:
 - A spell's effect is file 2800 + its animation number (`ffxi_sound.file_path`); across the 154 spell
   files: 2152 generators (0x05), 2252 keyframe curves (0x19), 1082 particle meshes (0x1F), 1000 textures
