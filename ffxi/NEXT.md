@@ -41,7 +41,7 @@ names it: `ffxi_sound.py`), the level-up fanfare and the level-down (`ROM/13/35`
 
 Next: spell visual effects (FFXI's particle generators, 0x05, with their meshes and textures, scheduled by
 a 0x07 routine: a renderer of their own in the port); hit, faint and death motions from Monster Hunter's
-motion names (`co_*` numbers to map); monster names for the target window (`em027`: which monster);
+motion names (`co_*` numbers to map);
 the lock-on's camera against walls; more weapons than the sword (each race's battle file and draw letter).
 
 **Open: a crash on entering a quest's area the second time** (2026-10-03, in play). The Deserted
