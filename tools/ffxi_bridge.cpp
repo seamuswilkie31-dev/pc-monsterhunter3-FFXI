@@ -350,12 +350,43 @@ void serve_overlay(OverlayBlock* o) {
     up = w && h;
 }
 
+// The game keeps its cameras in an array (0x10C apart): the hook sees whichever sets a perspective,
+// often a preview's. The one that follows the hunter is the camera looking at it: among the camera
+// blocks around the one seen, the one whose target (+0x8C) is nearest the hunter, chosen again now
+// and then.
+bool camera_block(uint32_t a) {
+    if (!in_ram(a, 0xBC) || ld32(a + 0xA8) != 0) return false;         // a perspective projection
+    float fovy = f32(a + 0xAC), aspect = f32(a + 0xB0), n = f32(a + 0xB4), fa = f32(a + 0xB8);
+    return fovy > 5 && fovy < 150 && aspect > 0.5f && aspect < 3 && n > 0 && fa > n;
+}
+
+uint32_t follow_camera(uint32_t pl) {
+    static uint32_t chosen = 0;
+    static int age = 0;
+    uint32_t seen = g_camera.load(std::memory_order_relaxed);
+    if (!seen || !pl) return 0;
+    if (chosen && camera_block(chosen) && ++age < 60) return chosen;
+    age = 0;
+    float hx = f32(pl + 0x3C), hy = f32(pl + 0x40), hz = f32(pl + 0x44);
+    float best = 1e12f;
+    uint32_t pick = 0;
+    for (uint32_t a = seen > 0x4000 ? seen - 0x4000 : seen; a < seen + 0x4000; a += 4) {
+        if (!camera_block(a)) continue;
+        float dx = f32(a + 0x8C) - hx, dy = f32(a + 0x90) - hy, dz = f32(a + 0x94) - hz;
+        float d = dx * dx + dy * dy + dz * dz;
+        if (std::isfinite(d) && d < best) { best = d; pick = a; }
+        a += 0x100;                               // past this block
+    }
+    chosen = best < 2000.0f * 2000.0f ? pick : 0;  // looking at the hunter, not somewhere else
+    return chosen;
+}
+
 // The hunter's head (its position, +0x3C of its _PLW, raised) through the camera: view, then projection.
 void project_name(Block* b) {
-    uint32_t cam = g_camera.load(std::memory_order_relaxed), pl = object(kBasePlayer);
+    uint32_t pl = object(kBasePlayer), cam = follow_camera(pl);
     b->camera = cam;
     if (!cam || !pl || !in_ram(cam, 0x70) || !in_ram(pl + 0x3C, 12)) { b->name_ok = 0; return; }
-    float h = b->name_height > 0 && b->name_height < 10000 ? b->name_height : 180.0f;
+    float h = b->name_height > 0 && b->name_height < 10000 ? b->name_height : 200.0f;
     float w[3] = {f32(pl + 0x3C), f32(pl + 0x40) + h, f32(pl + 0x44)};
     float v[3], clip[4];
     for (int r = 0; r < 3; ++r)

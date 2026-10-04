@@ -670,7 +670,7 @@ def main() -> int:
 
     app = App(engine, mem, cfg, save_path)
     if hasattr(mem, "set_name_height"):
-        mem.set_name_height(cfg.get("nameplate_height", 180))
+        mem.set_name_height(cfg.get("nameplate_height", 200))
     if a.record:
         app.start_recording(a.record)
     start_hotkeys(cfg, app.actions)
