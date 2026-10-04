@@ -8,6 +8,20 @@ game's own item use. Saving works. Checked in play.
 
 Run: the port with `MH3_FFXI=1 MH3_HIDE_HUD=1`, then `uv run ffxi_mh3.py` (in-game interface by default).
 
+**FFXI's character in the hunter's place** (stages A and B done, 2026-10-04, checked in play): the layer
+reads `character_model` (a male Hume NPC, `ROM/3/6.DAT`) from the FFXI installation (`ffxi_model.py`),
+packs it in the hunter's space (`pack`: feet at 0, 175 tall, FFXI's PS2 alpha put on the usual scale) and
+hands it to the port (`port_model.py`, block `mh3-ffxi-model`); wiikit draws it into the scene before
+each XFB copy (`video_model_*`), depth-tested, with the gameplay camera's view and projection. The bridge
+hooks `ScnMdl::CalcWorldMtx` (`mh3_ScnMdlCalcWorldMtx`): the body's world matrix places the Hume, and
+every piece of Monster Hunter's hunter gets the no-draw flags (ScnObj `+0xCC` |= 0x60). The body and
+weapons stand at the hunter; the armour's pieces stand at the origin and are found through their
+callback (ScnMdl `+0x11C`, whose `+8`, or `+4` for a weapon, is the model owner with the hunter's
+position at `+4`). Skeletons still run: hits and weapons as before.
+Next for it: **stage C**, FFXI's motions (`idl0`, `wlk0`, `run0` in the same DAT) chosen by the hunter's
+speed, skinned each frame (the mesh is sent once; poses as joint matrices); **stage D**, a player
+character built from equipment DATs, weapons in hand, attack motions.
+
 **Open: a crash on entering a quest's area the second time** (2026-10-03, in play). The Deserted
 Island (`map01`) loaded for a quest, back to the village, then `map01` again: during that load the game
 stopped, `g3d_restex_ac.h:38 Panic: ResTex::ref: Object not valid` (a model's texture not loaded), from
