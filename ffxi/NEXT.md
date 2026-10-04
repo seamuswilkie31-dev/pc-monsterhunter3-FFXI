@@ -52,10 +52,37 @@ style), Monster Hunter's weapon read from its motion set (w00-w08: `MH_WEAPONS`)
 when it changes. Known: some races' polearm and great sword files aren't found by the draw letter (they
 hold a sword and shield then); the music's track numbers are from memory (config.toml to change them).
 
-Next: spell visual effects. FFXI's particle generators (0x05) with their keyframe curves (0x19), meshes
-(0x1F) and textures (0x20), scheduled by a 0x07 routine: a generator has sections of opcodes
-(initialisers, generator updaters, particle updaters, expiration), as the community's viewers port them from
-xim; a renderer of their own in the port (billboards and meshes, additive). The lock-on's camera against walls.
+Next: spell visual effects (started 2026-10-04: the format studied, nothing written yet). What's known:
+- A spell's effect is file 2800 + its animation number (`ffxi_sound.file_path`); across the 154 spell
+  files: 2152 generators (0x05), 2252 keyframe curves (0x19), 1082 particle meshes (0x1F), 1000 textures
+  (0x20), 351 routines (0x07), a few sprite sheets (0x21).
+- Routine (0x07): its command list at data+0x14 (relative to data - 16); entries `u8 op`, size in words
+  (low 5 bits of the u16 at +1), `u16 delay` at +4 (it trails its command: a command runs at the sum of the
+  delays before it), `u16 duration` at +6, a 4-letter id at +8; 60 ticks a second. 0x02 spawns a
+  generator for `duration`; 0x03/0x09 run another routine (Cure's `main` is a sound and `0x03 tgt0`);
+  0x0A/0x0B/0x4A/0x53/0x60 sounds; 0x69/0x6A a block, 0x3D/0x3E pick one at random, 0x64/0x67/0x6B if/else.
+- Generator (0x05): data+0 u16 attach (low 4 bits: 1 caster, 2 target...; joints in bits 4-15);
+  chunk+0x74 u16 emission variance, u16 ticks per emission (+1), u8 particles per emission, u8 flags;
+  chunk+0x80 four offsets (from the chunk) to opcode streams: generator updaters, initialisers,
+  per-particle updaters, expiry. Each opcode: u32 config (low byte the opcode, bits 8-12 its size in
+  words with the config, bits 13+ an allocation slot linking an initialiser to its updater).
+- The opcodes used (census): initialisers 0x01 (billboard flags, render flags, linked mesh id, base
+  position, life in ticks + variance) 0x09/0x0A rotation (+variance) 0x0F/0x10/0x11 scale 0x16/0x17
+  colour (bytes/255) 0x02/0x03/0x08 velocity 0x0B/0x0C spin 0x12 scale velocity 0x1E blend
+  (low nibble 8 additive, 4 alpha, 1/2 subtractive) 0x1F/0x06/0x07 spawn shell 0x2D/0x27/0x28 and
+  0x21-0x2F keyframe refs; updaters 0x0E (age) 0x1B alpha curve 0x02 move 0x05 spin 0x08 scale
+  0x15/0x16/0x17 scale curves 0x12-0x14 rotation curves (half-turns) 0x18-0x1A colour curves 0x27/0x28 UV
+  scroll 0x2C damping 0x0B colour change 0x03/0x06/0x09 acceleration.
+- Keyframe curve (0x19): from chunk+0x10, (time, value) float pairs until time 1.0. Particle mesh (0x1F):
+  from chunk+0x10 u32 version (3/5/6), u8 meshes with texture, u8 without, u16, a padded u16 triangle-count
+  array (3/4/7/8/11/12/15 long), texture names (16 chars), then per vertex position, normal, BGRA colour,
+  UV.
+- Plan: `ffxi_fx.py` parses and simulates (the layer, 60 Hz), the port draws: particle instances (mesh, place
+  relative to the caster or the target, rotation, scale, colour, UV offset, billboard, blend) through a
+  shared block, expanded to triangles in the frame hook with the camera and drawn after the character
+  (additive or alpha). Start with Cure and Dia (the spells the character has), a software preview first.
+
+The lock-on's camera against walls.
 
 **Open: a crash on entering a quest's area the second time** (2026-10-03, in play). The Deserted
 Island (`map01`) loaded for a quest, back to the village, then `map01` again: during that load the game
