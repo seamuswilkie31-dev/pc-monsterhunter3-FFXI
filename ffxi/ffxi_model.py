@@ -38,7 +38,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ffxi_assets as A  # noqa: E402
 
-SKELETON, MESH, IMAGE = 0x29, 0x2A, 0x20
+SKELETON, MESH, IMAGE, MOTION = 0x29, 0x2A, 0x20, 0x2B
 
 
 class Reader:
@@ -169,6 +169,35 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
             "fa0": fa0, "fa1": fa1, "symmetric": symmetric, "pieces": pieces}
 
 
+def parse_motion(b: bytes, data: int, name: str) -> dict:
+    """A motion (chunk 0x2B): u16 ?, u16 joints, u16 frames, f32 rate (keyframes per game frame, at
+    30 game frames a second); then per joint an i32 joint number and three channel groups (rotation
+    x y z w, translation x y z, scale x y z), each its offsets (i32, in floats from the end of the
+    header: 0 a constant, > 0 one float per frame there, < 0 the joint held at its rest pose) then
+    its constants (f32). Rotations apply after the joint's rest rotation, translations add to its
+    rest offset."""
+    r = Reader(b, data + 2)
+    n, frames, rate = r.u16(), r.u16(), r.f32()
+    base = r.pos
+    tracks = {}
+
+    def group(k: int):
+        offs = [r.i32() for _ in range(k)]
+        consts = [r.f32() for _ in range(k)]
+        if any(o < 0 for o in offs):
+            return None
+        out = np.empty((frames, k), np.float32)
+        for c, (o, v) in enumerate(zip(offs, consts)):
+            out[:, c] = np.frombuffer(b, "<f4", frames, base + 4 * o) if o > 0 else v
+        return out
+
+    for _ in range(n):
+        j = r.i32()
+        q, t, s = group(4), group(3), group(3)
+        tracks[j] = None if q is None or t is None or s is None else (q, t, s)
+    return {"name": name, "frames": frames, "rate": rate, "tracks": tracks}
+
+
 def load(path: Path) -> dict:
     b = path.read_bytes()
     out = {"skeletons": [], "meshes": [], "textures": {}, "motions": [], "errors": []}
@@ -184,8 +213,8 @@ def load(path: Path) -> dict:
                 if info:
                     key = b[at + 17:at + 33].decode("latin-1")             # category and name, 16 chars
                     out["textures"][key] = A.decode(b, info)
-            elif typ == 0x2B:
-                out["motions"].append(name)
+            elif typ == MOTION:
+                out["motions"].append(parse_motion(b, at + 16, name))
         except Exception as e:                                             # noqa: BLE001
             out["errors"].append(f"{name} ({typ:#x}): {e}")
     return out
@@ -212,6 +241,62 @@ def joint_world(joints: list[dict]) -> np.ndarray:
     return world
 
 
+def clip(model: dict, prefix: str) -> list[dict]:
+    """A motion's parts: FFXI splits one by body region (wlk0 the hips and legs, wlk1 the upper body,
+    wlk2 the hands), played together."""
+    return [m for m in model["motions"] if m["name"].startswith(prefix)]
+
+
+def _qmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    ax, ay, az, aw = np.moveaxis(a, -1, 0)
+    bx, by, bz, bw = np.moveaxis(b, -1, 0)
+    return np.stack([aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+                     aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz], -1)
+
+
+def local_pose(joints: list[dict], parts: list[dict], phase: float):
+    """Each joint's own rotation, offset and scale (n x 4, n x 3, n x 3) at phase 0..1 of a motion:
+    its rest pose, the motion's keys interpolated between frames applied after it."""
+    n = len(joints)
+    rq = np.array([j["rot"] for j in joints], np.float64)
+    q, t, s = rq.copy(), np.array([j["trans"] for j in joints], np.float64), np.ones((n, 3))
+    for m in parts:
+        last = m["frames"] - 1
+        pos = min(max(phase, 0.0), 1.0) * last
+        lo = min(int(pos), max(last - 1, 0))
+        hi, f = min(lo + 1, last), pos - lo
+        for j, tr in m["tracks"].items():
+            if tr is None or j >= n:
+                continue                                                   # held at rest
+            aq = tr[0][lo] * (1 - f) + tr[0][hi] * (f if np.dot(tr[0][lo], tr[0][hi]) >= 0 else -f)
+            aq /= np.linalg.norm(aq) or 1.0
+            q[j] = _qmul(aq, rq[j])
+            t[j] += tr[1][lo] * (1 - f) + tr[1][hi] * f
+            if j:
+                s[j] = tr[2][lo] * (1 - f) + tr[2][hi] * f                 # the root's scale is not used
+    t[0] = (-t[0][2], t[0][1], t[0][0])                                    # the root's offset: another axis order
+    return q, t, s
+
+
+def pose_world(joints: list[dict], q: np.ndarray, t: np.ndarray, s: np.ndarray) -> np.ndarray:
+    """Each joint's 4x4 transform in the model's space from its local pose: its offset scaled by its
+    parent's scale and turned by its rotation, rotations chained, scales multiplied."""
+    n = len(joints)
+    rot, pos, scl = np.zeros((n, 3, 3)), np.zeros((n, 3)), np.ones((n, 3))
+    world = np.tile(np.eye(4), (n, 1, 1))
+    for i, j in enumerate(joints):
+        r = quat_matrix(q[i])
+        p = j["parent"]
+        if p < 0:
+            rot[i], pos[i], scl[i] = r, t[i], s[i]
+        else:
+            pos[i] = pos[p] + rot[p] @ (scl[p] * t[i])
+            rot[i], scl[i] = rot[p] @ r, scl[p] * s[i]
+        world[i, :3, :3] = rot[i] * scl[i]
+        world[i, :3, 3] = pos[i]
+    return world
+
+
 def _flip(p: np.ndarray, axis: np.ndarray) -> np.ndarray:
     q = p.copy()
     for a in (1, 2, 3):
@@ -219,14 +304,22 @@ def _flip(p: np.ndarray, axis: np.ndarray) -> np.ndarray:
     return q
 
 
-def skin(mesh: dict, world: np.ndarray, mirrored: bool = False) -> np.ndarray:
-    """The mesh's vertices in the model's space (one joint: its transform; two: both, pre-weighted)."""
+def _skin_inputs(mesh: dict, mirrored: bool, n_joints: int):
+    """A mesh's vertices as its joints hold them: p0 on j0, p1 on j1 (-1: one joint); a symmetric
+    mesh's second copy from the flipped joints and axes."""
     if mirrored:
         p0, p1 = _flip(mesh["p0"], mesh["fa0"]), _flip(mesh["p1"], mesh["fa1"])
         j0, j1 = mesh["mj0"], mesh["mj1"]
     else:
         p0, p1, j0, j1 = mesh["p0"], mesh["p1"], mesh["j0"], mesh["j1"]
-    j0 = np.clip(j0, 0, len(world) - 1)
+    j0 = np.clip(j0, 0, n_joints - 1)
+    j1 = np.where(j1 >= 0, np.clip(j1, 0, n_joints - 1), -1)
+    return p0, p1, j0, j1
+
+
+def skin(mesh: dict, world: np.ndarray, mirrored: bool = False) -> np.ndarray:
+    """The mesh's vertices in the model's space (one joint: its transform; two: both, pre-weighted)."""
+    p0, p1, j0, j1 = _skin_inputs(mesh, mirrored, len(world))
     m0 = world[j0]
     out = np.einsum("nij,nj->ni", m0[:, :3, :3], p0) + m0[:, :3, 3] * mesh["w"][:, :1]
     two = j1 >= 0
@@ -236,9 +329,11 @@ def skin(mesh: dict, world: np.ndarray, mirrored: bool = False) -> np.ndarray:
     return out
 
 
-def triangles(model: dict, skeleton: int = 0):
-    """Every triangle of the model posed: (3 positions, 3 UVs, texture name)."""
-    world = joint_world(model["skeletons"][skeleton])
+def triangles(model: dict, skeleton: int = 0, world: np.ndarray | None = None):
+    """Every triangle of the model posed (at rest, or by world: pose_world): (3 positions, 3 UVs,
+    texture name)."""
+    if world is None:
+        world = joint_world(model["skeletons"][skeleton])
     for mesh in model["meshes"]:
         for mirrored in ((False, True) if mesh["symmetric"] else (False,)):
             v = skin(mesh, world, mirrored)
@@ -281,9 +376,9 @@ def export_obj(model: dict, out: Path) -> None:
                 f.write(f"map_Kd {png}\n")
 
 
-def render(model: dict, size: int = 512, yaw: float = 0.0) -> np.ndarray:
+def render(model: dict, size: int = 512, yaw: float = 0.0, world: np.ndarray | None = None) -> np.ndarray:
     """A textured, depth-tested, orthographic picture of the model, turned by yaw (degrees)."""
-    tris = list(triangles(model))
+    tris = list(triangles(model, world=world))
     if not tris:
         return np.zeros((size, size, 4), np.uint8)
     c, s = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
@@ -337,31 +432,112 @@ def render(model: dict, size: int = 512, yaw: float = 0.0) -> np.ndarray:
 # ================================================================================================
 # for the game: the model in the hunter's space, its textures as layers (port_model.py sends them)
 # ================================================================================================
-def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = True, size: int = 256):
-    """The model posed, in Monster Hunter's convention for the hunter's own space: Y up, feet at 0,
-    `height` tall, facing +Z (FFXI's models face +X with Y down), turned by yaw degrees. mirror: FFXI's
-    space is left-handed, the GX's right-handed, so one axis flips. Returns (vertices: N x 6 float32,
-    x y z u v layer; layers: L x size x size x 4 uint8)."""
+MOTIONS = ("idl", "wlk", "run")       # standing, walking, running: the port picks by the hunter's speed
+
+
+def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = True, size: int = 256,
+         motions: tuple[str, ...] = MOTIONS) -> dict:
+    """The model for the port to skin and animate (port_model.py):
+      verts   N x 13 float32, each triangle corner: p0 xyz, p1 xyz (in its joints' spaces, weighted),
+              joint 0, joint 1 (-1: one joint), weight 0, weight 1, u, v, texture layer
+      layers  L x size x size x 4 uint8, the textures
+      place   3 x 4, FFXI's model space to Monster Hunter's convention for the hunter's own: Y up, feet
+              at 0, `height` tall, facing +Z (FFXI's models face +X with Y down), turned by yaw degrees.
+              mirror: FFXI's space is left-handed, the GX's right-handed, so one axis flips
+      parents each joint's (-1: the root)
+      clips   per motion found: name, frames, rate (keyframes per game frame, 30 a second), speed
+              (the ground speed it was made for, units a second; 0 standing), data (frames x joints x
+              10: the joint's own rotation x y z w, offset x y z, scale x y z)
+    """
     from PIL import Image
-    tris = [t for t in triangles(model) if t[2] in model["textures"]]
-    names = sorted({t[2] for t in tris})
-    layer = {n: i for i, n in enumerate(names)}
-    pos = np.array([t[0] for t in tris], dtype=np.float64)            # (T, 3, 3)
-    uv = np.array([t[1] for t in tris], dtype=np.float64)             # (T, 3, 2)
-    lay = np.repeat(np.array([layer[t[2]] for t in tris], dtype=np.float64)[:, None], 3, 1)
-    x, y, z = pos[..., 0], pos[..., 1], pos[..., 2]
-    p = np.stack([-z if mirror else z, -y, x], -1)                    # forward +Z, up +Y
-    lo, hi = p[..., 1].min(), p[..., 1].max()
+    joints = model["skeletons"][0]
+    rows, names = [], {}
+    for mesh in model["meshes"]:
+        for mirrored in ((False, True) if mesh["symmetric"] else (False,)):
+            p0, p1, j0, j1 = _skin_inputs(mesh, mirrored, len(joints))
+            for piece in mesh["pieces"]:
+                if piece["tex"] not in model["textures"]:
+                    continue
+                lay = names.setdefault(piece["tex"], len(names))
+                for tri in piece["tris"]:
+                    if max(c[0] for c in tri) >= len(p0):
+                        continue
+                    for i, uv in tri:
+                        rows.append((*p0[i], *p1[i], j0[i], j1[i], *mesh["w"][i], uv[0], uv[1], lay))
+    verts = np.array(rows, np.float32).reshape(-1, 13)
+
+    corners = skin_corners(verts, joint_world(joints))                # height and ground at rest
+    axes = np.array([[0, 0, -1 if mirror else 1], [0, -1, 0], [1, 0, 0]], np.float64)   # forward +Z, up +Y
+    up = corners @ axes.T
+    lo, hi = up[:, 1].min(), up[:, 1].max()
     k = height / (hi - lo)
-    p *= k
-    p[..., 1] -= lo * k                                               # the feet on the ground
     c, s_ = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
-    px, pz = p[..., 0].copy(), p[..., 2].copy()
-    p[..., 0], p[..., 2] = c * px + s_ * pz, -s_ * px + c * pz
-    verts = np.concatenate([p, uv, lay[..., None]], -1).reshape(-1, 6).astype(np.float32)
+    turn = np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
+    place = np.zeros((3, 4))
+    place[:, :3] = turn @ (k * axes)
+    place[1, 3] = -lo * k                                              # the feet on the ground
+
+    clips = []
+    for name in motions:
+        parts = clip(model, name)
+        if not parts:
+            continue
+        frames, rate = max(m["frames"] for m in parts), parts[0]["rate"] or 1.0
+        data = np.stack([np.concatenate(local_pose(joints, parts, f / max(frames - 1, 1)), 1)
+                         for f in range(frames)]).astype(np.float32)
+        for f in range(1, frames):                                     # q and -q turn alike: keep each on
+            flip = (data[f, :, :4] * data[f - 1, :, :4]).sum(1) < 0    # the previous frame's side, so
+            data[f, flip, :4] *= -1                                    # frames blend the short way
+        clips.append({"name": name, "frames": frames, "rate": rate, "data": data,
+                      "speed": 0.0 if name == motions[0] else ground_speed(joints, verts, data, rate, place)})
+    if not clips:                                                      # no motion: the rest pose, held
+        q = np.array([j["rot"] for j in joints])
+        t = np.array([j["trans"] for j in joints])
+        data = np.concatenate([q, t, np.ones((len(joints), 3))], 1)[None].astype(np.float32)
+        clips.append({"name": "rest", "frames": 1, "rate": 1.0, "speed": 0.0, "data": data})
+
+    order = sorted(names, key=names.get)
     layers = np.stack([np.array(Image.fromarray(ps2_alpha(model["textures"][n]), "RGBA").resize((size, size), Image.LANCZOS))
-                       for n in names]) if names else np.zeros((1, size, size, 4), np.uint8)
-    return verts, layers
+                       for n in order]) if order else np.zeros((1, size, size, 4), np.uint8)
+    return {"verts": verts, "layers": layers, "place": place.astype(np.float32),
+            "parents": [j["parent"] for j in joints], "clips": clips}
+
+
+def skin_corners(verts: np.ndarray, world: np.ndarray) -> np.ndarray:
+    """pack's vertices placed by the joints' transforms (4x4, the model's space)."""
+    j0 = verts[:, 6].astype(int)
+    out = np.einsum("nij,nj->ni", world[j0, :3, :3], verts[:, 0:3]) + world[j0, :3, 3] * verts[:, 8:9]
+    two = verts[:, 7] >= 0
+    j1 = verts[two, 7].astype(int)
+    out[two] += np.einsum("nij,nj->ni", world[j1, :3, :3], verts[two, 3:6]) + world[j1, :3, 3] * verts[two, 9:10]
+    return out
+
+
+def ground_speed(joints: list[dict], verts: np.ndarray, data: np.ndarray, rate: float, place: np.ndarray,
+                 samples: int = 48) -> float:
+    """The speed over the ground a walking or running motion was made for, in the hunter's units a
+    second: it is played in place, so the sole on the ground slides back at that speed. The vertices
+    within 2 units of the lowest are the sole; its speed is taken over those on the ground in two
+    samples running."""
+    frames = len(data)
+    seconds = max(frames - 1, 1) / rate / 30.0
+    pos = []
+    for i in range(samples + 1):
+        x = i / samples * (frames - 1)
+        lo = min(int(x), max(frames - 2, 0))
+        f = x - lo
+        d = data[lo] * (1 - f) + data[min(lo + 1, frames - 1)] * f
+        q = d[:, :4] / np.linalg.norm(d[:, :4], axis=1, keepdims=True)
+        pos.append(skin_corners(verts, pose_world(joints, q, d[:, 4:7], d[:, 7:10])) @ place[:, :3].T)
+    pos = np.array(pos)                                                # samples+1 x corners x 3
+    down = pos[:, :, 1] < pos[:, :, 1].min(1, keepdims=True) + 2.0
+    v = []
+    for i in range(samples):
+        both = down[i] & down[i + 1]
+        if both.any():
+            d = pos[i + 1, both][:, [0, 2]] - pos[i, both][:, [0, 2]]
+            v.append(np.median(np.hypot(d[:, 0], d[:, 1])) / (seconds / samples))
+    return float(np.median(v)) if v else 0.0
 
 
 def ps2_alpha(img: np.ndarray) -> np.ndarray:
@@ -403,7 +579,7 @@ def main() -> int:
     print(f"{a.dat}: {len(model['skeletons'])} skeleton(s) "
           f"{[len(s) for s in model['skeletons']]} joints, {len(model['meshes'])} meshes "
           f"{[m['name'] for m in model['meshes']]}, {len(model['textures'])} textures, "
-          f"{len(model['motions'])} motions {model['motions'][:12]}")
+          f"{len(model['motions'])} motions {[m['name'] for m in model['motions']][:16]}")
     for e in model["errors"]:
         print("  could not read:", e)
     if a.cmd == "view":

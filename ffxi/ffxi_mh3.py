@@ -499,12 +499,14 @@ class App:
             import ffxi_model as FM
             from port_model import PortModel
             model = FM.load(FM.ffxi_root(self.cfg.get("ffxi_path")) / dat)
-            verts, layers = FM.pack(model, self.cfg.get("character_height", 175.0), self.cfg.get("character_yaw", 0.0),
-                                    self.cfg.get("character_mirror", True))
+            packed = FM.pack(model, self.cfg.get("character_height", 175.0), self.cfg.get("character_yaw", 0.0),
+                             self.cfg.get("character_mirror", True))
             pm = PortModel()
-            pm.send(verts, layers)
+            pm.send(packed)
             pm.set_flags(True, self.cfg.get("hide_hunter", True))
-            print(f"FFXI character: {dat}, {len(verts) // 3} triangles, {len(layers)} textures")
+            moves = ", ".join(f"{c['name']}" + (f" {c['speed']:.0f}/s" if c["speed"] else "") for c in packed["clips"])
+            print(f"FFXI character: {dat}, {len(packed['verts']) // 3} triangles, {len(packed['layers'])} textures, "
+                  f"{len(packed['parents'])} joints; motions {moves}")
             return pm
         except (Exception, SystemExit) as ex:                      # the layer runs without it
             print(f"[FFXI character unavailable: {ex}]")

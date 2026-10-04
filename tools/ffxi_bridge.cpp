@@ -405,23 +405,172 @@ void project_name(Block* b) {
 
 
 // ================================================================================================
-// FFXI's character in your hunter's place (ffxi/ffxi_model.py, port_model.py): the layer sends a model,
-// already in the hunter's own space (Y up, feet at 0, facing +Z), through its own block; the renderer
-// draws it into the scene (video_model_*) where the hunter stands, with the game's camera.
+// FFXI's character in your hunter's place (ffxi/ffxi_model.py, port_model.py): the layer sends a model
+// on its skeleton, with its motions, through its own block; the port poses it every frame (Animator:
+// standing, walking or running as fast as the hunter moves) and the renderer skins it and draws it into
+// the scene (video_model_*) where the hunter stands, with the game's camera.
 // ================================================================================================
-constexpr uint32_t kModelMagic = 0x4D48334D;     // 'MH3M'
-constexpr int kModelMaxVerts = 200000, kModelMaxLayers = 16, kModelTex = 256;
+constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 2;     // 'MH3M'
+constexpr int kModelMaxVerts = 100000, kModelVertFloats = 13, kModelMaxLayers = 16, kModelTex = 256;
+constexpr int kModelMaxJoints = 128, kModelMaxClips = 8, kModelPool = 1 << 20, kXf = 10;
+struct ModelClip {
+    uint32_t frames;        // keyframes
+    uint32_t first;         // its first float in the pool: frames x joints x (rotation x y z w, offset x y z, scale x y z)
+    float rate;             // keyframes a game frame (30 a second)
+    float speed;            // the ground speed it was made for, units a second; 0: standing
+};
 struct ModelBlock {
     uint32_t magic, version;
-    uint32_t serial;        // the layer bumps it once the mesh below is written
+    uint32_t serial;        // the layer bumps it once everything below is written
     uint32_t n_verts, layers, tex_w, tex_h;
     uint32_t flags;         // 1: draw it; 2: hide Monster Hunter's hunter
     uint32_t alive;         // the layer bumps it while it runs
-    uint32_t reserved[7];
-    float verts[kModelMaxVerts * 6];                      // x y z u v layer
+    uint32_t n_joints, n_clips;
+    uint32_t reserved[5];
+    float place[12];                                      // the model's space to the hunter's, 3x4 rows
+    int32_t parents[kModelMaxJoints];                     // -1: the root; a parent comes before its children
+    ModelClip clips[kModelMaxClips];                      // the first standing, the others moving
+    float verts[kModelMaxVerts * kModelVertFloats];       // video_model_mesh's corners
+    float pool[kModelPool];
     uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
 };
-static_assert(sizeof(ModelBlock) == 8994368, "ffxi/port_model.py mirrors this layout");
+static_assert(sizeof(ModelBlock) == 13589360, "ffxi/port_model.py mirrors this layout");
+
+// The character's motions, copied from the block when it changes, played by the hunter's speed: under
+// 15 units a second (30 to start) the standing one; moving, the one made for the nearest speed, played
+// that much faster or slower (a half to twice), so the feet keep pace with the ground. A change of
+// motion blends over a quarter of a second; walking and running share their place in the stride.
+struct Animator {
+    int nj = 0;
+    std::vector<int32_t> parents;
+    std::vector<ModelClip> clips;
+    std::vector<float> pool;
+    float place[12] = {};
+    int cur = 0, prev = -1;
+    float phase[kModelMaxClips] = {};
+    float blend = 1.0f;     // cur's share
+    float speed = 0.0f;     // the hunter's over the ground, smoothed
+    bool moving = false, have_last = false;
+    float last_x = 0, last_z = 0;
+    std::vector<float> a, b, rows;
+
+    bool load(const ModelBlock* mb) {
+        nj = (int)std::min<uint32_t>(mb->n_joints, kModelMaxJoints);
+        parents.assign(mb->parents, mb->parents + nj);
+        std::memcpy(place, mb->place, sizeof place);
+        clips.clear();
+        pool.clear();
+        for (uint32_t c = 0; c < std::min<uint32_t>(mb->n_clips, kModelMaxClips); ++c) {
+            ModelClip k = mb->clips[c];
+            size_t n = (size_t)k.frames * nj * kXf;
+            if (!k.frames || k.first > (uint32_t)kModelPool || n > (size_t)kModelPool - k.first || !(k.rate > 0)) break;
+            uint32_t at = (uint32_t)pool.size();
+            pool.insert(pool.end(), mb->pool + k.first, mb->pool + k.first + n);
+            k.first = at;
+            clips.push_back(k);
+        }
+        cur = 0, prev = -1, blend = 1.0f;
+        std::fill(std::begin(phase), std::end(phase), 0.0f);
+        a.assign((size_t)nj * kXf, 0.0f), b = a, rows.assign((size_t)nj * 12, 0.0f);
+        return nj > 0 && !clips.empty();
+    }
+
+    // one clip at phase 0..1: keyframes interpolated (rotations the short way, renormalised)
+    void sample(int c, float ph, float* out) const {
+        const ModelClip& k = clips[c];
+        int last = (int)k.frames - 1;
+        float pos = ph * (float)last;
+        int lo = std::min((int)pos, std::max(last - 1, 0)), hi = std::min(lo + 1, last);
+        float f = pos - (float)lo;
+        const float* p = &pool[k.first + (size_t)lo * nj * kXf];
+        const float* q = &pool[k.first + (size_t)hi * nj * kXf];
+        for (int i = 0; i < nj * kXf; i += kXf) mix(p + i, q + i, f, out + i);
+    }
+
+    static void mix(const float* p, const float* q, float f, float* out) {
+        float d = p[0] * q[0] + p[1] * q[1] + p[2] * q[2] + p[3] * q[3], g = d < 0 ? -f : f, n = 0;
+        for (int i = 0; i < 4; ++i) out[i] = p[i] * (1 - f) + q[i] * g, n += out[i] * out[i];
+        n = n > 0 ? 1.0f / std::sqrt(n) : 1.0f;
+        for (int i = 0; i < 4; ++i) out[i] *= n;
+        for (int i = 4; i < kXf; ++i) out[i] = p[i] * (1 - f) + q[i] * f;
+    }
+
+    // dt seconds on, the hunter at x, z: each joint's 3x4 in the model's space, into rows
+    void step(float dt, bool hunter, float x, float z) {
+        if (hunter && have_last && dt > 0) {
+            float v = std::hypot(x - last_x, z - last_z) / dt;
+            if (v > 3000.0f) v = speed;                              // a jump to elsewhere (an area loaded)
+            speed += (v - speed) * std::min(1.0f, dt / 0.15f);
+        }
+        if (!hunter) speed = 0;
+        have_last = hunter, last_x = x, last_z = z;
+        moving = moving ? speed > 15.0f : speed > 30.0f;
+        int want = 0;
+        float best = 1e9f;
+        for (int c = 1; moving && c < (int)clips.size(); ++c) {
+            if (!(clips[c].speed > 0)) continue;
+            float d = std::fabs(std::log(speed / clips[c].speed));
+            if (d < best) best = d, want = c;
+        }
+        if (want != cur) {
+            phase[want] = want && cur ? phase[cur] : 0.0f;
+            prev = cur, cur = want, blend = 0.0f;
+        }
+        for (int c : {cur, prev}) {
+            if (c < 0) continue;
+            const ModelClip& k = clips[c];
+            float pace = k.speed > 0 ? std::clamp(speed / k.speed, 0.5f, 2.0f) : 1.0f;
+            phase[c] += dt * 30.0f * k.rate * pace / (float)std::max<uint32_t>(k.frames - 1, 1);
+            phase[c] -= std::floor(phase[c]);
+        }
+        blend = std::min(1.0f, blend + dt / 0.25f);
+        if (blend >= 1.0f) prev = -1;
+        sample(cur, phase[cur], a.data());
+        if (prev >= 0) {
+            sample(prev, phase[prev], b.data());
+            for (int i = 0; i < nj * kXf; i += kXf) mix(b.data() + i, a.data() + i, blend, a.data() + i);
+        }
+        chain();
+    }
+
+    // parents first: a joint's offset scaled by its parent's scale and turned by its rotation, rotations
+    // chained, scales multiplied; its matrix the rotation times its scale, and its place
+    void chain() {
+        std::vector<float> rot((size_t)nj * 9), pos((size_t)nj * 3), scl((size_t)nj * 3);
+        for (int i = 0; i < nj; ++i) {
+            const float* t = &a[(size_t)i * kXf];
+            float x = t[0], y = t[1], z = t[2], w = t[3];
+            float r[9] = {1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+                          2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+                          2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)};
+            float* R = &rot[(size_t)i * 9];
+            float* P = &pos[(size_t)i * 3];
+            float* S = &scl[(size_t)i * 3];
+            int p = parents[i];
+            if (p < 0 || p >= i) {
+                std::memcpy(R, r, sizeof r);
+                for (int k = 0; k < 3; ++k) P[k] = t[4 + k], S[k] = t[7 + k];
+            } else {
+                const float* PR = &rot[(size_t)p * 9];
+                const float* PP = &pos[(size_t)p * 3];
+                const float* PS = &scl[(size_t)p * 3];
+                float o[3] = {PS[0] * t[4], PS[1] * t[5], PS[2] * t[6]};
+                for (int k = 0; k < 3; ++k) {
+                    P[k] = PP[k] + PR[k * 3] * o[0] + PR[k * 3 + 1] * o[1] + PR[k * 3 + 2] * o[2];
+                    S[k] = PS[k] * t[7 + k];
+                    for (int m = 0; m < 3; ++m)
+                        R[k * 3 + m] = PR[k * 3] * r[m] + PR[k * 3 + 1] * r[3 + m] + PR[k * 3 + 2] * r[6 + m];
+                }
+            }
+            float* out = &rows[(size_t)i * 12];
+            for (int k = 0; k < 3; ++k) {
+                for (int m = 0; m < 3; ++m) out[k * 4 + m] = R[k * 3 + m] * S[m];
+                out[k * 4 + 3] = P[k];
+            }
+        }
+    }
+};
+Animator g_anim;
 
 std::mutex g_hunter_mx;
 float g_hunter_mtx[12];                 // the hunter model's world matrix, rows
@@ -486,10 +635,20 @@ void hook_scn_world(PPCContext& c) {
     }
 }
 
+// 3x4 rows, as 4x4 with a last row 0 0 0 1: out = a b
+void mul34(const float* a, const float* b, float* out) {
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 4; ++c)
+            out[r * 4 + c] = a[r * 4] * b[c] + a[r * 4 + 1] * b[4 + c] + a[r * 4 + 2] * b[8 + c] + (c == 3 ? a[r * 4 + 3] : 0.0f);
+}
+
 void serve_model(ModelBlock* mb) {
     static uint32_t shown = 0, alive = 0;
-    static auto last_alive = std::chrono::steady_clock::time_point{};
+    static bool loaded = false;
+    static auto last_alive = std::chrono::steady_clock::time_point{}, last_step = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
+    float dt = std::clamp(std::chrono::duration<float>(now - last_step).count(), 0.0f, 0.1f);
+    last_step = now;
     if (mb->alive != alive) { alive = mb->alive; last_alive = now; }
     bool up = now - last_alive < std::chrono::seconds(3);
     if (mb->serial != shown) {
@@ -497,10 +656,13 @@ void serve_model(ModelBlock* mb) {
         shown = mb->serial;
         uint32_t n = std::min<uint32_t>(mb->n_verts, kModelMaxVerts);
         uint32_t layers = std::min<uint32_t>(mb->layers, kModelMaxLayers);
-        if (mb->tex_w == (uint32_t)kModelTex && mb->tex_h == (uint32_t)kModelTex)
+        loaded = g_anim.load(mb);
+        if (loaded && mb->tex_w == (uint32_t)kModelTex && mb->tex_h == (uint32_t)kModelTex)
             video_model_mesh(mb->verts, (int)n, mb->tex, (int)layers, kModelTex, kModelTex);
+        rt_log("ffxi: a character: %u corners, %d joints, %zu motions%s", n, g_anim.nj, g_anim.clips.size(),
+               loaded ? "" : " (not drawn: no joints or motions)");
     }
-    g_hide_hunter.store(up && (mb->flags & 2), std::memory_order_relaxed);
+    g_hide_hunter.store(up && loaded && (mb->flags & 2), std::memory_order_relaxed);
     float view[12], proj[6], h[12];
     bool have;
     {
@@ -509,14 +671,16 @@ void serve_model(ModelBlock* mb) {
         std::memcpy(h, g_hunter_mtx, sizeof h);
     }
     uint32_t pl = object(kBasePlayer), cam = follow_camera(pl);
-    bool visible = up && (mb->flags & 1) && have && cam && pl;
+    bool visible = up && loaded && (mb->flags & 1) && have && cam && pl;
+    if (loaded) {
+        g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
+        video_model_joints(g_anim.rows.data(), g_anim.nj);
+    }
     if (visible) {
-        float v[12];
+        float v[12], hp[12];
         for (int i = 0; i < 12; ++i) v[i] = f32(cam + 4 * i);
-        for (int r = 0; r < 3; ++r)                           // the camera's view, then the hunter's place
-            for (int col = 0; col < 4; ++col)
-                view[r * 4 + col] = v[r * 4] * h[col] + v[r * 4 + 1] * h[4 + col] + v[r * 4 + 2] * h[8 + col]
-                                    + (col == 3 ? v[r * 4 + 3] : 0.0f);
+        mul34(h, g_anim.place, hp);                           // the model's space to the hunter's, to the world's
+        mul34(v, hp, view);                                   // then the camera's
         const int pi[6] = {0, 2, 5, 6, 10, 11};               // GX's six: P00 P02 P11 P12 P22 P23
         for (int i = 0; i < 6; ++i) proj[i] = f32(cam + 0x30 + 4 * pi[i]);
         static bool told = false;
@@ -614,7 +778,7 @@ void install() {
                                        L"mh3-ffxi-model")) {
         mb = static_cast<ModelBlock*>(MapViewOfFile(mh, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ModelBlock)));
         if (mb) {
-            mb->version = 1;
+            mb->version = kModelVersion;
             mb->magic = kModelMagic;
         }
     }
