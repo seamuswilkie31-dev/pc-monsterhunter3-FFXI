@@ -1,0 +1,154 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy>=1.26", "pillow>=10", "pynput>=1.7", "dolphin-memory-engine>=1.3"]
+# ///
+"""The launcher: your FFXI's assets first, then Monster Hunter Tri with the FFXI layer.
+
+    uv run launcher.py          (or double-click "Play FFXI-MH3.bat" in the repository)
+
+1. FFXI's interface art comes from your own installation of FINAL FANTASY XI (Square Enix's official
+   download, playonline.com): point the launcher at its folder, and it catalogues and extracts what the
+   layer uses into your local asset folder (ffxi_assets.py). Nothing of FFXI is in the repository, and
+   nothing extracted goes into it. Without them, the layer draws its own lookalike.
+2. Play: the port (build/recomp-build/wiiboot.exe) with the bridge and Monster Hunter's HUD switched
+   off, then the layer; closing the game closes the layer.
+
+Its own settings (the FFXI folder) live beside the extracted assets, not in the repository.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import threading
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, ttk
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+sys.path.insert(0, str(HERE))
+import ffxi_assets as A  # noqa: E402
+
+SETTINGS = A.asset_dir() / "launcher.json"
+DEFAULT_FFXI = [Path(r"C:\Program Files (x86)\PlayOnline\SquareEnix\FINAL FANTASY XI"),
+                Path(r"C:\Program Files\PlayOnline\SquareEnix\FINAL FANTASY XI")]
+MSYS = Path(r"C:\msys64\mingw64\bin")
+
+
+def load_settings() -> dict:
+    try:
+        return json.loads(SETTINGS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(s: dict) -> None:
+    SETTINGS.write_text(json.dumps(s, indent=1), encoding="utf-8")
+
+
+def assets_ready() -> bool:
+    return (A.asset_dir() / A.CATALOGUE).exists()
+
+
+class Launcher:
+    def __init__(self):
+        self.s = load_settings()
+        if not self.s.get("ffxi"):
+            self.s["ffxi"] = next((str(p) for p in DEFAULT_FFXI if (p / "ROM").is_dir()), "")
+        self.root = tk.Tk()
+        self.root.title("FFXI-MH3")
+        self.root.configure(bg="#0b1030")
+        self.root.resizable(False, False)
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        for w in ("TLabel", "TCheckbutton"):
+            style.configure(w, background="#0b1030", foreground="#e8ecf6", font=("Segoe UI", 10))
+        style.configure("Head.TLabel", font=("Segoe UI", 14, "bold"))
+        style.configure("TButton", font=("Segoe UI", 10, "bold"))
+        f = ttk.Frame(self.root, padding=16, style="TLabel")
+        f.pack()
+        ttk.Label(f, text="Monster Hunter Tri  ×  FINAL FANTASY XI", style="Head.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(f, text="1. Your FFXI installation (the folder holding ROM):").grid(row=1, column=0, columnspan=3, sticky="w", pady=(12, 2))
+        self.path = tk.StringVar(value=self.s["ffxi"])
+        ttk.Entry(f, textvariable=self.path, width=62).grid(row=2, column=0, columnspan=2, sticky="we")
+        ttk.Button(f, text="Browse…", command=self.browse).grid(row=2, column=2, padx=(6, 0))
+        self.extract_btn = ttk.Button(f, text="Extract FFXI interface assets", command=self.extract)
+        self.extract_btn.grid(row=3, column=0, sticky="w", pady=6)
+        self.asset_state = tk.StringVar()
+        ttk.Label(f, textvariable=self.asset_state).grid(row=3, column=1, columnspan=2, sticky="w")
+        ttk.Label(f, text="2. Play:").grid(row=4, column=0, sticky="w", pady=(12, 2))
+        self.hide_hud = tk.BooleanVar(value=self.s.get("hide_hud", True))
+        ttk.Checkbutton(f, text="Hide Monster Hunter's HUD (the FFXI interface replaces it)",
+                        variable=self.hide_hud).grid(row=5, column=0, columnspan=3, sticky="w")
+        self.play_btn = ttk.Button(f, text="Play", command=self.play)
+        self.play_btn.grid(row=6, column=0, sticky="w", pady=8)
+        self.status = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=7, column=0, columnspan=3, sticky="w")
+        self.refresh()
+
+    def browse(self):
+        d = filedialog.askdirectory(title="Your FINAL FANTASY XI folder (it holds ROM)",
+                                    initialdir=self.path.get() or "C:/")
+        if d:
+            self.path.set(d)
+
+    def refresh(self):
+        if assets_ready():
+            n = len(A.load_catalogue()["images"])
+            self.asset_state.set(f"ready: {n} images catalogued in {A.asset_dir()}")
+        else:
+            self.asset_state.set("not yet: the layer draws its own lookalike until then")
+
+    def extract(self):
+        p = Path(self.path.get())
+        if not (p / "ROM").is_dir():
+            self.status.set(f"{p} has no ROM folder. Point at the FINAL FANTASY XI folder of your installation.")
+            return
+        self.s["ffxi"] = str(p)
+        save_settings(self.s)
+        self.extract_btn.state(["disabled"])
+        self.status.set("Cataloguing FFXI's images: a few minutes…")
+
+        def work():
+            r = subprocess.run([sys.executable, str(HERE / "ffxi_assets.py"), "scan", str(p)],
+                               capture_output=True, text=True)
+            msg = (r.stdout.strip().splitlines() or [""])[-1] if r.returncode == 0 else (r.stderr.strip() or "failed")
+            self.root.after(0, lambda: (self.status.set(msg), self.extract_btn.state(["!disabled"]), self.refresh()))
+        threading.Thread(target=work, daemon=True).start()
+
+    def play(self):
+        exe = ROOT / "build" / "recomp-build" / "wiiboot.exe"
+        run = ROOT / "build" / "run1"
+        if not exe.exists():
+            self.status.set(f"The port isn't built: {exe} is missing (see the repository's README).")
+            return
+        self.s["hide_hud"] = self.hide_hud.get()
+        save_settings(self.s)
+        run.mkdir(parents=True, exist_ok=True)
+        env = dict(os.environ, MH3_FFXI="1")
+        if self.hide_hud.get():
+            env["MH3_HIDE_HUD"] = "1"
+        if MSYS.is_dir():
+            env["PATH"] = f"{MSYS};{env.get('PATH', '')}"
+        game = subprocess.Popen([str(exe), "../extract", "--symbols", "../recomp/symbols.tsv"], cwd=run, env=env,
+                                stdout=open(run / "wiiboot.log", "w"), stderr=subprocess.STDOUT)
+        layer = subprocess.Popen([sys.executable, str(HERE / "ffxi_mh3.py")], cwd=HERE,
+                                 stdout=open(run / "ffxi.log", "w"), stderr=subprocess.STDOUT)
+        self.play_btn.state(["disabled"])
+        self.status.set("Playing. Closing the game closes the FFXI layer.")
+
+        def wait():
+            game.wait()
+            layer.terminate()
+            self.root.after(0, lambda: (self.status.set(f"The game closed (exit {game.returncode})."),
+                                        self.play_btn.state(["!disabled"])))
+        threading.Thread(target=wait, daemon=True).start()
+
+    def run(self):
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    Launcher().run()
