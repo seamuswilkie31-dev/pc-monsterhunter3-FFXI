@@ -494,13 +494,16 @@ CAST_MOTIONS = {"white": "mw", "black": "mb", "ninjutsu": "mn", "summoning": "ms
                 "blue": "mb", "geomancy": "mw"}
 
 
-def load_character(root: Path, race: str, look: dict, weapon: str = "sword", file_path=None) -> dict:
+def load_character(root: Path, race: str, look: dict, weapon: str = "sword", file_path=None,
+                   loader=None, motions: bool = True) -> dict:
     """A player character: the race's skeleton, its equipment's meshes and textures (look: slot ->
-    model number), and its motions as pack's clips (character_clips)."""
+    model number), and its motions as pack's clips (character_clips; motions False: none). loader:
+    load, or one that keeps what it read (character.py's previews)."""
     import ffxi_sound as S
     file_path = file_path or S.file_path
+    load_ = loader or load
     r = RACES[race]
-    base = load(root / r["skeleton"])
+    base = load_(root / r["skeleton"])
     model = {"skeletons": base["skeletons"], "meshes": [], "textures": {}, "motions": [], "errors": []}
     for slot in SLOTS:
         if slot not in look or look[slot] is None:
@@ -509,13 +512,15 @@ def load_character(root: Path, race: str, look: dict, weapon: str = "sword", fil
         if not p or not p.exists():
             model["errors"].append(f"{slot} {look[slot]}: no file")
             continue
-        part = load(p)
+        part = load_(p)
         model["meshes"] += part["meshes"]
         model["textures"].update(part["textures"])
         model["errors"] += part["errors"]
-    own = [load(root / f)["motions"] for f in r["motions"]]
+    if not motions:
+        return model
+    own = [load_(root / f)["motions"] for f in r["motions"]]
     w = r["weapons"].get(weapon)
-    arms = [load(root / f)["motions"] for f in w[:2]] if w else []
+    arms = [load_(root / f)["motions"] for f in w[:2]] if w else []
     model["clips"] = character_clips(own, arms, w[2] if w else "")
     return model
 

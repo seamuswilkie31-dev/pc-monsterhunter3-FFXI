@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy>=1.26", "pillow>=10", "pynput>=1.7", "dolphin-memory-engine>=1.3"]
+# dependencies = ["numpy>=1.26", "pillow>=10", "pynput>=1.7", "dolphin-memory-engine>=1.3", "sounddevice>=0.4"]
 # ///
 """The launcher: your FFXI's assets first, then Monster Hunter Tri with the FFXI layer.
 
@@ -10,7 +10,8 @@
    download, playonline.com): point the launcher at its folder, and it catalogues and extracts what the
    layer uses into your local asset folder (ffxi_assets.py). Nothing of FFXI is in the repository, and
    nothing extracted goes into it. Without them, the layer draws its own lookalike.
-2. Play: the port (build/recomp-build/wiiboot.exe) with the bridge and Monster Hunter's HUD switched
+2. Your character (character.py): FFXI's race, face and equipment for the one in your hunter's place.
+3. Play: the port (build/recomp-build/wiiboot.exe) with the bridge and Monster Hunter's HUD switched
    off, then the layer; closing the game closes the layer.
 
 Its own settings (the FFXI folder) live beside the extracted assets, not in the repository.
@@ -78,14 +79,16 @@ class Launcher:
         self.extract_btn.grid(row=3, column=0, sticky="w", pady=6)
         self.asset_state = tk.StringVar()
         ttk.Label(f, textvariable=self.asset_state).grid(row=3, column=1, columnspan=2, sticky="w")
-        ttk.Label(f, text="2. Play:").grid(row=4, column=0, sticky="w", pady=(12, 2))
+        ttk.Label(f, text="2. Your character: race, face and equipment").grid(row=4, column=0, columnspan=3, sticky="w", pady=(12, 2))
+        ttk.Button(f, text="Character…", command=self.character).grid(row=5, column=0, sticky="w")
+        ttk.Label(f, text="3. Play:").grid(row=6, column=0, sticky="w", pady=(12, 2))
         self.hide_hud = tk.BooleanVar(value=self.s.get("hide_hud", True))
         ttk.Checkbutton(f, text="Hide Monster Hunter's HUD (the FFXI interface replaces it)",
-                        variable=self.hide_hud).grid(row=5, column=0, columnspan=3, sticky="w")
+                        variable=self.hide_hud).grid(row=7, column=0, columnspan=3, sticky="w")
         self.play_btn = ttk.Button(f, text="Play", command=self.play)
-        self.play_btn.grid(row=6, column=0, sticky="w", pady=8)
+        self.play_btn.grid(row=8, column=0, sticky="w", pady=8)
         self.status = tk.StringVar(value="")
-        ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=7, column=0, columnspan=3, sticky="w")
+        ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=9, column=0, columnspan=3, sticky="w")
         self.refresh()
 
     def browse(self):
@@ -93,6 +96,14 @@ class Launcher:
                                     initialdir=self.path.get() or "C:/")
         if d:
             self.path.set(d)
+
+    def character(self):
+        p = Path(self.path.get())
+        if not (p / "ROM").is_dir():
+            self.status.set(f"{p} has no ROM folder. Point at the FINAL FANTASY XI folder of your installation first.")
+            return
+        import character as C
+        C.Creator(self.root)
 
     def refresh(self):
         if assets_ready():
