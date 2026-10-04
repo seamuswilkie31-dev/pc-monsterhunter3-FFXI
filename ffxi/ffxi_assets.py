@@ -11,6 +11,7 @@ repository. Install FINAL FANTASY XI from Square Enix's official download (playo
                             # every image in every DAT, catalogued (name, size, format, where)
     uv run ffxi_assets.py sheets            # contact sheets of the catalogue, to find what is what
     uv run ffxi_assets.py export NAME...    # images to PNG, by catalogue name (or a regex with --re)
+    uv run ffxi_assets.py ui                # the pieces the layer's interface uses (window themes, the glove)
 
 Everything goes to the local asset folder (%LOCALAPPDATA%/ffxi-mh3/assets, or FFXI_MH3_ASSETS), never
 into the repository. The layer's interface uses what is there, and draws its own lookalike without it.
@@ -19,7 +20,7 @@ The DAT format, as the community's tools read it: a file is a sequence of chunks
 header: a 4-character name, then a little-endian word whose low 7 bits are the chunk's type and the
 rest its size in 16-byte units (header included). Type 0x20 is an image: a format byte, a 16-character
 category and name, a BITMAPINFOHEADER, then the pixels: DXT1/DXT3 ("1TXD"/"3TXD", the FourCC
-reversed), 8-bit indices after a 256-colour BGRA palette, or 32-bit BGRA, rows bottom first.
+reversed, then the data's size and one more word), 8-bit indices after a 256-colour BGRA palette, or 32-bit BGRA, rows bottom first.
 """
 from __future__ import annotations
 
@@ -80,7 +81,7 @@ def image_info(b: bytes, at: int, size: int) -> dict | None:
     four = b[px:px + 4]
     if four in (b"1TXD", b"3TXD", b"5TXD"):
         info["fmt"] = "DXT" + chr(four[0])
-        info["px"] = px + 4 + 4 + 8              # the FourCC, a size, 8 bytes of something
+        info["px"] = px + 12                     # the FourCC, the data's size, one more word
     elif bits == 8:
         info["fmt"], info["px"] = "P8", px
     elif bits == 32:
@@ -240,6 +241,39 @@ def cmd_export(a) -> int:
     return 0
 
 
+# The pieces the layer's interface uses, by role: (file, category, name) in your installation.
+# The window themes are FFXI's selectable window types, one file each.
+UI_PIECES = {
+    "pointer": ("ROM/0/1.DAT", "menu", "yubi"),       # the glove
+    "gauge": ("ROM/0/1.DAT", "menu", "gauge"),
+    "compass": ("ROM/0/1.DAT", "menu", "compass"),
+    "font_small": ("ROM/0/1.DAT", "font", "font"),
+    "font_dg": ("ROM/0/1.DAT", "other", "dg_font"),
+}
+for _t, _f in enumerate(range(14, 20), 1):
+    for _role, _name in (("bg", "newtex"), ("corner", "corner"), ("hfr", "hfr1"), ("vfr", "vfr1")):
+        UI_PIECES[f"theme{_t}_{_role}"] = (f"ROM/0/{_f}.DAT", "menu", _name)
+
+
+def cmd_ui(a) -> int:
+    """The interface's pieces, by role, to the local asset folder's ui/: what ffxi_ui.py loads."""
+    from PIL import Image
+    c = load_catalogue()
+    root = Path(c["root"])
+    out = asset_dir() / "ui"
+    out.mkdir(exist_ok=True)
+    found = 0
+    for role, (f, cat, name) in UI_PIECES.items():
+        e = next((i for i in c["images"] if i["file"] == f and i["cat"] == cat and i["name"] == name), None)
+        if not e:
+            print(f"  missing: {role} ({f} {cat} {name})")
+            continue
+        Image.fromarray(image_of(root, e), "RGBA").save(out / f"{role}.png")
+        found += 1
+    print(f"{found} of {len(UI_PIECES)} interface pieces -> {out}")
+    return 0 if found else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -250,8 +284,9 @@ def main() -> int:
     e = sub.add_parser("export")
     e.add_argument("names", nargs="+")
     e.add_argument("--re", action="store_true", help="the names are regexes")
+    sub.add_parser("ui", help="the interface's pieces, for the layer")
     a = ap.parse_args()
-    return {"scan": cmd_scan, "sheets": cmd_sheets, "export": cmd_export}[a.cmd](a)
+    return {"scan": cmd_scan, "sheets": cmd_sheets, "export": cmd_export, "ui": cmd_ui}[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -114,6 +114,8 @@ class Launcher:
         def work():
             r = subprocess.run([sys.executable, str(HERE / "ffxi_assets.py"), "scan", str(p)],
                                capture_output=True, text=True)
+            if r.returncode == 0:                      # then the pieces the interface uses
+                r = subprocess.run([sys.executable, str(HERE / "ffxi_assets.py"), "ui"], capture_output=True, text=True)
             msg = (r.stdout.strip().splitlines() or [""])[-1] if r.returncode == 0 else (r.stderr.strip() or "failed")
             self.root.after(0, lambda: (self.status.set(msg), self.extract_btn.state(["!disabled"]), self.refresh()))
         threading.Thread(target=work, daemon=True).start()

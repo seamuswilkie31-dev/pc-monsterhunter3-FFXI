@@ -14,6 +14,7 @@ over the game's picture (port_overlay.py).
 """
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,72 @@ def font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default(size)
 
 
+def ui_assets() -> Path:
+    """Where your own FFXI's interface pieces are (ffxi_assets.py ui): never in the repository."""
+    d = os.environ.get("FFXI_MH3_ASSETS") or Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ffxi-mh3" / "assets"
+    return Path(d) / "ui"
+
+
+class Skin:
+    """FFXI's own window theme and pointer, from your installation: a window is nine slices, the
+    corner piece's quarters, the edges' halves, the background tiled; FFXI's windows are a little
+    see-through."""
+
+    def __init__(self, folder: Path, theme: int = 1, bg_scale: int = 2, alpha: float = 0.88):
+        def load(name):
+            return Image.open(folder / f"{name}.png").convert("RGBA")
+        bg = load(f"theme{theme}_bg")
+        self.bg = bg.resize((bg.width * bg_scale, bg.height * bg_scale), Image.NEAREST)
+        self.bg.putalpha(self.bg.getchannel("A").point(lambda v: int(v * alpha)))
+        corner, hfr, vfr = load(f"theme{theme}_corner"), load(f"theme{theme}_hfr"), load(f"theme{theme}_vfr")
+        q = self.q = corner.width // 2
+        self.tl, self.tr = corner.crop((0, 0, q, q)), corner.crop((q, 0, 2 * q, q))
+        self.bl, self.br = corner.crop((0, q, q, 2 * q)), corner.crop((q, q, 2 * q, 2 * q))
+        self.top, self.bottom = hfr.crop((0, 0, hfr.width, q)), hfr.crop((0, q, hfr.width, 2 * q))
+        self.left, self.right = vfr.crop((0, 0, q, vfr.height)), vfr.crop((q, 0, 2 * q, vfr.height))
+        self.pointer = load("pointer").resize((24, 24), Image.LANCZOS)
+        self._cache: dict = {}                          # a window's layer by its size
+
+    def frame(self, img: Image.Image, box: tuple[int, int, int, int]) -> None:
+        x0, y0, x1, y1 = box
+        w, h = x1 - x0, y1 - y0
+        layer = self._cache.get((w, h))
+        if layer is None:
+            if len(self._cache) > 64:
+                self._cache.clear()
+            layer = self._cache[(w, h)] = self._layer(w, h)
+        img.alpha_composite(layer, (x0, y0))
+
+    def _layer(self, w: int, h: int) -> Image.Image:
+        q = self.q
+        layer = Image.new("RGBA", (w, h))
+        inset = 3                                       # the background stops under the frame
+        for ty in range(inset, h - inset, self.bg.height):
+            for tx in range(inset, w - inset, self.bg.width):
+                tile = self.bg.crop((0, 0, min(self.bg.width, w - inset - tx), min(self.bg.height, h - inset - ty)))
+                layer.alpha_composite(tile, (tx, ty))
+        for tx in range(q, w - q, self.top.width):     # the edges between the corners
+            cw = min(self.top.width, w - q - tx)
+            layer.alpha_composite(self.top.crop((0, 0, cw, q)), (tx, 0))
+            layer.alpha_composite(self.bottom.crop((0, 0, cw, q)), (tx, h - q))
+        for ty in range(q, h - q, self.left.height):
+            ch = min(self.left.height, h - q - ty)
+            layer.alpha_composite(self.left.crop((0, 0, q, ch)), (0, ty))
+            layer.alpha_composite(self.right.crop((0, 0, q, ch)), (w - q, ty))
+        layer.alpha_composite(self.tl, (0, 0))
+        layer.alpha_composite(self.tr, (w - q, 0))
+        layer.alpha_composite(self.bl, (0, h - q))
+        layer.alpha_composite(self.br, (w - q, h - q))
+        return layer
+
+
+def load_skin(theme: int = 1):
+    try:
+        return Skin(ui_assets(), theme)
+    except (OSError, ValueError):
+        return None                                     # not extracted: our own lookalike
+
+
 @dataclass
 class UiState:
     """What the interface shows; everything a frame depends on."""
@@ -71,7 +138,8 @@ class UiState:
 
 
 class FfxiUi:
-    def __init__(self):
+    def __init__(self, theme: int = 1, use_assets: bool = True):
+        self.skin = load_skin(theme) if use_assets else None
         self.f_name = font(17)
         self.f_val = font(15)
         self.f_small = font(13)
@@ -106,6 +174,9 @@ class FfxiUi:
 
     # --- pieces -----------------------------------------------------------------------------------
     def window(self, img: Image.Image, box: tuple[int, int, int, int]) -> None:
+        if self.skin:
+            self.skin.frame(img, box)
+            return
         x0, y0, x1, y1 = box
         w, h = x1 - x0, y1 - y0
         grad = Image.new("RGBA", (w, h))
@@ -214,7 +285,7 @@ class FfxiUi:
             label_w = max([int(d.textlength(t, font=self.f_val)) for t, _, _ in rows]
                           + [int(d.textlength(title, font=self.f_small))])
             detail_w = max([int(d.textlength(x, font=self.f_small)) for _, _, x in rows if x] + [0])
-            width = 44 + label_w + (detail_w + 16 if detail_w else 0) + (12 if up or down else 0)
+            width = (50 if self.skin else 44) + label_w + (detail_w + 16 if detail_w else 0) + (12 if up or down else 0)
             x0 = x1 - width
             y0 = y1 - (34 + 22 * max(1, len(rows)))
             self.window(img, (x0, y0, x1, y1))
@@ -225,10 +296,14 @@ class FfxiUi:
                 self._text(d, (x1 - 10, y1 - 20), DOWN, self.f_small, DIM, anchor="ra")
             for i, (label, ok, detail) in enumerate(rows):
                 y = y0 + 28 + 22 * i
+                indent = 34 if self.skin else 28
                 if i == cursor:
-                    d.rectangle([x0 + 6, y - 2, x1 - 7, y + 18], fill=(70, 90, 160, 150))
-                    _menu_pointer(d, x0 + 10, y + 3)
-                self._text(d, (x0 + 28, y), label, self.f_val, WHITE if ok else DIM)
+                    if self.skin:                       # FFXI's glove, and nothing else
+                        img.alpha_composite(self.skin.pointer, (x0 + 6, y - 3))
+                    else:
+                        d.rectangle([x0 + 6, y - 2, x1 - 7, y + 18], fill=(70, 90, 160, 150))
+                        _menu_pointer(d, x0 + 10, y + 3)
+                self._text(d, (x0 + indent, y), label, self.f_val, WHITE if ok else DIM)
                 if detail:
                     self._text(d, (x1 - (24 if up or down else 12), y + 2), detail, self.f_small,
                                KIND["magic"] if ok else DIM, anchor="ra")
@@ -282,7 +357,7 @@ if __name__ == "__main__":
     import sys
     out = sys.argv[1] if len(sys.argv) > 1 else "ffxi_ui_demo.png"
     t = time.perf_counter()
-    img = FfxiUi().render(demo())
+    img = FfxiUi(theme=int(sys.argv[2]) if len(sys.argv) > 2 else 1).render(demo())
     print(f"rendered in {1000 * (time.perf_counter() - t):.1f} ms")
     bg = Image.new("RGBA", (W, H), (88, 110, 70, 255))
     bg.alpha_composite(img)

@@ -490,7 +490,7 @@ class App:
         """The FFXI interface drawn in the game's window, through the port (port_overlay.py)."""
         import ffxi_ui as U
         from port_overlay import PortOverlay
-        out, ui = PortOverlay(), U.FfxiUi()
+        out, ui = PortOverlay(), U.FfxiUi(self.cfg.get("window_theme", 1), self.cfg.get("ffxi_assets", True))
         start, last_draw = time.monotonic(), 0.0
         print("FFXI interface: in the game's window. Ctrl+C to stop.")
         try:
