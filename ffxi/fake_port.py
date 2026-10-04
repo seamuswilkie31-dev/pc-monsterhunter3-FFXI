@@ -256,6 +256,7 @@ def test() -> int:
     # the command menu, driven as the pad would, through the layer's app
     import ffxi_mh3 as M
     cfg = tomllib.loads(CONFIG)
+    cfg["equipment"] = False                              # the menu as it is without the item database
     app = M.App(M.Engine("RDM", "sword_and_shield", 150, levels={"RDM": 20}), P.PortBackend(cfg["addresses"]), cfg)
     serve_once(mm, ram)
     app.step()

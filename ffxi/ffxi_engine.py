@@ -87,6 +87,10 @@ class Engine:
     times: list = field(default_factory=list)        # when each was said (time.monotonic)
     said: int = 0
     dirty: bool = False                              # progress (levels, EXP, jobs) changed: save it
+    inventory: list = field(default_factory=list)    # FFXI items held: their ids (ffxi_items), a repeat a second one
+    equipment: dict = field(default_factory=dict)    # slot -> the item id worn there
+    gear: dict = field(default_factory=dict)         # the equipment's stats summed (set_gear): DEF, STR, HP...
+    gear_effects: dict = field(default_factory=dict) # what they do, as effects (gear_effect)
 
     def __post_init__(self):
         self.set_jobs(self.job, self.sub)
@@ -132,7 +136,9 @@ class Engine:
         mp = D.mp_at(self.job, self.level)
         if self.sub:
             mp += D.mp_at(self.sub, self.sub_level) // 2
-        return mp
+        if mp:
+            mp += int(self.gear.get("MP", 0))                       # gear's MP: only for a job with MP
+        return max(0, mp)
 
     def job_label(self) -> str:
         return f"{self.job}{self.level}" + (f"/{self.sub}{self.sub_level}" if self.sub else "")
@@ -166,9 +172,32 @@ class Engine:
     # ================================================================================================
     # effects
     # ================================================================================================
+    def set_gear(self, stats: dict) -> None:
+        """The equipment's stats summed (ffxi_items' names: DEF, STR, Attack, Haste...), and what they do:
+        DEF and VIT cut the damage you take, STR, Attack and the weapon's DMG add to your hits, AGI and
+        Evasion dodge, INT and Magic Atk. Bonus strengthen nukes, MND cures, MP adds MP, Regen and Refresh
+        tick, Haste and Store TP build TP. Scaled for Monster Hunter's damage, which isn't FFXI's."""
+        g = {k: float(v) for k, v in stats.items()}
+        self.gear = g
+        get = g.get
+        defn = get("DEF", 0)
+        self.gear_effects = {
+            "defn": 0.45 * defn / (defn + 120) + 0.002 * get("VIT", 0),
+            "atk": (get("STR", 0) + 0.7 * get("Attack", 0)) / 220 + get("DMG", 0) / 160,
+            "evasion": min(0.2, (get("AGI", 0) + get("Evasion", 0)) / 450),
+            "magic": (get("INT", 0) + get("Magic Atk. Bonus", 0)) / 200,
+            "heal_bonus": get("MND", 0) / 250,
+            "regen": get("Regen", 0),
+            "refresh": get("Refresh", 0),
+            "haste": get("Haste", 0) / 100,
+            "store_tp": get("Store TP", 0) / 100,
+        }
+        self.mp = min(self.mp, self.max_mp)
+
     def effect(self, name: str) -> float:
-        """An effect on you now: your buffs, your job's traits at its level, the subjob's at its."""
+        """An effect on you now: your buffs, your job's traits at its level, the subjob's at its, your gear's."""
         v = sum(b["power"] for (src, eff), b in self.buffs.items() if eff == name)
+        v += self.gear_effects.get(name, 0.0)
         if name not in COUNTED:
             v += sum(p for lv, e, p in self.j["traits"] if e == name and lv <= self.level)
             if self.sj:
@@ -199,7 +228,7 @@ class Engine:
 
     @property
     def magic_mult(self) -> float:
-        return self.j["nuke_mult"] * D.level_factor(self.level)
+        return self.j["nuke_mult"] * D.level_factor(self.level) * (1 + self.effect("magic"))
 
     def _floor(self) -> int:
         return 0 if self.allow_kills else 1
@@ -305,6 +334,9 @@ class Engine:
         if self.rng.random() < self.mob("blind"):
             self.say(f"The {self.target} misses {self.me}.", "info")                  # stand-in
             return prev
+        if self.rng.random() < self.effect("evasion"):                                # the gear's AGI, Evasion
+            self.say(f"{self.me} evades the {self.target}'s attack.", "info")
+            return prev
         cut = max(-0.5, min(0.9, self.effect("defn") + self.mob("slow") + self.mob("weight")))
         after = taken * (1 - cut) - self.effect("phalanx")
         after -= self._use_count("stoneskin", max(0.0, after))
@@ -376,6 +408,7 @@ class Engine:
         mob_lv = D.monster_level(self.monster_max)
         base = D.kill_exp(mob_lv, self.level, self.monster_max)
         self.say(f"{self.me} defeats the {self.target}.", "info")
+        self._event("kill", str(mob_lv))                               # its drops (the layer's gear)
         if not base:
             return
         self.chain = self.chain + 1 if now - self.last_kill <= D.CHAIN_WINDOW else 0
@@ -682,11 +715,14 @@ class Engine:
     # progress: saved between sessions
     # ================================================================================================
     def progress(self) -> dict:
-        return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp)}
+        return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp),
+                "inventory": list(self.inventory), "equipment": dict(self.equipment)}
 
     def load_progress(self, d: dict) -> None:
         self.levels = {k: int(v) for k, v in d.get("levels", {}).items() if k in D.JOBS}
         self.exp = {k: int(v) for k, v in d.get("exp", {}).items() if k in D.JOBS}
+        self.inventory = [int(i) for i in d.get("inventory", [])]
+        self.equipment = {k: int(v) for k, v in d.get("equipment", {}).items()}
         job, sub = d.get("job", self.job), d.get("sub", self.sub)
         if job in D.JOBS and (sub is None or (sub in D.JOBS and sub != job)):
             self.set_jobs(job, sub)

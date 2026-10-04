@@ -229,6 +229,7 @@ class App:
         self.sounds = None             # FFXI's sounds (ffxi_sound.Player), in the game's interface
         self.character = None          # FFXI's character in the game (port_model.PortModel)
         self.port_target = None        # the port's target (port_bridge.target): its arrow, lock, model
+        self.gear = self._start_gear()  # FFXI's equipment (ffxi_gear.Gear): None without the item database
         self.chat_seen = None          # the chat line's lines handled so far (port_bridge.chat)
         self.chat_typing = None        # what's being typed, while the line is open
         self.mh_weapon = cfg.get("weapon", "sword_and_shield")   # Monster Hunter's weapon: FFXI's like is held
@@ -293,6 +294,9 @@ class App:
         """The engine's events as FFXI's: a spell's casting by the character (its school's motions: start,
         chant, release) and its sound as it goes off, a level gained or lost."""
         events, self.e.events[:] = list(self.e.events), []
+        for kind, name in events:
+            if kind == "kill" and self.gear:
+                self._drops(int(name))
         if self.character:
             import ffxi_model as FM
             for kind, name in events:
@@ -468,6 +472,8 @@ class App:
                     {"label": names.get(s, s.title()), "ok": True, "detail": "",
                      "children": [action(n) for n in ns]} for s, ns in schools.items()]})
         root.append({"label": "Items", "ok": True, "detail": "", "act": ("item",)})
+        if self.gear:
+            root += self._gear_menu()
         jobs = [{"label": d["name"], "ok": j != e.job, "detail": f"Lv{e.levels.get(j, 1)}", "act": ("job", j)}
                 for j, d in D.JOBS.items()]
         subs = [{"label": "None", "ok": e.sub is not None, "detail": "", "act": ("sub", None)}]
@@ -477,6 +483,50 @@ class App:
             {"label": "Main Job", "ok": True, "detail": e.job, "children": jobs},
             {"label": "Support Job", "ok": True, "detail": e.sub or "", "children": subs}]})
         return root
+
+    def _gear_menu(self) -> list[dict]:
+        """Equipment (each slot: what's worn, and what you hold that goes there) and Inventory (each piece:
+        equip it, drop it). A piece's description shows beside the menu (help)."""
+        import ffxi_gear as G
+        g, e = self.gear, self.e
+        held = sorted(set(e.inventory), key=lambda i: (-(g.item(i) or {}).get("level", 0), (g.item(i) or {}).get("name", "")))
+        slots = []
+        for slot in G.SLOTS:
+            worn = g.item(e.equipment[slot]) if slot in e.equipment else None
+            choices = []
+            if worn:
+                choices.append({"label": "(Remove)", "ok": True, "detail": "", "act": ("equip", slot, None)})
+            for iid in held:
+                it = g.item(iid)
+                if not it or slot not in g.slots_of(it):
+                    continue
+                why = g.why_not(it, slot)
+                choices.append({"label": it["name"], "ok": not why, "detail": f"Lv{it['level']}",
+                                "help": g.describe(it) + (f"\n({why})" if why else ""), "act": ("equip", slot, iid)})
+            slots.append({"label": G.SLOT_LABEL[slot], "ok": bool(choices), "detail": worn["name"] if worn else "",
+                          "help": g.describe(worn) if worn else "", "children": choices or
+                          [{"label": "(Nothing to wear here)", "ok": False, "detail": ""}]})
+        stats = g.stats()
+        shown = " ".join(f"{k}{'' if k == 'DEF' else '+'}{v}" if k == 'DEF' else f"{k}+{v}"
+                         for k, v in stats.items() if k not in ("Delay",))
+        items = []
+        for iid in held:
+            it = g.item(iid)
+            if not it:
+                continue
+            n = e.inventory.count(iid)
+            worn = [s for s, i in e.equipment.items() if i == iid]
+            first = next((s for s in g.slots_of(it) if s not in e.equipment), (g.slots_of(it) or [None])[0])
+            why = g.why_not(it, first) if first else "It can't be worn."
+            items.append({"label": it["name"] + (f" x{n}" if n > 1 else ""), "ok": True,
+                          "detail": "worn" if worn else f"Lv{it['level']}", "help": g.describe(it), "children": [
+                              {"label": "Equip", "ok": bool(first) and not why and not worn, "detail": "",
+                               "help": why, "act": ("equip", first, iid)},
+                              {"label": "Drop", "ok": True, "detail": "", "act": ("drop", iid)}]})
+        return [{"label": "Equipment", "ok": True, "detail": shown[:24], "help": "Your gear's stats: " + (shown or "none"),
+                 "children": slots},
+                {"label": "Inventory", "ok": bool(items), "detail": f"{len(e.inventory)}",
+                 "children": items or [{"label": "(Empty)", "ok": False, "detail": ""}]}]
 
     def _menu_levels(self, now: float) -> list[tuple[str, list[dict], int, int]]:
         """The open levels: (title, nodes, cursor, scroll) from the first to the deepest."""
@@ -539,11 +589,35 @@ class App:
             self.mem.use_item()                    # Monster Hunter's own item use
         elif act[0] == "job":
             e.change_job(act[1], e.sub if e.sub != act[1] else None)
+            self._gear_check()
             self.save()
         elif act[0] == "sub":
             e.change_job(e.job, act[1])
+            self._gear_check()
             self.save()
+        elif act[0] == "equip":
+            self.equip(act[1], act[2])
+            return                                     # the menu stays open: more to change
+        elif act[0] == "drop":
+            it = self.gear.item(act[1]) if self.gear else None
+            if it:
+                self.gear.drop(act[1])
+                e.say(f"{e.me} drops {it['name']}.", "info")
+                self.save()
+                self._redress()
+            if self.menu and len(self.menu["stack"]) > 1:
+                self.menu["stack"].pop()
+            return
         self._menu_close()
+
+    def _gear_check(self) -> None:
+        """After a job change: off with what the new job can't wear."""
+        if self.gear:
+            off = self.gear.check_worn()
+            self.gear.apply()
+            if off:
+                self.e.say(f"{self.e.me} can't wear what was in: {', '.join(off)}.", "warn")
+                self._redress()
 
     def _menu_close(self):
         self.mem.close_menu()
@@ -559,6 +633,16 @@ class App:
             rows = tuple((nd["label"], nd["ok"], nd["detail"]) for nd in nodes[scroll:scroll + MENU_ROWS])
             out.append((title, rows, cur - scroll, scroll > 0, scroll + MENU_ROWS < len(nodes)))
         return tuple(out)
+
+    def menu_help(self, now: float) -> str:
+        """The highlighted entry's description (an item's stats), shown beside the menu."""
+        if self.menu is None:
+            return ""
+        levels = self._menu_levels(now)
+        if not levels:
+            return ""
+        _title, nodes, cur, _scroll = levels[-1]
+        return nodes[cur].get("help", "") if nodes else ""
 
     # --- the FFXI interface in the game's window (the port) ---
     def ui_state(self, now: float):
@@ -598,7 +682,7 @@ class App:
             target_pct=None if target is None else round(target, 3), target_name=e.target.title(),
             target_check=check, target_effects=tuple(sorted({s for s, _ in e.debuffs})),
             casting=e.casting, cast_frac=round(cast_frac, 2),
-            log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now),
+            log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now), menu_help=self.menu_help(now),
             nameplate=self._nameplate(), **self._target_arrow(now), chat_input=self.chat_typing,
             status="" if self.status == "connected" else self.status)
 
@@ -618,6 +702,80 @@ class App:
         if fade > 0:
             lines = [(t, k, at) for t, k, at in lines if now - at < fade]
         return tuple((t, k) for t, k, _ in lines)
+
+    def _start_gear(self):
+        """Your FFXI equipment: the item database read from your installation (once, into the asset
+        folder), what you wear applied; a new adventurer is handed a starter kit."""
+        if self.cfg.get("equipment", True) is False:
+            return None
+        try:
+            import ffxi_gear as G
+            import ffxi_items as I
+            import ffxi_model as FM
+            if not I.load_items():
+                print("FFXI items: reading them from your installation (once)...")
+                I.build(FM.ffxi_root(self.cfg.get("ffxi_path")))
+            gear = G.Gear(self.e, self.cfg.get("character_race") or "hume_male")
+            if not gear.ready():
+                return None
+            if not self.e.inventory:
+                kit = gear.starter_kit()
+                if kit:
+                    self.e.say(f"{self.e.me} receives a starter kit: {', '.join(kit)}.", "skillchain")
+                    self.e.dirty = True
+            off = gear.check_worn()
+            if off:
+                self.e.say(f"{self.e.me} can't wear what was in: {', '.join(off)}.", "warn")
+            gear.apply()
+            print(f"FFXI gear: {len(gear.items)} pieces known; holding {len(self.e.inventory)}, wearing "
+                  f"{len(self.e.equipment)}: {gear.stats()}")
+            return gear
+        except Exception as ex:                                     # noqa: BLE001  the layer runs without it
+            print(f"[FFXI equipment unavailable: {ex}]")
+            return None
+
+    def _drops(self, mob_level: int) -> None:
+        """A defeated monster's drops: FFXI's gear about its level, yours to keep."""
+        import mh3_text
+        import ffxi_model as FM
+        t = self.port_target
+        big = bool(t) and (mh3_text.model_number(t["name"]) or 0) in LARGE_MONSTERS
+        for it in self.gear.roll_drop(mob_level, big):
+            self.gear.give(it["id"])
+            article = "an" if it["name"][:1].lower() in "aeiou" else "a"
+            self.e.say(f"{self.e.me} obtains {article} {it['name']}.", "skillchain")
+        self.save()
+
+    def equip(self, slot: str, iid) -> None:
+        """Wear it (None: take it off); the character dressed again if its look changed."""
+        if not self.gear:
+            return
+        before = self.gear.look({})
+        why = self.gear.equip(slot, iid)
+        if why:
+            self.e.say(why, "warn")
+            return
+        it = self.gear.item(iid) if iid is not None else None
+        self.e.say(f"{self.e.me} equips {it['name']}." if it else f"{self.e.me} unequips the {slot}.", "info")
+        self.save()
+        if self.gear.look({}) != before:
+            self._redress()
+
+    def _redress(self) -> None:
+        """The character built again (its look or weapon changed), on a thread of its own."""
+        import threading
+        if self._rebuilding or not self.cfg.get("character_race"):
+            return
+        self._rebuilding = True
+
+        def rebuild():
+            try:
+                pm = self._send_character()
+                if pm:
+                    self.character = pm
+            finally:
+                self._rebuilding = False
+        threading.Thread(target=rebuild, daemon=True).start()
 
     def _chat_step(self) -> None:
         """FFXI's chat line, typed in the game's window ("/" opens it): each line sent handled."""
@@ -682,16 +840,7 @@ class App:
         if not kind or kind == self.mh_weapon or self._rebuilding:
             return
         self.mh_weapon = kind
-        self._rebuilding = True
-
-        def rebuild():
-            try:
-                pm = self._send_character()
-                if pm:
-                    self.character = pm
-            finally:
-                self._rebuilding = False
-        threading.Thread(target=rebuild, daemon=True).start()
+        self._redress()
 
     def _send_character(self):
         """FFXI's character in your hunter's place, read from your own FFXI installation and handed to the
@@ -708,6 +857,8 @@ class App:
             mirror = self.cfg.get("character_mirror", True)
             if race:
                 look = {**FM.DEFAULT_LOOK, **self.cfg.get("character_look", {})}
+                if self.gear:                                       # what you wear shows; the creator's elsewhere
+                    look = self.gear.look(look)
                 look, style = FM.look_for_weapon(root, race, look, self.mh_weapon)
                 model = FM.load_character(root, race, look, style)
                 packed = FM.pack(model, yaw=yaw, mirror=mirror, scale=height / FM.HUME_MALE_HEIGHT)

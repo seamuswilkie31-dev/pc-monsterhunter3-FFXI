@@ -138,6 +138,7 @@ class UiState:
     target_arrow: tuple | None = None     # (x, y, locked, bob 0..1): FFXI's arrow above the target's head
     target_locked: bool = False
     chat_input: str | None = None         # the chat line being typed (None: closed)
+    menu_help: str = ""                   # the menu's highlighted entry, described (an item's stats)
     status: str = ""
 
 
@@ -174,6 +175,8 @@ class FfxiUi:
             self._palette(img, d, s)
         if s.menu:
             self._menu(img, d, s)
+        if s.menu and s.menu_help:
+            self._help(img, d, s)
         if s.status:
             self._text(d, (W - 14, 10), s.status, self.f_small, DIM, anchor="ra")
         return img
@@ -342,6 +345,17 @@ class FfxiUi:
                     self._text(d, (x1 - (24 if up or down else 12), y + 2), detail, self.f_small,
                                KIND["magic"] if ok else DIM, anchor="ra")
             x1 = x0 - 6
+
+    def _help(self, img, d, s: UiState) -> None:
+        """An item's description, as FFXI shows it: its name first, then its slots, stats and jobs."""
+        lines = [ln for ln in s.menu_help.splitlines() if ln.strip()][:9]
+        width = max(int(d.textlength(ln, font=self.f_small)) for ln in lines) + 28
+        width = max(260, min(width, 560))
+        x0, y0 = W // 2 - width // 2, 46
+        self.window(img, (x0, y0, x0 + width, y0 + 16 + 20 * len(lines)))
+        for i, ln in enumerate(lines):
+            col = WHITE if i == 0 else (KIND["warn"] if ln.startswith("(") else KIND["info"])
+            self._text(d, (x0 + 14, y0 + 8 + 20 * i), ln, self.f_val if i == 0 else self.f_small, col)
 
     def _palette(self, img, d, s: UiState) -> None:
         """The macro bar: your keys and what they do."""
