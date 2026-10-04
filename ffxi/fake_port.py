@@ -250,29 +250,42 @@ def test() -> int:
     # the command menu, driven as the pad would, through the layer's app
     import ffxi_mh3 as M
     cfg = tomllib.loads(CONFIG)
-    app = M.App(M.Engine("RDM", "sword_and_shield", 150), P.PortBackend(cfg["addresses"]), cfg)
+    app = M.App(M.Engine("RDM", "sword_and_shield", 150, levels={"RDM": 20}), P.PortBackend(cfg["addresses"]), cfg)
     serve_once(mm, ram)
     app.step()
-    press(mm, P.CL_Y)                                     # open
+    press(mm, P.CL_Y)                                     # open (held, in the port)
     app.step()
-    check(app.menu == {"level": "root", "cur": 0, "root": 0}, "the pad's X opens the command menu")
-    press(mm, P.CL_DOWN); press(mm, P.CL_B)               # Magic
+    check(app.menu == {"stack": [[0, 0]]}, "the pad's X opens the command menu")
+    titles = [r[0] for r in app.menu_view(0)[0][1]]
+    check(titles == ["Weapon Skills", "Job Abilities", "Magic", "Items", "Job"], f"its first level ({titles})")
+    press(mm, P.CL_DOWN); press(mm, P.CL_DOWN); press(mm, P.CL_B)   # Magic
     app.step()
-    check(app.menu and app.menu["level"] == "magic", "down, confirm: the Magic list")
-    check(len(app.menu_view()) == 2 and app.menu_view()[1][0] == "Magic", "...drawn beside the first level")
-    press(mm, P.CL_DOWN); press(mm, P.CL_B)               # its second spell
+    view = app.menu_view(0)
+    check(len(view) == 2 and [r[0] for r in view[1][1]] == ["White Magic", "Black Magic"],
+          "Magic: a list per school, beside the first level")
+    press(mm, P.CL_B)                                     # White Magic
+    press(mm, P.CL_DOWN); press(mm, P.CL_B)               # its second spell: Cure
     app.step()
     serve_once(mm, ram)
     check(app.menu is None and not app.mem.menu_open(), "a spell chosen closes the menu (the port told)")
-    check(app.e.casting == app.e.j["spells"][1], f"...and casts it ({app.e.casting})")
+    check(app.e.casting == "Cure", f"...and casts it ({app.e.casting})")
     press(mm, P.CL_Y); app.step()                         # open again
-    press(mm, P.CL_DOWN); press(mm, P.CL_DOWN); press(mm, P.CL_B)   # Items
+    for _ in range(3):
+        press(mm, P.CL_DOWN)
+    press(mm, P.CL_B)                                     # Items
     app.step(); serve_once(mm, ram)
     check(ram.items_used == 1 and app.menu is None, "Items passes one press to the game's own item use")
     press(mm, P.CL_Y); app.step()
+    for _ in range(4):
+        press(mm, P.CL_DOWN)
+    press(mm, P.CL_B); press(mm, P.CL_DOWN); press(mm, P.CL_B)       # Job, Support Job
+    press(mm, P.CL_DOWN); press(mm, P.CL_B)               # past "None": Warrior
+    app.step(); serve_once(mm, ram)
+    check(app.e.sub == "WAR" and app.menu is None, f"Job: a support job chosen ({app.e.job_label()})")
+    press(mm, P.CL_Y); app.step()
     press(mm, P.CL_B); press(mm, P.CL_A)                  # Weapon Skills, then back
     app.step()
-    check(app.menu == {"level": "root", "cur": 0, "root": 0}, "back from a list returns to the first level")
+    check(app.menu == {"stack": [[0, 0]]}, "back from a list returns to the first level")
     press(mm, P.CL_A); app.step(); serve_once(mm, ram)    # back again: closed
     check(app.menu is None and not app.mem.menu_open(), "back from the first level closes it")
 
