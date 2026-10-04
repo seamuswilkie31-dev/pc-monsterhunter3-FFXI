@@ -712,7 +712,8 @@ class App:
             import ffxi_gear as G
             import ffxi_items as I
             import ffxi_model as FM
-            if not I.load_items():
+            known = I.load_items()
+            if not known or "flags" not in next(iter(known.values())):    # none yet, or from before the flags
                 print("FFXI items: reading them from your installation (once)...")
                 I.build(FM.ffxi_root(self.cfg.get("ffxi_path")))
             gear = G.Gear(self.e, self.cfg.get("character_race") or "hume_male")

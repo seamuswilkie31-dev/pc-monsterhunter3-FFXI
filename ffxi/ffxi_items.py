@@ -12,7 +12,7 @@ What's read stays in the local asset folder (items.json), never in the repositor
 
 The item files (the community's reading, written here from that description, no code taken): blocks of
 0xC00 bytes (0x1400 since the September 2026 update), each byte rotated left 3 bits; a block's header
-(id u32 at 0, then flags, stack, type, resource; for equipment level, slots, races, jobs, as the format's
+(id u32 at 0, then flags (u16 at 4, u32 since the update), stack, type, resource; for equipment level, slots, races, jobs, as the format's
 offsets put them), and a string table found by its shape (a u32 count of 1-8, then count x (offset, flag);
 a text's bytes 0x1C past its offset): the name, then the description, whose prose states the stats
 ("DEF:10 HP+15 AGI+2"). Armor: ROM/118/109.DAT and ROM/286/73.DAT; weapons: ROM/118/108.DAT.
@@ -49,6 +49,9 @@ OFFSETS = {
 SLOT_BITS = {"main": 0x0001, "sub": 0x0002, "ranged": 0x0004, "ammo": 0x0008, "head": 0x0010, "body": 0x0020,
              "hands": 0x0040, "legs": 0x0080, "feet": 0x0100, "neck": 0x0200, "waist": 0x0400, "ear1": 0x0800,
              "ear2": 0x1000, "ring1": 0x2000, "ring2": 0x4000, "back": 0x8000}
+# the item flags that make a piece special, not one a monster drops at random: Rare, Ex, not for the auction
+# house, and 0x0002 (only the GMs' Judge's set has it)
+SPECIAL_FLAGS = 0x8000 | 0x4000 | 0x0040 | 0x0002
 # the jobs' bits (bit 1 WAR ... as FFXI orders them)
 JOB_ORDER = ["WAR", "MNK", "WHM", "BLM", "RDM", "THF", "PLD", "DRK", "BST", "BRD", "RNG", "SAM", "NIN", "DRG", "SMN",
              "BLU", "COR", "PUP", "DNC", "SCH", "GEO", "RUN"]
@@ -136,7 +139,8 @@ def read_items(root: Path, files: tuple[str, ...], weapons: bool) -> dict[int, d
                 continue
             desc = next((x for x in reversed(strs) if isinstance(x, str) and x != strs[0]), "")
             u16 = lambda k: struct.unpack_from("<H", blk, o[k])[0]
-            item = {"id": iid, "name": strs[0], "level": u16("level"), "slots": u16("slots"), "races": u16("races"),
+            flags = struct.unpack_from("<I" if s == 0x1400 else "<H", blk, 0x04)[0]
+            item = {"id": iid, "name": strs[0], "flags": flags, "level": u16("level"), "slots": u16("slots"), "races": u16("races"),
                     "jobs": struct.unpack_from("<I", blk, o["jobs"])[0], "desc": desc, "stats": parse_stats(desc)}
             if weapons:
                 item["damage"], item["delay"], item["skill"] = u16("damage"), u16("delay"), blk[o["skill"]]

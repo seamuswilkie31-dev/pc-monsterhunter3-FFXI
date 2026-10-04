@@ -164,8 +164,9 @@ class Gear:
 
     # --- what monsters drop ----------------------------------------------------------------------
     def roll_drop(self, mob_level: int, big: bool = False) -> list[dict]:
-        """What a defeated monster drops: FFXI's gear from its level to three above, mostly what your job
-        and race can wear (sooner or later); a large monster always drops, maybe twice."""
+        """What a defeated monster drops: FFXI's ordinary gear (no Rare, Ex, event or GM pieces) from its
+        level to three above, mostly what your job and race can wear (sooner or later); a large monster
+        always drops, maybe twice."""
         drops = []
         rolls = 2 if big else 1
         for _ in range(rolls):
@@ -174,7 +175,7 @@ class Gear:
             lo, hi = max(1, mob_level), min(99, mob_level + 3)
             pool = [it for it in self.items.values()
                     if lo <= it["level"] <= hi and self.slots_of(it) and it.get("model") is not None
-                    and it["stats"] and "+1" not in it["name"]]
+                    and it["stats"] and "+1" not in it["name"] and not it.get("flags", 0) & I.SPECIAL_FLAGS]
             bit = I.RACE_BITS.get(self.race, 0)
             pool = [it for it in pool if not bit or not it["races"] or it["races"] & bit]
             mine = [it for it in pool if self.e.job in I.job_list(it["jobs"])]
