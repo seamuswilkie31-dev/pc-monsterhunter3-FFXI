@@ -11,6 +11,7 @@ MP and TP: see ffxi_data's header for what each effect does, and which are stand
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass, field
 
 import ffxi_data as D
@@ -81,6 +82,7 @@ class Engine:
     prev_player: int | None = None
     log: list = field(default_factory=list)
     kinds: list = field(default_factory=list)        # each log line's kind (ffxi_ui.KIND), for its colour
+    times: list = field(default_factory=list)        # when each was said (time.monotonic)
     said: int = 0
     dirty: bool = False                              # progress (levels, EXP, jobs) changed: save it
 
@@ -212,8 +214,10 @@ class Engine:
         self.said += 1                   # every message ever: the recorder counts on it
         self.log.append(msg)
         self.kinds.append(kind)
+        self.times.append(time.monotonic())
         del self.log[:-12]
         del self.kinds[:-12]
+        del self.times[:-12]
 
     # ================================================================================================
     # every frame

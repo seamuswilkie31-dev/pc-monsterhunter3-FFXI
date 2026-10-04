@@ -476,9 +476,17 @@ class App:
             target_pct=None if target is None else round(target, 3), target_name=e.target.title(),
             target_check=check, target_effects=tuple(sorted({s for s, _ in e.debuffs})),
             casting=e.casting, cast_frac=round(cast_frac, 2),
-            log=tuple(zip(e.log[-7:], e.kinds[-7:])), palette=tuple(pal), menu=self.menu_view(now),
+            log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now),
             nameplate=self._nameplate(),
             status="" if self.status == "connected" else self.status)
+
+    def _log_lines(self, now: float) -> tuple:
+        """The combat log's last lines, each gone log_fade seconds after it was said (0: they stay)."""
+        e, fade = self.e, float(self.cfg.get("log_fade", 10))
+        lines = list(zip(e.log, e.kinds, e.times))[-7:]
+        if fade > 0:
+            lines = [(t, k, at) for t, k, at in lines if now - at < fade]
+        return tuple((t, k) for t, k, _ in lines)
 
     def _nameplate(self):
         if not hasattr(self.mem, "nameplate") or self.cfg.get("nameplate", True) is False:
