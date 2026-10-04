@@ -204,7 +204,7 @@ void hook_master(PPCContext& c) {
 
 // The Classic's buttons (KPAD_CL_*, as video.cpp's).
 enum : uint32_t { kClUp = 0x0001, kClLeft = 0x0002, kClX = 0x0008, kClA = 0x0010, kClY = 0x0020,
-                  kClB = 0x0040, kClL = 0x2000, kClDown = 0x4000, kClRight = 0x8000 };
+                  kClB = 0x0040, kClHome = 0x0800, kClL = 0x2000, kClDown = 0x4000, kClRight = 0x8000 };
 std::atomic<bool> g_lock_toggle{false};  // the Classic's L held: lock on (or off), for target_frame
 constexpr uint32_t kMenuButtons = kClUp | kClDown | kClLeft | kClRight | kClA | kClB | kClX | kClY;
 
@@ -216,6 +216,7 @@ std::atomic<bool> g_layer_up{false};    // the layer bumped the overlay's alive 
 constexpr auto kHoldForMenu = std::chrono::milliseconds(350);
 
 void classic_filter(int chan, ClassicState& s) {
+    s.buttons &= ~kClHome;                        // the Home Button menu crashes the port: never opened
     Block* b = g_block;
     if (chan != 0 || !b) return;
     using clock = std::chrono::steady_clock;
