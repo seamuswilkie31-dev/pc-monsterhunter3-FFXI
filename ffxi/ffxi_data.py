@@ -302,6 +302,25 @@ SC_ELEMENTS = {
     "Darkness": {"earth", "water", "ice", "dark"},
 }
 
+# Each weapon skill's effect in FFXI's own files: its animation number (LandSandBoat's weapon_skills, a
+# reference); a race's file for it is that race's first weapon skill file + the number - 1 (ffxi_fx.py).
+WS_ANIMATION = {
+    "Hard Slash": 106, "Power Slash": 107, "Frostbite": 108, "Freezebite": 109, "Shockwave": 110,
+    "Crescent Moon": 111, "Sickle Moon": 112, "Spinning Slash": 113, "Ground Strike": 114, "Resolution": 118,
+    "Tachi: Enpi": 166, "Tachi: Hobaku": 167, "Tachi: Goten": 168, "Tachi: Kagero": 169, "Tachi: Jinpu": 170,
+    "Tachi: Koki": 171, "Tachi: Yukikaze": 172, "Tachi: Gekko": 173, "Tachi: Kasha": 174, "Tachi: Fudo": 178,
+    "Fast Blade": 1, "Burning Blade": 2, "Red Lotus Blade": 3, "Flat Blade": 6, "Shining Blade": 4,
+    "Seraph Blade": 5, "Circle Blade": 7, "Spirits Within": 8, "Vorpal Blade": 9, "Swift Blade": 10,
+    "Savage Blade": 11, "Requiescat": 237, "Shining Strike": 76, "Seraph Strike": 77, "Brainshaker": 78,
+    "Starlight": 79, "Moonlight": 80, "Skullbreaker": 81, "True Strike": 82, "Judgment": 83, "Hexa Strike": 84,
+    "Black Halo": 85, "Double Thrust": 121, "Thunder Thrust": 122, "Raiden Thrust": 123, "Leg Sweep": 124,
+    "Penta Thrust": 125, "Vorpal Thrust": 126, "Skewer": 127, "Wheeling Thrust": 128, "Impulse Drive": 129,
+    "Stardiver": 134, "Shield Break": 91, "Iron Tempest": 92, "Sturmwind": 93, "Armor Break": 94,
+    "Keen Edge": 95, "Weapon Break": 96, "Raging Rush": 97, "Full Break": 98, "Steel Cyclone": 99,
+    "Upheaval": 104, "Hot Shot": 196, "Split Shot": 197, "Sniper Shot": 198, "Slug Shot": 200,
+    "Blast Shot": 222, "Heavy Shot": 223, "Detonator": 224, "Last Stand": 241, "Coronach": 226
+}
+
 SC_WINDOW_OPEN = 2.0      # seconds after a WS before the next one can close a chain
 SC_WINDOW_CLOSE = 8.0     # seconds after a WS when the chain window shuts
 MB_WINDOW = 8.0           # seconds after a skillchain to land a magic burst

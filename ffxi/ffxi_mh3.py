@@ -317,6 +317,10 @@ class App:
                     self._fx_spell(name)
                 elif kind == "interrupted":
                     self._fx_cast_end()
+                elif kind == "ws":
+                    self._fx_weapon_skill(name)
+                elif kind == "skillchain":
+                    self._fx_skillchain(name)
         if not self.sounds:
             return
         import ffxi_sound as FS
@@ -377,6 +381,25 @@ class App:
         target = fx["them"] if hostile and fx["has_target"] else fx["me"]
         fx["effects"].play(f, "main", fx["me"], target)
 
+    def _fx_weapon_skill(self, name: str) -> None:
+        """A weapon skill: the race's own file for it (its flash about the character, its strikes on the
+        monster)."""
+        fx = self.fx
+        anim = D.WS_ANIMATION.get(name)
+        f = fx["lib"].weapon_skill(anim) if anim is not None else None
+        if f is not None and fx["has_target"]:
+            fx["effects"].play(f, "main", fx["me"], fx["them"])
+
+    def _fx_skillchain(self, name: str) -> None:
+        """A skillchain closed: a burst of its element on the monster, the target's part of a spell of it,
+        as it lands."""
+        import ffxi_fx as FX
+        fx = self.fx
+        anim = FX.SKILLCHAIN_LOOK.get(name)
+        f = fx["lib"].spell(anim) if anim is not None else None
+        if f is not None and fx["has_target"]:
+            fx["effects"].pulse(f, "main", fx["me"], fx["them"], alpha=1.0, length=1.0)
+
     def _fx_step(self, now: float) -> None:
         """30 times a second: where things are (from the port), the effects stepped, their triangles sent."""
         fx = self.fx
@@ -429,6 +452,10 @@ class App:
         fx["hits"] = hits
         if before is None or hits == before or o.get("monster_delta", 0) >= 0:
             return
+        blow = -o["monster_delta"]
+        usual = fx.get("usual_blow") or blow
+        fx["usual_blow"] = 0.85 * usual + 0.15 * blow                  # what the hunter's blows have been doing
+        critical = blow >= 1.8 * usual and blow >= 10
         h = scene["hunter"]
         me = h[:, 3]
         t = scene["target"]
@@ -445,6 +472,8 @@ class App:
         struck = FX.actor_from_mh(spot, FX.yaw_matrix(yaw), 2 * up)   # its "middle" (a joint named) the height struck
         routine = FX.HIT_ROUTINE.get(self.mh_weapon, "hit9")
         fx["effects"].play(fx["lib"].shared, routine, fx["me"], struck)
+        if critical:                                                 # far over the usual: FFXI's critical flash
+            fx["effects"].play(fx["lib"].shared, FX.CRITICAL_ROUTINE, fx["me"], struck)
 
     def _fx_status(self, now: float) -> None:
         """A debuff lasting on the monster: every 3 s its spell's look on it again, faint and short."""

@@ -540,6 +540,7 @@ class Engine:
         self.tp = 0
         dmg = int(dmg)
         self.say(f"{self.me} uses {name}.", "ws")
+        self._event("ws", name)                                          # its look (the layer's effects)
         if dmg > 0:
             self.say(f"The {self.target} takes {dmg} points of damage.", "damage")
         dmg += self._skillchain(ws["props"], now, dmg)
@@ -561,6 +562,7 @@ class Engine:
                 self.mb_until = now + D.MB_WINDOW
                 self.mb_elements = D.SC_ELEMENTS[sc]
                 self.say(f"Skillchain: {sc}. The {self.target} takes {bonus} points of damage.", "skillchain")
+                self._event("skillchain", sc)
                 props = [sc]                      # the chain can continue from its result
         if props:
             self.last_ws_time, self.last_ws_props = now, props

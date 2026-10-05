@@ -63,6 +63,18 @@ CAST_ROUTINE = {"white": "cawh", "black": "cabk", "summoning": "casm", "ninjutsu
 # great katana hi16, 11 a club hi17; a dagger's hit5 for a bowgun's shot)
 HIT_ROUTINE = {"sword_and_shield": "hit9", "great_sword": "hit8", "switch_axe": "hi10", "lance": "hit7",
                "long_sword": "hi16", "hammer": "hi17", "bowgun": "hit5"}
+# a critical blow: the shared file's `crtl` (its first case)
+CRITICAL_ROUTINE = "hi14"
+# a race's weapon skills: its first file (animation 1); the skill's file is that + its animation - 1, its
+# directory the number in hex and a 1 ("0011" Fast Blade), its routine `main` (the race's motions in it)
+WS_BASE = {"hume_male": 33228, "hume_female": 33996, "elvaan_male": 34764, "elvaan_female": 35532,
+           "tarutaru_male": 36300, "tarutaru_female": 36300, "mithra": 37068, "galka": 37836}
+# a skillchain's burst on the monster: FFXI keeps none apart, so the target's part of a spell of its
+# element (a level 2's the stronger, a level 3's the strongest); the spells' animation numbers
+SKILLCHAIN_LOOK = {"Liquefaction": 145, "Scission": 160, "Reverberation": 170, "Detonation": 155,
+                   "Induration": 150, "Impaction": 165, "Transfixion": 29, "Compression": 245,
+                   "Fusion": 146, "Fragmentation": 166, "Gravitation": 161, "Distortion": 151,
+                   "Light": 21, "Darkness": 246}
 DIR, END, GEN, ROUTINE, CURVE, PMESH, TEX, SPRITES = 0x01, 0x00, 0x05, 0x07, 0x19, 0x1F, 0x20, 0x21
 # FFXI's space to Monster Hunter's: FFXI's +X (a model's forward) Monster Hunter's +Z, its Y (down) up,
 # its Z the -X; and a metre 97.2 units (a Hume 1.8 tall, the hunter 175: ffxi_model.pack's scale)
@@ -416,6 +428,12 @@ class Library:
 
     def spell(self, animation: int) -> EffectFile | None:
         p = self.file_path(2800 + animation)
+        return self.file(p) if p and p.exists() else None
+
+    def weapon_skill(self, animation: int) -> EffectFile | None:
+        """The race's own file for a weapon skill (its motion and its effects)."""
+        base = WS_BASE.get(self.race)
+        p = self.file_path(base + animation - 1) if base else None
         return self.file(p) if p and p.exists() else None
 
     def find_routine(self, name: str, here: EffectFile, op: int):
