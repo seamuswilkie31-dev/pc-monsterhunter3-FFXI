@@ -831,7 +831,7 @@ struct ModelBlock {
     uint32_t act_clip;      //   play this action once (kNone: end the one playing),
     uint32_t act_next;      //   then loop this one until the next request (kNone: back to moving)
     uint32_t battle;        // the port's: 1 while Monster Hunter's hunter has its weapon out
-    float light_gain;       // the layer's: its textures' brightness under the game's light (0: 1),
+    float light_gain;       // the layer's: its textures' brightness under the game's light (0: unlit),
     float ground_shade;     //   and how much the ground's baked light dims it (video_model_shading)
     uint32_t spare[3];
     char motion[16];        // the port's: the hunter's motion now (Monster Hunter's animation's name)
@@ -1258,7 +1258,7 @@ void model_frame() {
         std::memcpy(mb->motion, motion, sizeof motion);
     }
     mb->battle = g_anim.battle ? 1 : 0;
-    video_model_shading(mb->light_gain > 0.0f ? mb->light_gain : 1.0f, mb->ground_shade);
+    video_model_shading(mb->light_gain, mb->ground_shade);    // (0: unlit)
     g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
     if (visible) {
         float v[12], hp[12];

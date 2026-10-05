@@ -67,6 +67,28 @@ three above; a large monster always). Menus: Equipment (16 slots) and Items, the
 the highlighted piece's stats beside them; Monster Hunter's own item use is Pouch Item, apart from them. Ideas next: FFXI's item icons (each item block holds a 32x32 one at
 0x280), the Equipment window as FFXI's 4x4 grid, HP+ gear (Monster Hunter's max HP), a treasure pool.
 
+**The character on the ground** (2026-10-04, checked in play). `pack` puts the soles at 0 without the
+weapons: a sword hangs a quarter of a metre below them at rest, and the character floated by that much.
+`/hunter` swaps in Monster Hunter's own hunter in the same place, and back (for comparing the two).
+
+**Parked: the character lit by the game's lights** (2026-10-04, tried in play, off: the textures as they
+are, as before). What's built and left switched off: `pack` sends each corner's normals (model block
+version 7, 20 floats: FFXI's two-joint normals interleave as their positions; a cloth mesh's worked out
+from its faces); wiikit's renderer catches the lights of the game's skinned, lit draws (the nearest to
+the character; the lights only, not their material colour, which is a model's own paint: a red-clothed
+villager tinted it red), keeps them in the world's space by the camera (`video_model_frame`'s camera),
+and lights the model by GX's equation; a ground probe casts a ray down through the scenery's draws and
+reads its baked vertex colour (`video_model_shading(gain, ground)`; the layer's `character_light` and
+`character_ground_shade`, `/light` and `/shade` in the chat line). What was learned, from F12 traces:
+- Monster Hunter lights its characters (monsters, villagers, the hunter alike) with the area's set: a
+  sun, a fill, sometimes a light from the camera, ambient ~0.05, material white, TEV texture x light,
+  scale 1. Its scenery isn't lit: its light and shade are baked into vertex colours (Moga Woods: ambient
+  x vertex colour x 2; the village: the vertex colour as it is).
+- The hunter isn't dimmed in a dark corner: it stands out as the FFXI character did unlit.
+- FFXI's textures are made for twice the light (its PS2 heritage); lit as the game lights its own
+  (gain 1), the character came out at half the hunter's brightness, and the ground probe's shade made
+  it darker still. Tuning gain and shade by eye against `/hunter` was where it stopped.
+
 Next: spell visual effects (started 2026-10-04: the format studied, nothing written yet). What's known:
 - A spell's effect is file 2800 + its animation number (`ffxi_sound.file_path`); across the 154 spell
   files: 2152 generators (0x05), 2252 keyframe curves (0x19), 1082 particle meshes (0x1F), 1000 textures

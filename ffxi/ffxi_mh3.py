@@ -826,13 +826,13 @@ class App:
             e.say(rest, "info")
         elif word == "light":                                      # the character's brightness, tuned by eye
             try:
-                self.cfg["character_light"] = max(0.1, min(8.0, float(rest)))
+                self.cfg["character_light"] = max(0.0, min(8.0, float(rest)))
             except ValueError:
                 pass
             if self.character:
                 self._show_flags(self.character)
-            e.say(f"Character light: {self.cfg.get('character_light', 2.0):g} (/light 1.5 dimmer, /light 2.5 "
-                  "brighter; character_light in config.toml keeps it).", "info")
+            e.say(f"Character light: {self.cfg.get('character_light', 0.0):g} (0: unlit, as it was; 2: lit by "
+                  "the game's lights; character_light in config.toml keeps it).", "info")
         elif word == "shade":                                      # how much dark ground dims it, by eye
             try:
                 self.cfg["character_ground_shade"] = max(0.0, min(1.0, float(rest)))
@@ -860,10 +860,11 @@ class App:
 
     def _show_flags(self, pm) -> None:
         """The character drawn and the hunter hidden, or (/hunter) the hunter alone; and how bright it is
-        under the game's light (character_light: FFXI's textures are made for twice the light) and how
-        much dark ground dims it (character_ground_shade: 0, as the game's own hunter)."""
+        under the game's light (character_light: 0, unlit, its textures as they are; lit, FFXI's textures
+        are made for twice the light: 2) and how much dark ground dims it (character_ground_shade: 0, as
+        the game's own hunter). Lighting is parked (NEXT.md): off unless asked for."""
         pm.set_flags(not self.show_hunter, not self.show_hunter and self.cfg.get("hide_hunter", True))
-        pm.set_light(self.cfg.get("character_light", 2.0), self.cfg.get("character_ground_shade", 0.0))
+        pm.set_light(self.cfg.get("character_light", 0.0), self.cfg.get("character_ground_shade", 0.0))
 
     def _weapon_watch(self) -> None:
         """Monster Hunter's weapon, from its hunter's motion's name (w03_*: the lance): when it changes,

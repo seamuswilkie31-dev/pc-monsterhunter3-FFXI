@@ -104,8 +104,8 @@ class PortModel:
 
     def set_light(self, gain: float, ground: float = 0.0) -> None:
         """How bright the textures are under the game's light: texel x light x gain (FFXI's are made for
-        twice the light: 2); and how much the scenery's baked light under it dims it (0: not at all, as
-        the game's own hunter; 1: as dark as the ground)."""
+        twice the light: 2; 0: not lit, the textures as they are); and how much the scenery's baked light
+        under it dims it (0: not at all, as the game's own hunter; 1: as dark as the ground)."""
         self.mm[15 * 4:17 * 4] = struct.pack("<ff", float(gain), float(ground))
 
     def battle(self) -> bool:
