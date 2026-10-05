@@ -231,6 +231,7 @@ class App:
         self.port_target = None        # the port's target (port_bridge.target): its arrow, lock, model
         self.gear = self._start_gear()  # FFXI's equipment (ffxi_gear.Gear): None without the item database
         self.chat_seen = None          # the chat line's lines handled so far (port_bridge.chat)
+        self.show_hunter = False       # /hunter: Monster Hunter's own hunter shown instead of the character
         self.chat_typing = None        # what's being typed, while the line is open
         self.mh_weapon = cfg.get("weapon", "sword_and_shield")   # Monster Hunter's weapon: FFXI's like is held
         self._rebuilding = False
@@ -798,7 +799,8 @@ class App:
         return self.chat_typing is not None
 
     def chat_command(self, text: str) -> None:
-        """A line from the chat line: an emote (/wave), an action (/ma "Cure", /ja, /ws), /echo, or words said."""
+        """A line from the chat line: an emote (/wave), an action (/ma "Cure", /ja, /ws), /echo, /hunter
+        (Monster Hunter's hunter in the character's place, and back), or words said."""
         import ffxi_model as FM
         e, text = self.e, text.strip()
         if not text:
@@ -821,6 +823,12 @@ class App:
             e.say(f"{e.me} : {rest}", "say")
         elif word == "echo":
             e.say(rest, "info")
+        elif word in ("hunter", "compare"):                        # the two in the same light, one then the other
+            self.show_hunter = not self.show_hunter
+            if self.character:
+                self._show_flags(self.character)
+            e.say("Monster Hunter's hunter shown (/hunter again: the FFXI character)." if self.show_hunter
+                  else "The FFXI character shown.", "info")
         elif word in ("ma", "magic", "ja", "jobability", "ws", "weaponskill", "pet", "use"):
             name = next((n for n in list(D.SPELLS) + list(D.ABILITIES) + list(D.WEAPON_SKILLS)
                          if n.lower() == rest.lower()), None)
@@ -830,6 +838,10 @@ class App:
                 e.say(f"No such action: {rest}.", "warn")
         else:
             e.say(f"Unknown command: /{word}.", "warn")
+
+    def _show_flags(self, pm) -> None:
+        """The character drawn and the hunter hidden, or (/hunter) the hunter alone."""
+        pm.set_flags(not self.show_hunter, not self.show_hunter and self.cfg.get("hide_hunter", True))
 
     def _weapon_watch(self) -> None:
         """Monster Hunter's weapon, from its hunter's motion's name (w03_*: the lance): when it changes,
@@ -880,7 +892,7 @@ class App:
                 self.mem.set_name_height(top + 25)
             pm = PortModel()
             pm.send(packed)
-            pm.set_flags(True, self.cfg.get("hide_hunter", True))
+            self._show_flags(pm)
             moves = ", ".join(f"{c['name']}" + (f" {c['speed']:.0f}/s" if c["speed"] else "") for c in packed["clips"])
             print(f"FFXI character: {what}, {len(packed['verts']) // 3} triangles, {len(packed['layers'])} textures, "
                   f"{len(packed['parents'])} joints; motions {moves}")
