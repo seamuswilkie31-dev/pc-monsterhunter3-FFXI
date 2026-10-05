@@ -1,0 +1,138 @@
+==============================================================================
+  MONSTER HUNTER TRI  x  FINAL FANTASY XI  —  SETTING UP A NEW PC
+==============================================================================
+
+This guide gets the game running on a Windows PC that has never had it.
+Follow the steps in order. Each step says what it is for, then gives the
+exact commands to type.
+
+  * Commands go in PowerShell. To open it: press the Windows key, type
+    "PowerShell", and click "Windows PowerShell".
+  * Type (or paste) one command at a time and press Enter. Wait for it to
+    finish before the next.
+  * Nothing here downloads a game. You need your OWN copy of Monster
+    Hunter Tri (a disc image you made from your own disc) and your OWN
+    FINAL FANTASY XI installation. This project ships no game files.
+
+What you need, in short:
+
+  - Windows 10 or 11, 64-bit, with a graphics card that supports OpenGL 4.5
+  - About 10 GB of free disk space (plus FFXI's own install)
+  - Your Monster Hunter Tri disc image (Europe, RMHP08: .rvz or .iso)
+  - FINAL FANTASY XI installed (official installer, see step 6)
+  - Optional: an Xbox or similar controller
+
+
+------------------------------------------------------------------------------
+ STEP 1 — Git (to download this project)
+------------------------------------------------------------------------------
+
+    winget install --id Git.Git -e
+
+  Close PowerShell and open it again afterwards, so it finds Git.
+  Official site, if winget isn't available: https://git-scm.com/download/win
+
+
+------------------------------------------------------------------------------
+ STEP 2 — uv (runs the launcher and installs its Python parts by itself)
+------------------------------------------------------------------------------
+
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    uv python install 3.12 3.14
+
+  Close PowerShell and open it again afterwards.
+  Official site: https://docs.astral.sh/uv/
+
+
+------------------------------------------------------------------------------
+ STEP 3 — MSYS2 (the compiler that builds the game, and its libraries)
+------------------------------------------------------------------------------
+
+    winget install --id MSYS2.MSYS2 -e
+    C:\msys64\usr\bin\bash.exe -lc "pacman -Syu --noconfirm"
+    C:\msys64\usr\bin\bash.exe -lc "pacman -S --needed --noconfirm mingw-w64-x86_64-clang mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-sdl3"
+
+  If the second command says MSYS2 must restart, run it a second time.
+  Official site: https://www.msys2.org/
+
+
+------------------------------------------------------------------------------
+ STEP 4 — This project
+------------------------------------------------------------------------------
+
+    cd $HOME
+    git clone --recurse-submodules -b ffxi-layer https://github.com/seamuswilkie31-dev/pc-monsterhunter3-FFXI.git pc-monsterhunter3
+    cd pc-monsterhunter3
+    mkdir build, build\fonts
+
+  The project is now in your user folder, e.g. C:\Users\YOU\pc-monsterhunter3
+
+
+------------------------------------------------------------------------------
+ STEP 5 — Your own game files
+------------------------------------------------------------------------------
+
+  5a. Copy your Monster Hunter Tri disc image into the "build" folder of
+      the project. Below it is called "Monster Hunter Tri (Europe).rvz";
+      use your file's real name in the commands.
+
+  5b. Install Dolphin (the Wii emulator; it is only used for two of its
+      files): https://dolphin-emu.org/download/
+      From Dolphin's "Sys" folder, copy into the project's build\fonts folder:
+          Sys\GC\font_western.bin
+          Sys\GC\font_japanese.bin
+          Sys\GC\dsp_coef.bin      (if Dolphin has it; otherwise skip)
+      and note where Dolphin's Sys\totaldb.dsy is (used in 5c).
+
+  5c. Unpack the disc and build the game (from the project folder; this
+      takes several minutes the first time):
+
+    uv run --python 3.14 python -m wiikit.disc "build\Monster Hunter Tri (Europe).rvz" --extract build\extract
+    uv run python tools\sigmatch.py build\extract\sys\main.dol --dsy "C:\PATH\TO\Dolphin\Sys\totaldb.dsy" --out build\sig_guess.tsv
+    uv run python tools\names.py build\extract\sys\main.dol
+    $rso = Get-ChildItem build\extract\files\01\*.rso | ForEach-Object { "--rso"; $_.FullName }
+    uv run python -m wiikit.recomp build\extract\sys\main.dol --out build\recomp --symbols build\names.tsv --hooks tools\mh3-hooks.txt --sel build\extract\files\mh3.sel @rso
+    $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+    cmake -S build\recomp -B build\recomp-build -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_FLAGS_RELEASE=-O1" "-DWIIKIT_EXTRA=$PWD\tools\mh3.cmake"
+    ninja -C build\recomp-build
+
+  When it finishes, build\recomp-build\wiiboot.exe exists: that is the game.
+
+
+------------------------------------------------------------------------------
+ STEP 6 — FINAL FANTASY XI
+------------------------------------------------------------------------------
+
+  Install FINAL FANTASY XI with Square Enix's official installer:
+      https://www.playonline.com/ff11us/  (Square Enix: "Download" / "Install")
+  (A free trial account is enough: only the installed files are used.)
+  Its usual folder is:
+      C:\Program Files (x86)\PlayOnline\SquareEnix\FINAL FANTASY XI
+
+
+------------------------------------------------------------------------------
+ STEP 7 — Play
+------------------------------------------------------------------------------
+
+  Double-click "Play FFXI-MH3.bat" in the project folder. In the launcher:
+      1. point it at your FINAL FANTASY XI folder (the one holding ROM)
+         and click "Extract FFXI interface assets" (once, a few minutes);
+      2. "Character…" to make your FFXI character;
+      3. "Play".
+
+  The launcher checks all of the above each time it starts. If something
+  is missing it writes SETUP-NEEDED.txt in the project folder, naming only
+  what's missing and the step here that fixes it.
+
+
+------------------------------------------------------------------------------
+ IF SOMETHING GOES WRONG
+------------------------------------------------------------------------------
+
+  * "uv is not recognized" / "git is not recognized": close PowerShell and
+    open it again (step 1 or 2 just installed it); else redo that step.
+  * The game window opens and closes at once: look at build\run1\wiiboot.log.
+    A missing "SDL3.dll" means step 3 didn't finish: run its last command again.
+  * No FFXI interface in the game: build\run1\ffxi.log says why.
+  * Controller: the game reads the first pad as the Wii Classic Controller.
+    Holding the left face button (X on an Xbox pad) opens FFXI's menu.

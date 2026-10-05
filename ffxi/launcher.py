@@ -99,7 +99,26 @@ class Launcher:
         self.play_btn.grid(row=9, column=0, sticky="w", pady=8)
         self.status = tk.StringVar(value="")
         ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=10, column=0, columnspan=3, sticky="w")
+        self.setup_btn = ttk.Button(f, text="Open the setup steps", command=self.open_setup)
         self.refresh()
+        self.check_setup()
+
+    def check_setup(self) -> bool:
+        """Everything this PC needs (prereqs.py): what's missing named, SETUP-NEEDED.txt written for it."""
+        import prereqs as P
+        missing = P.check(self.path.get())
+        self.setup_file = P.write_report(missing)
+        if missing:
+            names = "; ".join(m.what for m in missing)
+            self.status.set(f"This PC still needs: {names}. See {self.setup_file.name} in the project folder.")
+            self.setup_btn.grid(row=11, column=0, sticky="w", pady=(4, 0))
+        else:
+            self.setup_btn.grid_remove()
+        return not missing
+
+    def open_setup(self):
+        p = getattr(self, "setup_file", None) or ROOT / "SETUP-INSTRUCTIONS.txt"
+        os.startfile(str(p))
 
     def choose_pearl(self):
         rgb, hexa = colorchooser.askcolor(color=self.pearl_colour, title="Your linkpearl's colour", parent=self.root)
@@ -155,6 +174,8 @@ class Launcher:
         threading.Thread(target=work, daemon=True).start()
 
     def play(self):
+        if not self.check_setup():
+            return
         exe = ROOT / "build" / "recomp-build" / "wiiboot.exe"
         run = ROOT / "build" / "run1"
         if not exe.exists():

@@ -42,3 +42,4 @@ nand/
 # the FFXI layer: your levels and EXP
 ffxi/save.json
 ffxi/save.tmp
+SETUP-NEEDED.txt
