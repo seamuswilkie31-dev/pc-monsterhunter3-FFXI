@@ -393,7 +393,7 @@ def demo() -> UiState:
                             ("7", "Cure IV", True, ""), ("8", "Haste", False, "12s"), ("9", "Fire II", True, ""),
                             ("0", "Refresh", True, "")),
                    menu=(("Command", (("Weapon Skills", True, ""), ("Job Abilities", True, ""), ("Magic", True, ""),
-                                      ("Items", True, ""), ("Job", True, "RDM40/WHM20")), 2, False, False),
+                                      ("Pouch Item", True, ""), ("Job", True, "RDM40/WHM20")), 2, False, False),
                          ("Magic", (("White Magic", True, ""), ("Black Magic", True, "")), 1, False, False),
                          ("Black Magic", (("Stone", True, "4 MP"), ("Water", True, "5 MP"), ("Aero", True, "6 MP"),
                                           ("Fire", True, "7 MP"), ("Blizzard", True, "8 MP"), ("Thunder", True, "9 MP"),

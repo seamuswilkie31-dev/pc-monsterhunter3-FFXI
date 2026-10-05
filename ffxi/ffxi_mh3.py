@@ -471,9 +471,12 @@ class App:
                 root.append({"label": "Magic", "ok": True, "detail": "", "children": [
                     {"label": names.get(s, s.title()), "ok": True, "detail": "",
                      "children": [action(n) for n in ns]} for s, ns in schools.items()]})
-        root.append({"label": "Items", "ok": True, "detail": "", "act": ("item",)})
         if self.gear:
             root += self._gear_menu()
+        # Monster Hunter's own item use (as a tap of the pad's X): named apart from FFXI's Items, the inventory
+        root.append({"label": "Pouch Item", "ok": True, "detail": "", "act": ("item",),
+                     "help": "Monster Hunter's item pouch: uses the item chosen in the game's item bar "
+                             "(a potion, a whetstone...), as a tap of X does.\nFFXI's gear is in Items."})
         jobs = [{"label": d["name"], "ok": j != e.job, "detail": f"Lv{e.levels.get(j, 1)}", "act": ("job", j)}
                 for j, d in D.JOBS.items()]
         subs = [{"label": "None", "ok": e.sub is not None, "detail": "", "act": ("sub", None)}]
@@ -485,8 +488,8 @@ class App:
         return root
 
     def _gear_menu(self) -> list[dict]:
-        """Equipment (each slot: what's worn, and what you hold that goes there) and Inventory (each piece:
-        equip it, drop it). A piece's description shows beside the menu (help)."""
+        """Equipment (each slot: what's worn, and what you hold that goes there) and Items, FFXI's inventory
+        (each piece: equip it, drop it). A piece's description shows beside the menu (help)."""
         import ffxi_gear as G
         g, e = self.gear, self.e
         held = sorted(set(e.inventory), key=lambda i: (-(g.item(i) or {}).get("level", 0), (g.item(i) or {}).get("name", "")))
@@ -525,7 +528,8 @@ class App:
                               {"label": "Drop", "ok": True, "detail": "", "act": ("drop", iid)}]})
         return [{"label": "Equipment", "ok": True, "detail": shown[:24], "help": "Your gear's stats: " + (shown or "none"),
                  "children": slots},
-                {"label": "Inventory", "ok": bool(items), "detail": f"{len(e.inventory)}",
+                {"label": "Items", "ok": bool(items), "detail": f"{len(e.inventory)}",
+                 "help": "Your FFXI gear: equip a piece, or drop it.",
                  "children": items or [{"label": "(Empty)", "ok": False, "detail": ""}]}]
 
     def _menu_levels(self, now: float) -> list[tuple[str, list[dict], int, int]]:

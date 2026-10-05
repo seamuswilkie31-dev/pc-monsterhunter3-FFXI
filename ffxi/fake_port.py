@@ -264,7 +264,7 @@ def test() -> int:
     app.step()
     check(app.menu == {"stack": [[0, 0]]}, "the pad's X opens the command menu")
     titles = [r[0] for r in app.menu_view(0)[0][1]]
-    check(titles == ["Weapon Skills", "Job Abilities", "Magic", "Items", "Job"], f"its first level ({titles})")
+    check(titles == ["Weapon Skills", "Job Abilities", "Magic", "Pouch Item", "Job"], f"its first level ({titles})")
     press(mm, P.CL_DOWN); press(mm, P.CL_DOWN); press(mm, P.CL_B)   # Magic
     app.step()
     view = app.menu_view(0)
@@ -279,9 +279,9 @@ def test() -> int:
     press(mm, P.CL_Y); app.step()                         # open again
     for _ in range(3):
         press(mm, P.CL_DOWN)
-    press(mm, P.CL_B)                                     # Items
+    press(mm, P.CL_B)                                     # Pouch Item
     app.step(); serve_once(mm, ram)
-    check(ram.items_used == 1 and app.menu is None, "Items passes one press to the game's own item use")
+    check(ram.items_used == 1 and app.menu is None, "Pouch Item passes one press to the game's own item use")
     press(mm, P.CL_Y); app.step()
     for _ in range(4):
         press(mm, P.CL_DOWN)

@@ -63,8 +63,8 @@ race's resting kneel), /say and plain words, /ma /ja /ws by name, /echo.
 LandSandBoat's item_equipment MId, fetched once) into the asset folder's items.json; `ffxi_gear.py` decides
 who wears what, the starter kit, stats (`Engine.set_gear`: DEF, STR, Attack, AGI, INT, MND, MP, Regen,
 Refresh, Haste, Store TP act), the look (worn pieces over the creator's), and drops (the monster's level to
-three above; a large monster always). Menus: Equipment (16 slots) and Inventory (equip, drop), the
-highlighted piece's stats beside them. Ideas next: FFXI's item icons (each item block holds a 32x32 one at
+three above; a large monster always). Menus: Equipment (16 slots) and Items, the inventory (equip, drop),
+the highlighted piece's stats beside them; Monster Hunter's own item use is Pouch Item, apart from them. Ideas next: FFXI's item icons (each item block holds a 32x32 one at
 0x280), the Equipment window as FFXI's 4x4 grid, HP+ gear (Monster Hunter's max HP), a treasure pool.
 
 Next: spell visual effects (started 2026-10-04: the format studied, nothing written yet). What's known:
