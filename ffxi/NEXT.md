@@ -1,22 +1,28 @@
 # FFXI layer — next session
 
-**River's list (2026-10-05)**, being worked through:
-1. Tarutaru's run plays too fast: slow it (Taru only).
-2. FFXI's Attack command: locked on, the weapon drawn, auto-attacks on the weapon's delay while magic and
-   job abilities still go on.
-3. Jobs: keep "all jobs on one character" as an option (solo), and a chosen job and support job, swapped
-   anywhere (as the Mog House does), every job unlocked from the start. A foldable menu for them; Job
-   Abilities and Magic their own; FFXI's command menu bottom left, above the chat log, rising with it.
-4. FFXI's round shadow under the character in place of Monster Hunter's foot shadows (the current code
-   kept to go back to). And in the launcher, a linkpearl beside the name, its colour chosen.
-5. The nameplate in FFXI's font (if it's sprites), else the current font in italics.
-6. Trusts: summoned and released as in FFXI, all unlocked.
-7. Attack mode: the camera leans toward the locked target, as FFXI's (reversible).
-8. The hunter's grunts swinging the sword: the race's own voice instead.
-9. /sit: the wrong motion (Tarutaru male at an odd angle; Hume male not the sitting one).
-10. Area 10: the target arrow on an "Aptonoth" nobody can see, moving: a false report, or a monster
-    misbehaving in the port?
-Then: the launcher checks the prerequisites for another PC, and a plain .txt says how to set one up.
+**River's list (2026-10-05)**: where each stands (built and committed; "in play" once checked there).
+1. Tarutaru's run too fast: done, Taru only (`_send_character` slows the run clips' rate).
+2. FFXI's Attack: done. The menu's Attack (or /attack, /a) engages: locked on, the weapon drawn, a swing
+   each `swing_delay` (the weapon's delay / 60 s) within reach (`attack_reach` + 0.6 x the target's height);
+   magic and abilities go on meanwhile; off again with Attack, or 2 s with no target. Block `engage`
+   (MENU_AT+24) tells the bridge (`target_frame`'s lock, the battle stance).
+3. Jobs: done. Job (main and support, swapped anywhere) and All Jobs (every job's spells and abilities,
+   the highest MP; `engine.all_jobs`, saved) in the menu's Job; Magic and Abilities their own; the
+   command menu bottom left above the chat log, rising with it (`ffxi_ui._menu`, `_log_top`).
+4. Round shadow: NOT YET. Monster Hunter's foot shadows aren't identified among the draws: an F12 trace
+   standing next to the hunter, then hide those draws behind a switch (the current drawing kept). The
+   linkpearl: done (launcher: the pearl and its colour; `FFXI_LINKPEARL`; drawn by the name).
+5. Nameplate: done, the current font in italics (FFXI's nameplate isn't a sprite font).
+6. Trusts: NOT STARTED. Needs more than one FFXI model in the port (the block holds one), trusts' looks
+   (LSB's trust table as data reference), following and fighting in the layer, a menu "Trust".
+7. Attack camera: done with 2 (the lock's camera while engaged; config.toml `attack_lock_camera = false` to go back).
+8. Race voices: done (`ffxi_sound.voice_set`: se2NN by race and face; attack/hurt/faint, 0.4 s apart).
+   The hunter's own grunts: the mute is built (`hook_se_req`, `MH3_MUTE_SE=code,code`) but the codes
+   aren't known yet: run with `MH3_SE_TRACE=1`, swing, read wiiboot.log's SE lines.
+9. /sit: done (si0/si1 from the race's own motions when the emote files lack them; /heal rx0/rx1).
+10. Area 10's invisible "Aptonoth": hidden monsters (flags & 0x60 == 0x60) are no longer targeted, and
+    the target log (wiiboot.log) names what the arrow points at, to tell if it happens again.
+Then: the launcher's prerequisite check (`prereqs.py`, SETUP-NEEDED.txt) and SETUP-INSTRUCTIONS.txt: done.
 
 
 Where it stands (2026-10-04): **the FFXI interface runs in the game, with an FFXI character of any race in your hunter's place.** Monster Hunter's HUD is switched
