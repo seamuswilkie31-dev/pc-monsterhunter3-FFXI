@@ -1,7 +1,7 @@
 """FFXI's character in your hunter's place: the model handed to the port, which draws it in the scene.
 
 The port (MH3_FFXI=1) maps a shared block, "mh3-ffxi-model" (tools/ffxi_bridge.cpp, struct ModelBlock),
-version 5: the model's triangle corners on its joints (ffxi_model.pack), the joints' parents, its place
+version 6: the model's triangle corners on its joints, with their normals (ffxi_model.pack), the joints' parents, its place
 in the hunter's space, its motions (each standing, moving or an action, of the peace set or the battle
 set, with the ground speed a moving one was made for and its name's first four letters), its textures as
 256x256 layers, and flags: draw it, hide Monster Hunter's hunter. The port poses it every frame: the
@@ -18,8 +18,8 @@ import struct
 import numpy as np
 
 TAG = "mh3-ffxi-model"
-MAGIC, VERSION = 0x4D48334D, 5  # 'MH3M'
-MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 100000, 13, 16, 256
+MAGIC, VERSION = 0x4D48334D, 6  # 'MH3M'
+MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 100000, 20, 16, 256    # VERT_FLOATS: ffxi_model.VERT_FLOATS
 MAX_JOINTS, MAX_CLIPS, POOL = 128, 96, 1 << 22
 NONE = 0xFFFFFFFF
 # magic, version, serial, n_verts, layers, tex_w, tex_h, flags, alive, n_joints, n_clips,

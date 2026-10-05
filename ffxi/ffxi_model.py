@@ -17,8 +17,9 @@ The formats, as the community's viewers read them (written here from that descri
     byte, a rotation quaternion (x, y, z, w) and a translation, relative to its parent.
   mesh (chunk 0x2A): a header of offsets (in 2-byte units) to a joint table, the counts of one-joint and
     two-joint vertices, each vertex's joint references, the vertex data, and an instruction stream.
-    A one-joint vertex is a position (and normal) in its joint's space; a two-joint vertex holds both
-    positions already weighted, and the two weights. A symmetric mesh is drawn twice, the second time
+    A one-joint vertex is a position and a normal in its joint's space; a two-joint vertex holds both
+    positions already weighted, the two weights, then both normals (each as its joint turns it). A cloth
+    mesh's vertices have no normals. A symmetric mesh is drawn twice, the second time
     from flipped joints and axes. The instructions: 0x8000 a texture's 16-character name, 0x8010
     material properties, 0x5453/0x0054 textured strips/lists with UVs, 0x4353/0x0043 coloured ones,
     0xFFFF the end.
@@ -109,16 +110,18 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
     refs = [(_ref(r.u16()), _ref(r.u16())) for _ in range(n)]
     normals = not cloth
     p0 = np.zeros((n, 3)); p1 = np.zeros((n, 3)); w = np.zeros((n, 2)); w[:, 0] = 1
+    q0 = np.zeros((n, 3)); q1 = np.zeros((n, 3))            # the normals (a cloth's: none; pack works them out)
     r.pos = data + verts_at
     for i in range(n1):
         p0[i] = r.vec3()
         if normals:
-            r.vec3()
+            q0[i] = r.vec3()
     for i in range(n1, n):
         x0, x1, y0, y1, z0, z1, w0, w1 = r.take("8f")
         p0[i], p1[i], w[i] = (x0, y0, z0), (x1, y1, z1), (w0, w1)
         if normals:
-            r.take("6f")
+            a0, a1, b0, b1, c0, c1 = r.take("6f")
+            q0[i], q1[i] = (a0, b0, c0), (a1, b1, c1)
     j0 = np.array([joint(a[0]) for a, _ in refs])
     j1 = np.array([joint(bb[0]) if i >= n1 else -1 for i, (_, bb) in enumerate(refs)])
     mj0 = np.array([joint(a[1]) for a, _ in refs])
@@ -166,7 +169,8 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
         else:
             raise ValueError(f"{name}: unknown mesh instruction {op:#06x} at {r.pos - 2 - data:#x}")
     return {"name": name, "p0": p0, "p1": p1, "w": w, "j0": j0, "j1": j1, "mj0": mj0, "mj1": mj1,
-            "fa0": fa0, "fa1": fa1, "symmetric": symmetric, "pieces": pieces}
+            "fa0": fa0, "fa1": fa1, "symmetric": symmetric, "pieces": pieces, "n0": q0, "n1": q1,
+            "cloth": cloth}
 
 
 def parse_motion(b: bytes, data: int, name: str) -> dict:
@@ -317,6 +321,39 @@ def _skin_inputs(mesh: dict, mirrored: bool, n_joints: int):
     return p0, p1, j0, j1
 
 
+WEAPON_SLOTS = ("main", "sub", "ranged")     # not what the character stands on (a sword hangs below the soles)
+
+
+def _normal_inputs(mesh: dict, mirrored: bool, world: np.ndarray):
+    """A mesh's normals as its joints hold them (n0 on j0, n1 on j1, as the positions), and whether it
+    is lit from both sides. A cloth mesh has none in its file: they're worked out from its faces at rest
+    (FFXI's faces wind against their normals; a mirrored copy the other way), and it is two-sided."""
+    if not mesh.get("cloth"):
+        if mirrored:
+            return _flip(mesh["n0"], mesh["fa0"]), _flip(mesh["n1"], mesh["fa1"]), 0.0
+        return mesh["n0"], mesh["n1"], 0.0
+    p0, p1, j0, j1 = _skin_inputs(mesh, mirrored, len(world))
+    v = skin(mesh, world, mirrored)
+    acc = np.zeros_like(v)
+    for piece in mesh["pieces"]:
+        for tri in piece["tris"]:
+            idx = [c[0] for c in tri]
+            if max(idx) >= len(v):
+                continue
+            a, b, c = v[idx]
+            f = np.cross(b - a, c - a) * (1 if mirrored else -1)
+            for i in idx:
+                acc[i] += f
+    n = acc / np.maximum(np.linalg.norm(acc, axis=1, keepdims=True), 1e-12)
+    w = mesh["w"]
+    q0 = np.einsum("nji,nj->ni", world[j0, :3, :3], n) * w[:, :1]      # the joints' turns undone
+    q1 = np.zeros_like(q0)
+    two = j1 >= 0
+    q1[two] = np.einsum("nji,nj->ni", world[j1[two], :3, :3], n[two]) * w[two, 1:2]
+    q0[~two] = np.einsum("nji,nj->ni", world[j0[~two], :3, :3], n[~two])
+    return q0, q1, 1.0
+
+
 def skin(mesh: dict, world: np.ndarray, mirrored: bool = False) -> np.ndarray:
     """The mesh's vertices in the model's space (one joint: its transform; two: both, pre-weighted)."""
     p0, p1, j0, j1 = _skin_inputs(mesh, mirrored, len(world))
@@ -433,6 +470,7 @@ def render(model: dict, size: int = 512, yaw: float = 0.0, world: np.ndarray | N
 # for the game: the model in the hunter's space, its textures as layers (port_model.py sends them)
 # ================================================================================================
 MOTIONS = ("idl", "wlk", "run")       # standing, walking, running: the port picks by the hunter's speed
+VERT_FLOATS = 20                       # a triangle corner's floats (pack; port_model.py and the port's ModelBlock)
 
 # ================================================================================================
 # player characters: a race's skeleton and motions, and its equipment, each slot a file chosen by the
@@ -657,7 +695,7 @@ def load_character(root: Path, race: str, look: dict, style: int | None = None, 
             model["errors"].append(f"{slot} {look[slot]}: no file")
             continue
         part = load_(p)
-        model["meshes"] += part["meshes"]
+        model["meshes"] += [{**m, "slot": slot} for m in part["meshes"]]     # pack keeps the weapons off the ground
         model["textures"].update(part["textures"])
         model["errors"] += part["errors"]
     if not motions:
@@ -728,11 +766,13 @@ def character_clips(own: list[list[dict]], arms: list[list[dict]], letter: str =
 def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = True, size: int = 256,
          motions: tuple[str, ...] = MOTIONS, scale: float | None = None) -> dict:
     """The model for the port to skin and animate (port_model.py):
-      verts   N x 13 float32, each triangle corner: p0 xyz, p1 xyz (in its joints' spaces, weighted),
-              joint 0, joint 1 (-1: one joint), weight 0, weight 1, u, v, texture layer
+      verts   N x 20 float32, each triangle corner: p0 xyz, p1 xyz (in its joints' spaces, weighted),
+              joint 0, joint 1 (-1: one joint), weight 0, weight 1, u, v, texture layer, its normal
+              n0 xyz, n1 xyz (as the positions: each joint turns its own), and 1 if it is lit from both
+              sides (cloth), else 0
       layers  L x size x size x 4 uint8, the textures
-      place   3 x 4, FFXI's model space to Monster Hunter's convention for the hunter's own: Y up, feet
-              at 0, `height` tall, facing +Z (FFXI's models face +X with Y down), turned by yaw degrees.
+      place   3 x 4, FFXI's model space to Monster Hunter's convention for the hunter's own: Y up, the
+              soles at 0 (the weapons not counted), `height` tall, facing +Z (FFXI's models face +X with Y down), turned by yaw degrees.
               mirror: FFXI's space is left-handed, the GX's right-handed, so one axis flips
       parents each joint's (-1: the root)
       clips   per motion found: name, frames, rate (keyframes per game frame, 30 a second), speed
@@ -746,10 +786,13 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
     """
     from PIL import Image
     joints = model["skeletons"][0]
-    rows, names = [], {}
+    rest = joint_world(joints)
+    rows, names, body = [], {}, []
     for mesh in model["meshes"]:
+        weapon = mesh.get("slot") in WEAPON_SLOTS
         for mirrored in ((False, True) if mesh["symmetric"] else (False,)):
             p0, p1, j0, j1 = _skin_inputs(mesh, mirrored, len(joints))
+            n0, n1, sides = _normal_inputs(mesh, mirrored, rest)
             for piece in mesh["pieces"]:
                 if piece["tex"] not in model["textures"]:
                     continue
@@ -758,13 +801,17 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
                     if max(c[0] for c in tri) >= len(p0):
                         continue
                     for i, uv in tri:
-                        rows.append((*p0[i], *p1[i], j0[i], j1[i], *mesh["w"][i], uv[0], uv[1], lay))
-    verts = np.array(rows, np.float32).reshape(-1, 13)
+                        rows.append((*p0[i], *p1[i], j0[i], j1[i], *mesh["w"][i], uv[0], uv[1], lay,
+                                     *n0[i], *n1[i], sides))
+                        body.append(not weapon)
+    verts = np.array(rows, np.float32).reshape(-1, VERT_FLOATS)
 
-    corners = skin_corners(verts, joint_world(joints))                # height and ground at rest
+    corners = skin_corners(verts, rest)                               # height and ground at rest
     axes = np.array([[0, 0, -1 if mirror else 1], [0, -1, 0], [1, 0, 0]], np.float64)   # forward +Z, up +Y
     up = corners @ axes.T
-    lo, hi = up[:, 1].min(), up[:, 1].max()
+    body = np.array(body, bool)
+    stands = up[body] if body.any() else up                           # the soles, not a hanging sword's tip
+    lo, hi = stands[:, 1].min(), stands[:, 1].max()
     k = scale if scale else height / (hi - lo)
     c, s_ = np.cos(np.radians(yaw)), np.sin(np.radians(yaw))
     turn = np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])

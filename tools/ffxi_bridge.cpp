@@ -801,8 +801,8 @@ void hook_cam_posture(PPCContext& c) {
 // set or, while the hunter's weapon is out, the battle set; and actions over them, on the layer's
 // request (a spell's casting) or the hunter's (Monster Hunter's attacks: hunter_motion).
 // ================================================================================================
-constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 5;     // 'MH3M'
-constexpr int kModelMaxVerts = 100000, kModelVertFloats = 13, kModelMaxLayers = 16, kModelTex = 256;
+constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 6;     // 'MH3M'
+constexpr int kModelMaxVerts = 100000, kModelVertFloats = 20, kModelMaxLayers = 16, kModelTex = 256;
 constexpr int kModelMaxJoints = 128, kModelMaxClips = 96, kModelPool = 1 << 22, kXf = 10;
 enum : uint32_t { kStand = 0, kMove = 1, kAction = 2 };
 enum : uint32_t { kPeace = 0, kBattle = 1 };
@@ -840,7 +840,7 @@ struct ModelBlock {
     float pool[kModelPool];
     uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
 };
-static_assert(sizeof(ModelBlock) == 26175232, "ffxi/port_model.py mirrors this layout");
+static_assert(sizeof(ModelBlock) == 28975232, "ffxi/port_model.py mirrors this layout");
 
 // The character's motions, copied from the block when it changes. Moving: under 15 units a second (30
 // to start) the set's standing one; moving, the one made for the nearest speed, played that much faster
@@ -1228,7 +1228,7 @@ void model_frame() {
         target_frame(tp, follow_camera(tp), dt);             // FFXI's target, and the lock-on
     }
     if (!loaded) return;
-    float view[12] = {}, proj[6] = {}, h[12];
+    float view[12] = {}, proj[6] = {}, h[12], camera[12] = {};
     bool fresh;
     {
         std::lock_guard<std::mutex> lk(g_hunter_mx);
@@ -1259,7 +1259,7 @@ void model_frame() {
     g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
     if (visible) {
         float v[12], hp[12];
-        for (int i = 0; i < 12; ++i) v[i] = f32(cam + 4 * i);
+        for (int i = 0; i < 12; ++i) camera[i] = v[i] = f32(cam + 4 * i);
         mul34(h, g_anim.place, hp);                           // the model's space to the hunter's, to the world's
         mul34(v, hp, view);                                   // then the camera's
         const int pi[6] = {0, 2, 5, 6, 10, 11};               // GX's six: P00 P02 P11 P12 P22 P23
@@ -1271,7 +1271,7 @@ void model_frame() {
                    view[3], view[7], view[11], proj[0], proj[1], proj[2], proj[3], proj[4], proj[5]);
         }
     }
-    video_model_frame(view, proj, visible, g_anim.rows.data(), g_anim.nj);
+    video_model_frame(view, proj, visible, g_anim.rows.data(), g_anim.nj, camera);   // camera: lit as the game lights
 }
 
 void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
