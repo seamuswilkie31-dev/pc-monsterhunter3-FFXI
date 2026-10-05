@@ -37,8 +37,10 @@ KIND = {"ws": (255, 255, 255), "damage": (255, 255, 255), "magic": (170, 205, 25
 UP, DOWN = "\u25b2", "\u25bc"
 
 
-def font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+def font(size: int, bold: bool = True, italic: bool = False) -> ImageFont.FreeTypeFont:
     names = ["arialbd.ttf", "segoeuib.ttf", "tahomabd.ttf"] if bold else ["arial.ttf", "segoeui.ttf", "tahoma.ttf"]
+    if italic:                                    # the slanted ones first, the upright ones if there are none
+        names = (["arialbi.ttf", "seguibi.ttf"] if bold else ["ariali.ttf", "segoeuii.ttf"]) + names
     for n in names:
         for d in (Path("C:/Windows/Fonts"), Path("/usr/share/fonts/truetype/dejavu")):
             if (d / n).exists():
@@ -146,6 +148,7 @@ class FfxiUi:
     def __init__(self, theme: int = 1, use_assets: bool = True):
         self.skin = load_skin(theme) if use_assets else None
         self.f_name = font(17)
+        self.f_tag = font(17, italic=True)    # the name above your head: slanted, as FFXI's
         self.f_val = font(15)
         self.f_small = font(13)
         self.f_log = font(15)
@@ -214,11 +217,11 @@ class FfxiUi:
             d.line([(x + 1, y + 1), (fx, y + 1)], fill=(*[min(255, c + 50) for c in col], 255))
 
     def _nameplate(self, d, s: UiState) -> None:
-        """Your name above your head, as FFXI shows it: white, outlined, centred."""
+        """Your name above your head, as FFXI shows it: white, slanted, outlined, centred."""
         x = (s.nameplate[0] + 1) / 2 * W
         y = (1 - s.nameplate[1]) / 2 * H
         if 0 <= x < W and 0 <= y < H:
-            self._text(d, (int(x), int(y)), s.name, self.f_name, WHITE, anchor="ms")
+            self._text(d, (int(x), int(y)), s.name, self.f_tag, WHITE, anchor="ms")
 
     def _arrow(self, d, s: UiState) -> None:
         """FFXI's target arrow: pointing down at the target's head, bobbing; ringed while locked on."""

@@ -615,6 +615,9 @@ bool enemy_model(uint32_t obj, char name[16]) {
 void note_enemy(uint32_t obj) {
     char name[16];
     if (!enemy_model(obj, name) || !in_ram(obj + 0x3C, 48)) return;
+    // a model the game keeps placed but draws neither opaque nor translucent (a monster switched out,
+    // away from the area) is nobody's target: the arrow once pointed at an unseen Aptonoth so
+    if (in_ram(obj + 0xCC, 4) && (ld32(obj + 0xCC) & 0x60) == 0x60) return;
     float x = f32(obj + 0x48), y = f32(obj + 0x58), z = f32(obj + 0x68);
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     for (Enemy& e : g_enemies)
@@ -699,6 +702,12 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
                 g_lock.yaw = std::atan2(g_lock.look[0] - g_lock.eye[0], g_lock.look[2] - g_lock.eye[2]);
         }
         rt_log("ffxi: lock-on %s %s", g_lock.on ? "on" : "off", t ? t->name : "(no target)");
+    }
+    static uint32_t told_target = 0;
+    if (t && t->obj != told_target) {                        // each new target, for a report of a strange one
+        told_target = t->obj;
+        rt_log("ffxi: target %s (scene model %08X, draw flags %08X) at %.0f %.0f %.0f, %.0f from the hunter",
+               t->name, t->obj, in_ram(t->obj + 0xCC, 4) ? ld32(t->obj + 0xCC) : 0, t->x, t->y, t->z, dist(*t));
     }
     g_target_obj = t ? t->obj : 0;
     g_lock.camera = cam;
