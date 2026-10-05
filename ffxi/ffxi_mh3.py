@@ -232,6 +232,7 @@ class App:
         self.gear = self._start_gear()  # FFXI's equipment (ffxi_gear.Gear): None without the item database
         self.chat_seen = None          # the chat line's lines handled so far (port_bridge.chat)
         self.show_hunter = False       # /hunter: Monster Hunter's own hunter shown instead of the character
+        self.fx = None                 # FFXI's spell effects in the scene (_start_fx), in the game's window
         self.chat_typing = None        # what's being typed, while the line is open
         self.mh_weapon = cfg.get("weapon", "sword_and_shield")   # Monster Hunter's weapon: FFXI's like is held
         self._rebuilding = False
@@ -308,6 +309,14 @@ class App:
                     self.character.request(cast + "2")
                 elif kind == "interrupted":
                     self.character.request(None)
+        if self.fx:
+            for kind, name in events:
+                if kind == "cast":
+                    self._fx_cast(name)
+                elif kind == "spell":
+                    self._fx_spell(name)
+                elif kind == "interrupted":
+                    self._fx_cast_end()
         if not self.sounds:
             return
         import ffxi_sound as FS
@@ -319,6 +328,117 @@ class App:
                 self.sounds.play_effect(FS.LEVEL_UP)
             elif kind == "level_down":
                 self.sounds.play_effect(FS.LEVEL_DOWN)
+
+    # --- FFXI's spell effects in the scene (ffxi_fx.py runs them, port_fx.py hands them to the port) ---
+    def _start_fx(self):
+        """The casting and the spells landing, from FFXI's own effect files: the character's race's casting,
+        the shared release, each spell's own."""
+        if self.cfg.get("effects", True) is False or not self.cfg.get("character_race"):
+            return None
+        try:
+            import ffxi_fx as FX
+            import ffxi_model as FM
+            from port_fx import PortFx
+            lib = FX.Library(FM.ffxi_root(self.cfg.get("ffxi_path")), self.cfg.get("character_race"))
+            me = FX.actor_from_mh([0, 0, 0], FX.yaw_matrix(0.0))
+            them = FX.actor_from_mh([0, 0, 0], FX.yaw_matrix(0.0), 200.0)
+            print("FFXI effects: casting and spells drawn in the scene")
+            return {"lib": lib, "effects": FX.Effects(lib), "port": PortFx(), "me": me, "them": them,
+                    "has_target": False, "cast": None, "layers": {}, "images": [], "tex": {}, "last": 0.0,
+                    "drawn": False}
+        except Exception as ex:                                       # noqa: BLE001  the layer runs without them
+            print(f"[FFXI effects unavailable: {ex}]")
+            return None
+
+    def _fx_cast(self, name: str) -> None:
+        """A spell begun: its school's casting about the character, until it goes off or is broken off."""
+        import ffxi_fx as FX
+        fx = self.fx
+        self._fx_cast_end()
+        routine = FX.CAST_ROUTINE.get(D.SPELLS.get(name, {}).get("school", ""))
+        if routine:
+            fx["cast"] = fx["effects"].play(fx["lib"].caster, routine, fx["me"], None, 0x3C)
+
+    def _fx_cast_end(self) -> None:
+        if self.fx and self.fx["cast"] is not None:
+            self.fx["effects"].stop(self.fx["cast"])
+            self.fx["cast"] = None
+
+    def _fx_spell(self, name: str) -> None:
+        """A spell gone off: its own effect, the release about the character, then on its target (the
+        monster for a nuke or an enfeeble, else the character)."""
+        fx = self.fx
+        self._fx_cast_end()
+        anim = D.SPELL_ANIMATION.get(name)
+        f = fx["lib"].spell(anim) if anim is not None else None
+        if f is None:
+            return
+        hostile = any(e[0] in ("damage", "drain", "aspir", "debuff") for e in D.SPELLS.get(name, {}).get("fx", []))
+        target = fx["them"] if hostile and fx["has_target"] else fx["me"]
+        fx["effects"].play(f, "main", fx["me"], target)
+
+    def _fx_step(self, now: float) -> None:
+        """30 times a second: where things are (from the port), the effects stepped, their triangles sent."""
+        fx = self.fx
+        if not fx or now - fx["last"] < 1 / 30:
+            return
+        import numpy as np
+        import ffxi_fx as FX
+        dt, fx["last"] = (now - fx["last"] if fx["last"] else 1 / 30), now
+        port, effects = fx["port"], fx["effects"]
+        scene = port.scene()
+        if scene:
+            v = scene["camera"]
+            effects.camera = FX.Camera(-v[:, :3].T @ v[:, 3], v[:, :3])
+            h = scene["hunter"]
+            rot = h[:, :3] / np.maximum(np.linalg.norm(h[:, :3], axis=0), 1e-6)
+            me = FX.actor_from_mh(h[:, 3], rot)
+            fx["me"].pos, fx["me"].facing = me.pos, me.facing
+            t = scene["target"]
+            fx["has_target"] = t is not None
+            if t is not None:
+                yaw = float(np.arctan2(h[0, 3] - t[0], h[2, 3] - t[2]))
+                them = FX.actor_from_mh(t[:3], FX.yaw_matrix(yaw), max(50.0, t[3]))
+                fx["them"].pos, fx["them"].facing, fx["them"].height = them.pos, them.facing, them.height
+        effects.step(min(dt, 0.25))
+        if effects.busy() and effects.camera is not None:
+            verts, counts, keys = effects.geometry()
+            if len(verts):
+                verts[:, 5] = self._fx_layers(keys, verts[:, 5])
+            port.send(verts, counts)
+            fx["drawn"] = True
+        elif fx["drawn"]:
+            port.send(np.zeros((0, 10), np.float32), [0] * 5)
+            fx["drawn"] = False
+        port.keep_alive()
+
+    def _fx_layers(self, keys, column):
+        """The frame's textures as the port's layers (new ones loaded and sent), each corner's index in
+        `keys` turned into its layer (+1000 kept: its alpha read as half)."""
+        import numpy as np
+        from PIL import Image
+        import ffxi_fx as FX
+        from port_fx import MAX_LAYERS, TEX
+        fx = self.fx
+        layers, images = fx["layers"], fx["images"]
+        new = [k for k in keys if k not in layers]
+        if new:
+            if len(images) + len(new) > MAX_LAYERS:              # full: only what's drawn now
+                layers.clear()
+                images.clear()
+                new = list(keys)
+            for k in new:
+                img = FX.load_texture(fx["lib"], k, fx["tex"])
+                if img is None:
+                    img = np.full((TEX, TEX, 4), 255, np.uint8)
+                layers[k] = len(images)
+                images.append(np.array(Image.fromarray(img, "RGBA").resize((TEX, TEX), Image.LANCZOS)))
+            fx["port"].set_textures(images)
+        lut = np.array([layers[k] for k in keys] + [0], np.float32)
+        half = column > 999.5
+        idx = np.where(half, column - 1000, column).astype(np.int64)
+        out = np.where(idx >= 0, lut[np.clip(idx, 0, len(keys))], -1.0)
+        return np.where(half & (idx >= 0), out + 1000, out)
 
     def _music(self, now: float, player_hp) -> None:
         """FFXI's music in place of Monster Hunter's: the village's, the field's, or, engaged (the weapon
@@ -937,6 +1057,7 @@ class App:
         out, ui = PortOverlay(), U.FfxiUi(self.cfg.get("window_theme", 1), self.cfg.get("ffxi_assets", True))
         model = self.character = self._send_character()
         self.sounds = self._start_sounds()
+        self.fx = self._start_fx()
         start, last_draw = time.monotonic(), 0.0
         print("FFXI interface: in the game's window. Ctrl+C to stop.")
         try:
@@ -949,6 +1070,7 @@ class App:
                     if img is not None:
                         out.show(img)
                 out.keep_alive()
+                self._fx_step(now)
                 if model:
                     model.keep_alive()
                 time.sleep(1 / 60)

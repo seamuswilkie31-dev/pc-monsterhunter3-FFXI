@@ -103,8 +103,9 @@ def _dxt_block_colours(c0: np.ndarray, c1: np.ndarray, four: np.ndarray) -> np.n
     return np.stack([e0, e1, p2, p3], 1)          # (blocks, 4, 3)
 
 
-def decode(b: bytes, info: dict) -> np.ndarray:
-    """RGBA, rows top first."""
+def decode(b: bytes, info: dict, ps2_alpha: bool = True) -> np.ndarray:
+    """RGBA, rows top first. ps2_alpha: an alpha in FFXI's 0-0x80 put on the usual scale (False: as stored,
+    for the effects, whose blending counts on it)."""
     w, h, at = info["w"], info["h"], info["px"]
     fmt = info["fmt"]
     if fmt in ("DXT1", "DXT3"):
@@ -140,7 +141,7 @@ def decode(b: bytes, info: dict) -> np.ndarray:
     else:
         img = np.frombuffer(b, np.uint8, w * h * 4, at).reshape(h, w, 4)[:, :, [2, 1, 0, 3]]
     img = img[::-1].copy()                         # bitmaps run bottom first
-    if img[:, :, 3].max() <= 0x80:                  # FFXI's alpha runs 0-0x80
+    if ps2_alpha and img[:, :, 3].max() <= 0x80:    # FFXI's alpha runs 0-0x80
         img[:, :, 3] = np.minimum(255, img[:, :, 3].astype(np.uint16) * 2).astype(np.uint8)
     return img
 

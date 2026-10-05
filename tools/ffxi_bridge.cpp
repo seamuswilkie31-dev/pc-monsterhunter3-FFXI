@@ -667,6 +667,8 @@ struct Lock {
     float eye[3] = {}, look[3] = {};     // the game's own, as it last set them
 } g_lock;
 uint32_t g_target_obj = 0;
+float g_target_place[4] = {};             // the target's feet and its height, for the effects (fx_frame)
+bool g_target_ok = false;
 PPCFunc orig_cam_position, orig_cam_posture;
 
 void target_frame(uint32_t pl, uint32_t cam, float dt) {
@@ -701,6 +703,8 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
     g_target_obj = t ? t->obj : 0;
     g_lock.camera = cam;
     float top = t ? enemy_top(*t) : 0;
+    g_target_ok = t != nullptr;
+    if (t) g_target_place[0] = t->x, g_target_place[1] = t->y, g_target_place[2] = t->z, g_target_place[3] = top - t->y;
     if (t) {
         g_lock.tx = t->x, g_lock.ty = (t->y + top) * 0.5f, g_lock.tz = t->z, g_lock.arrow = top + 40.0f;
         float want = std::atan2(t->x - hx, t->z - hz), d = want - g_lock.yaw;
@@ -1198,6 +1202,74 @@ void mul34(const float* a, const float* b, float* out) {
 // a loading screen or a fade between areas).
 ModelBlock* g_model_block = nullptr;
 
+// ================================================================================================
+// FFXI's spell effects (ffxi/ffxi_fx.py, port_fx.py): the layer runs them (FFXI's own effect files, the
+// casting and the spells landing) and sends their triangles, in the world, through their own block,
+// "mh3-ffxi-fx", two slots it writes in turn; each frame the port hands the newest to the renderer with
+// the frame's camera (video_fx_frame), which draws them into the scene after the character. The port
+// writes, each frame, where things are: the camera, the hunter, the target.
+// ================================================================================================
+constexpr uint32_t kFxMagic = 0x4633484D, kFxVersion = 1;            // 'MH3F'
+constexpr int kFxMaxVerts = 60000, kFxVertFloats = 10, kFxMaxLayers = 128, kFxTex = 64;
+struct FxBlock {
+    uint32_t magic, version;
+    uint32_t alive;                 // layer: bumped while it runs (3 s without: nothing drawn)
+    uint32_t tex_serial;            // layer: bumped once tex and tex_layers are written
+    uint32_t tex_layers;
+    uint32_t seq;                   // layer: bumped once a frame's triangles are in slot `front`
+    uint32_t front;
+    uint32_t counts[2][8];          // layer: each slot's corners by blending (opaque, alpha, added, subtracted, darkened)
+    uint32_t scene_seq;             // port: bumped each frame
+    uint32_t scene_ok;              // port: 1 when the camera and the hunter are known
+    uint32_t target_ok;             // port: 1 when there's a target
+    float camera[12];               // port: the world to the camera's space, 3x4 rows
+    float hunter[12];               // port: the hunter's world matrix, 3x4 rows (its turn, its place)
+    float target[4];                // port: the target's feet x y z, its height
+    uint32_t spare[10];
+    float verts[2][kFxMaxVerts * kFxVertFloats];
+    uint8_t tex[kFxMaxLayers * kFxTex * kFxTex * 4];
+};
+static_assert(sizeof(FxBlock) == 6897408, "ffxi/port_fx.py mirrors this layout");
+FxBlock* g_fx_block = nullptr;
+
+void fx_frame(uint32_t pl, uint32_t cam) {
+    FxBlock* f = g_fx_block;
+    if (!f) return;
+    static uint32_t alive = 0, tex_seen = 0;
+    static auto last_alive = std::chrono::steady_clock::time_point{};
+    auto now = std::chrono::steady_clock::now();
+    if (f->alive != alive) { alive = f->alive; last_alive = now; }
+    bool up = now - last_alive < std::chrono::seconds(3);
+    float view[12] = {}, proj[6] = {};
+    bool ok = pl && cam && in_ram(cam, 0x70);
+    if (ok) {
+        for (int i = 0; i < 12; ++i) view[i] = f32(cam + 4 * i);
+        const int pi[6] = {0, 2, 5, 6, 10, 11};               // GX's six: P00 P02 P11 P12 P22 P23
+        for (int i = 0; i < 6; ++i) proj[i] = f32(cam + 0x30 + 4 * pi[i]);
+        std::memcpy(f->camera, view, sizeof view);
+        std::lock_guard<std::mutex> lk(g_hunter_mx);
+        std::memcpy(f->hunter, g_hunter_mtx, sizeof f->hunter);
+    }
+    f->target_ok = g_target_ok ? 1 : 0;
+    std::memcpy(f->target, g_target_place, sizeof f->target);
+    f->scene_ok = ok ? 1 : 0;
+    f->scene_seq = f->scene_seq + 1;
+    if (!up || !ok) return;
+    if (f->tex_serial != tex_seen) {
+        std::atomic_thread_fence(std::memory_order_acquire);
+        tex_seen = f->tex_serial;
+        video_fx_textures(f->tex, (int)std::min<uint32_t>(f->tex_layers, kFxMaxLayers), kFxTex, kFxTex);
+    }
+    uint32_t front = f->front & 1;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    uint32_t counts[5], n = 0;
+    for (int i = 0; i < 5; ++i) {
+        counts[i] = std::min<uint32_t>(f->counts[front][i], (uint32_t)kFxMaxVerts - n);
+        n += counts[i];
+    }
+    if (n) video_fx_frame(view, proj, f->verts[front], counts);
+}
+
 void model_frame() {
     ModelBlock* mb = g_model_block;
     static uint32_t shown = 0, alive = 0, stamp = 0, act_seen = 0;
@@ -1226,8 +1298,9 @@ void model_frame() {
     }
     g_hide_hunter.store(up && loaded && (mb->flags & 2), std::memory_order_relaxed);
     {
-        uint32_t tp = object(kBasePlayer);
-        target_frame(tp, follow_camera(tp), dt);             // FFXI's target, and the lock-on
+        uint32_t tp = object(kBasePlayer), tc = follow_camera(tp);
+        target_frame(tp, tc, dt);                             // FFXI's target, and the lock-on
+        fx_frame(tp, tc);                                     // FFXI's effects
     }
     if (!loaded) return;
     float view[12] = {}, proj[6] = {}, h[12], camera[12] = {};
@@ -1382,6 +1455,15 @@ void install() {
     orig_cam_position = ppc_hook("SetPosition__Q34nw4r3g3d6CameraFRCQ34nw4r4math4VEC3", hook_cam_position);
     orig_cam_posture = ppc_hook("SetPosture__Q34nw4r3g3d6CameraFRCQ44nw4r3g3d6Camera11PostureInfo", hook_cam_posture);
     if (!orig_cam_position || !orig_cam_posture) rt_log("ffxi: the camera's hooks are missing (tools/mh3-hooks.txt): no lock-on");
+    if (HANDLE fh = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(FxBlock),
+                                       L"mh3-ffxi-fx")) {
+        g_fx_block = static_cast<FxBlock*>(MapViewOfFile(fh, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(FxBlock)));
+        if (g_fx_block) {
+            g_fx_block->version = kFxVersion;
+            g_fx_block->magic = kFxMagic;
+        }
+    }
+    if (!g_fx_block) rt_log("ffxi: no effects block: FFXI's spell effects won't show");
     g_model_block = mb;
     if (mb) video_set_frame_hook(model_frame);
     std::thread(serve, b, o, mb).detach();
