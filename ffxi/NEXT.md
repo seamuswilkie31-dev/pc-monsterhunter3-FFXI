@@ -71,8 +71,8 @@ the highlighted piece's stats beside them; Monster Hunter's own item use is Pouc
 weapons: a sword hangs a quarter of a metre below them at rest, and the character floated by that much.
 `/hunter` swaps in Monster Hunter's own hunter in the same place, and back (for comparing the two).
 
-**Parked: the character lit by the game's lights** (2026-10-04, tried in play, off: the textures as they
-are, as before). What's built and left switched off: `pack` sends each corner's normals (model block
+**The character lit by the game's lights** (2026-10-04: parked, then back on at Seamus's word: gain 2,
+no ground shade, being tuned by eye against `/hunter`). What's built: `pack` sends each corner's normals (model block
 version 7, 20 floats: FFXI's two-joint normals interleave as their positions; a cloth mesh's worked out
 from its faces); wiikit's renderer catches the lights of the game's skinned, lit draws (the nearest to
 the character; the lights only, not their material colour, which is a model's own paint: a red-clothed
