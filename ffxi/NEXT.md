@@ -1,5 +1,24 @@
 # FFXI layer — next session
 
+**River's list (2026-10-05)**, being worked through:
+1. Tarutaru's run plays too fast: slow it (Taru only).
+2. FFXI's Attack command: locked on, the weapon drawn, auto-attacks on the weapon's delay while magic and
+   job abilities still go on.
+3. Jobs: keep "all jobs on one character" as an option (solo), and a chosen job and support job, swapped
+   anywhere (as the Mog House does), every job unlocked from the start. A foldable menu for them; Job
+   Abilities and Magic their own; FFXI's command menu bottom left, above the chat log, rising with it.
+4. FFXI's round shadow under the character in place of Monster Hunter's foot shadows (the current code
+   kept to go back to). And in the launcher, a linkpearl beside the name, its colour chosen.
+5. The nameplate in FFXI's font (if it's sprites), else the current font in italics.
+6. Trusts: summoned and released as in FFXI, all unlocked.
+7. Attack mode: the camera leans toward the locked target, as FFXI's (reversible).
+8. The hunter's grunts swinging the sword: the race's own voice instead.
+9. /sit: the wrong motion (Tarutaru male at an odd angle; Hume male not the sitting one).
+10. Area 10: the target arrow on an "Aptonoth" nobody can see, moving: a false report, or a monster
+    misbehaving in the port?
+Then: the launcher checks the prerequisites for another PC, and a plain .txt says how to set one up.
+
+
 Where it stands (2026-10-04): **the FFXI interface runs in the game, with an FFXI character of any race in your hunter's place.** Monster Hunter's HUD is switched
 off (`MH3_HIDE_HUD=1`); the layer draws FFXI's classic windows into the game's own window (status, target
 with the monster's HP percent, combat log, casting bar, macro palette); the pad's **X held** opens the FFXI

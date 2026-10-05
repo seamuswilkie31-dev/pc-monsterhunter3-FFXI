@@ -1022,10 +1022,7 @@ class App:
             code, msg, hold = FM.EMOTES[word]
             e.say(msg.format(me=e.me, their="their"), "emote")
             if self.character:
-                if word == "heal":
-                    self.character.request("rx0", "rx1")
-                else:
-                    self.character.request(code, code if hold else None)
+                self.character.request(code, hold if isinstance(hold, str) else (code if hold else None))
         elif word in ("s", "say"):
             e.say(f"{e.me} : {rest}", "say")
         elif word == "echo":
@@ -1108,6 +1105,14 @@ class App:
                 look, style = FM.look_for_weapon(root, race, look, self.mh_weapon)
                 model = FM.load_character(root, race, look, style)
                 packed = FM.pack(model, yaw=yaw, mirror=mirror, scale=height / FM.HUME_MALE_HEIGHT)
+                if race.startswith("tarutaru"):
+                    # a Tarutaru's run covers 195 units a second to a Hume's 450: kept to the hunter's
+                    # pace it plays at twice its speed, a scurry; counted as covering more, it plays at
+                    # about 1.3 times (its feet slide a little)
+                    slower = float(self.cfg.get("tarutaru_run_slower", 1.8))
+                    for c in packed["clips"]:
+                        if c["name"] in ("run", "brun") and c["speed"]:
+                            c["speed"] *= slower
                 what = (f"{FM.RACES[race]['label']} " + " ".join(f"{k} {v}" for k, v in look.items())
                         + f", holding a {FM.STYLES.get(style, '?')} for Monster Hunter's {self.mh_weapon.replace('_', ' ')}")
             else:

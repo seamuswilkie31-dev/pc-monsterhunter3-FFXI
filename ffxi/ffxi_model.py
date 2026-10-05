@@ -610,6 +610,8 @@ CAST_MOTIONS = {"white": "mw", "black": "mb", "ninjutsu": "mn", "summoning": "ms
 # FFXI's emotes: the chat line's command -> (the motion, what the log says, held until moving). The motions
 # are the race's emote files' (bow0, bow1, bow2: the lower body, the upper, the waist); /heal kneels to rest
 # (the race's own rx0, rx1 looped).
+# the chat line's emotes: the motion, the log's words, and whether it's held (True: the motion looped;
+# a name: that motion looped after it)
 EMOTES = {
     "bow": ("bow", "{me} bows courteously.", False), "kneel": ("kne", "{me} kneels.", False),
     "laugh": ("lau", "{me} laughs heartily.", False), "point": ("poi", "{me} points.", False),
@@ -624,8 +626,8 @@ EMOTES = {
     "blush": ("blu", "{me} blushes.", False), "panic": ("pan", "{me} panics.", False),
     "upset": ("ups", "{me} is upset.", False), "doubt": ("why", "{me} looks doubtful.", False),
     "fume": ("fum", "{me} fumes.", False), "think": ("thk", "{me} thinks.", False),
-    "praise": ("gut", "{me} gives a thumbs up.", False), "sit": ("rs0", "{me} sits down.", True),
-    "heal": ("rx0", "{me} starts resting.", True),
+    "praise": ("gut", "{me} gives a thumbs up.", False), "sit": ("si0", "{me} sits down.", "si1"),
+    "heal": ("rx0", "{me} starts resting.", "rx1"),
     "dance1": ("dc0", "{me} dances.", False), "dance2": ("dc1", "{me} dances.", False),
     "dance3": ("dc2", "{me} dances.", False), "dance4": ("dc3", "{me} dances.", False),
     "dance": ("dc0", "{me} dances.", False),
@@ -652,7 +654,8 @@ def dance_files(root: Path, race: str) -> list[str]:
 
 
 def emote_clips(own: list[list[dict]], emote_sources: list[list[dict]]) -> list[dict]:
-    """The emotes' motions: each from its parts in the emote files (the race's own files for /heal's)."""
+    """The emotes' motions: each from its parts in the emote files (the race's own files for /heal's), and
+    what a held one loops after it (/sit: si0 sitting down, si1 seated; /heal: rx0, rx1)."""
     def pick(sources, name):
         out, seen = [], set()
         for src in sources:
@@ -662,16 +665,14 @@ def emote_clips(own: list[list[dict]], emote_sources: list[list[dict]]) -> list[
                     out.append(m)
         return out
     clips, done = [], set()
-    for code, _msg, _hold in EMOTES.values():
-        if code in done:
-            continue
-        done.add(code)
-        parts = pick(own if code == "rx0" else emote_sources, code)
-        if parts:
-            clips.append({"name": code, "parts": parts, "kind": ACTION, "set": PEACE})
-    rest = pick(own, "rx1")                                         # resting, held
-    if rest:
-        clips.append({"name": "rx1", "parts": rest, "kind": ACTION, "set": PEACE})
+    for code, _msg, hold in EMOTES.values():
+        for c in (code, hold) if isinstance(hold, str) else (code,):
+            if c in done:
+                continue
+            done.add(c)
+            parts = pick(own if c.startswith("rx") else emote_sources + own, c)     # (sitting: the race's own)
+            if parts:
+                clips.append({"name": c, "parts": parts, "kind": ACTION, "set": PEACE})
     return clips
 
 
