@@ -969,7 +969,8 @@ class App:
             target_check=check, target_effects=tuple(sorted({s for s, _ in e.debuffs})),
             casting=e.casting, cast_frac=round(cast_frac, 2),
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now), menu_help=self.menu_help(now),
-            nameplate=self._nameplate(), **self._target_arrow(now), chat_input=self.chat_typing,
+            nameplate=self._nameplate(), linkpearl=self._linkpearl(), **self._target_arrow(now),
+            chat_input=self.chat_typing,
             status="" if self.status == "connected" else self.status)
 
     def _target_arrow(self, now: float) -> dict:
@@ -1210,6 +1211,16 @@ class App:
             return pm
         except (Exception, SystemExit) as ex:                      # the layer runs without it
             print(f"[FFXI character unavailable: {ex}]")
+            return None
+
+    def _linkpearl(self):
+        """The linkpearl's colour by your name (the launcher's choice, or linkpearl = "#rrggbb" in the config)."""
+        import os
+        v = os.environ.get("FFXI_LINKPEARL") or self.cfg.get("linkpearl") or ""
+        v = v.strip().lstrip("#")
+        try:
+            return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4)) if len(v) == 6 else None
+        except ValueError:
             return None
 
     def _nameplate(self):

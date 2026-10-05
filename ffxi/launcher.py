@@ -25,7 +25,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import colorchooser, filedialog, ttk
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -85,11 +85,34 @@ class Launcher:
         self.hide_hud = tk.BooleanVar(value=self.s.get("hide_hud", True))
         ttk.Checkbutton(f, text="Hide Monster Hunter's HUD (the FFXI interface replaces it)",
                         variable=self.hide_hud).grid(row=7, column=0, columnspan=3, sticky="w")
+        # a linkpearl by your name, as a linkshell's member wears one: its colour chosen
+        pearl = ttk.Frame(f, style="TLabel")
+        pearl.grid(row=8, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.pearl_on = tk.BooleanVar(value=bool(self.s.get("linkpearl")))
+        self.pearl_colour = self.s.get("linkpearl") or self.s.get("linkpearl_last") or "#3c8cff"
+        ttk.Checkbutton(pearl, text="Show a linkpearl by your name", variable=self.pearl_on).pack(side="left")
+        ttk.Button(pearl, text="Colour…", command=self.choose_pearl).pack(side="left", padx=(8, 4))
+        self.pearl_swatch = tk.Canvas(pearl, width=22, height=22, bg="#0b1030", highlightthickness=0)
+        self.pearl_swatch.pack(side="left")
+        self.draw_pearl()
         self.play_btn = ttk.Button(f, text="Play", command=self.play)
-        self.play_btn.grid(row=8, column=0, sticky="w", pady=8)
+        self.play_btn.grid(row=9, column=0, sticky="w", pady=8)
         self.status = tk.StringVar(value="")
-        ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=9, column=0, columnspan=3, sticky="w")
+        ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=10, column=0, columnspan=3, sticky="w")
         self.refresh()
+
+    def choose_pearl(self):
+        rgb, hexa = colorchooser.askcolor(color=self.pearl_colour, title="Your linkpearl's colour", parent=self.root)
+        if hexa:
+            self.pearl_colour = hexa
+            self.pearl_on.set(True)
+            self.draw_pearl()
+
+    def draw_pearl(self):
+        c = self.pearl_swatch
+        c.delete("all")
+        c.create_oval(3, 3, 19, 19, fill=self.pearl_colour, outline="#1a1a2a")
+        c.create_oval(6, 6, 11, 11, fill="#ffffff", outline="")
 
     def browse(self):
         d = filedialog.askdirectory(title="Your FINAL FANTASY XI folder (it holds ROM)",
@@ -138,6 +161,8 @@ class Launcher:
             self.status.set(f"The port isn't built: {exe} is missing (see the repository's README).")
             return
         self.s["hide_hud"] = self.hide_hud.get()
+        self.s["linkpearl"] = self.pearl_colour if self.pearl_on.get() else ""
+        self.s["linkpearl_last"] = self.pearl_colour
         save_settings(self.s)
         run.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, MH3_FFXI="1")
@@ -147,7 +172,9 @@ class Launcher:
             env["PATH"] = f"{MSYS};{env.get('PATH', '')}"
         game = subprocess.Popen([str(exe), "../extract", "--symbols", "../recomp/symbols.tsv"], cwd=run, env=env,
                                 stdout=open(run / "wiiboot.log", "w"), stderr=subprocess.STDOUT)
-        layer = subprocess.Popen([sys.executable, str(HERE / "ffxi_mh3.py")], cwd=HERE,
+        if self.s["linkpearl"]:
+            env["FFXI_LINKPEARL"] = self.s["linkpearl"]
+        layer = subprocess.Popen([sys.executable, str(HERE / "ffxi_mh3.py")], cwd=HERE, env=env,
                                  stdout=open(run / "ffxi.log", "w"), stderr=subprocess.STDOUT)
         self.play_btn.state(["disabled"])
         self.status.set("Playing. Closing the game closes the FFXI layer.")

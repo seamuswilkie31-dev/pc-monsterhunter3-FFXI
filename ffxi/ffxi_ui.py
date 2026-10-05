@@ -137,6 +137,7 @@ class UiState:
     palette: tuple = ()                   # ((key, name, usable, detail), ...)
     menu: tuple = ()                      # per level: (title, ((label, usable, detail), ...), cursor, more above, more below)
     nameplate: tuple | None = None        # where your head is in the picture (-1..1, y up): your name above it
+    linkpearl: tuple | None = None        # a linkpearl's colour (r, g, b) by your name, as a linkshell's member
     target_arrow: tuple | None = None     # (x, y, locked, bob 0..1): FFXI's arrow above the target's head
     target_locked: bool = False
     chat_input: str | None = None         # the chat line being typed (None: closed)
@@ -222,6 +223,9 @@ class FfxiUi:
         y = (1 - s.nameplate[1]) / 2 * H
         if 0 <= x < W and 0 <= y < H:
             self._text(d, (int(x), int(y)), s.name, self.f_tag, WHITE, anchor="ms")
+            if s.linkpearl:                          # the linkpearl, left of the name
+                half = d.textlength(s.name, font=self.f_tag) / 2
+                _pearl(d, int(x - half - 12), int(y - 7), s.linkpearl)
 
     def _arrow(self, d, s: UiState) -> None:
         """FFXI's target arrow: pointing down at the target's head, bobbing; ringed while locked on."""
@@ -313,10 +317,12 @@ class FfxiUi:
             self._text(d, (x0 + 12, y), shown + "_", self.f_log, WHITE)
 
     def _cast(self, img, d, s: UiState) -> None:
-        x0, y0 = W // 2 - 130, H - 200
-        self.window(img, (x0, y0, x0 + 260, y0 + 40))
+        """The spell being cast and how far along: above the target window (the command menu, bottom left,
+        opens toward the middle)."""
+        x0, y0 = W - 300, H - 200
+        self.window(img, (x0, y0, x0 + 288, y0 + 40))
         self._text(d, (x0 + 12, y0 + 7), s.casting, self.f_val, KIND["magic"])
-        self._bar(d, x0 + 12, y0 + 27, 236, s.cast_frac, MP_BAR)
+        self._bar(d, x0 + 12, y0 + 27, 264, s.cast_frac, MP_BAR)
 
     def _log_top(self, s: UiState) -> int | None:
         """Where the chat log's window begins (None: no log shown), as _log draws it."""
@@ -383,6 +389,17 @@ class FfxiUi:
                 self._text(d, (x1 - 10, y), detail, self.f_small, DIM, anchor="ra")
 
 
+def _pearl(d: ImageDraw.ImageDraw, cx: int, cy: int, rgb: tuple, r: int = 6) -> None:
+    """A linkpearl: a small shining sphere of its colour, darker at its rim, a highlight up and left."""
+    dark = tuple(int(c * 0.45) for c in rgb)
+    d.ellipse([cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1], fill=(10, 10, 20, 230))
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*dark, 255))
+    d.ellipse([cx - r + 1, cy - r + 1, cx + r - 2, cy + r - 2], fill=(*rgb, 255))
+    lite = tuple(min(255, int(c + (255 - c) * 0.55)) for c in rgb)
+    d.ellipse([cx - r + 2, cy - r + 2, cx - 1, cy - 1], fill=(*lite, 255))
+    d.ellipse([cx - r + 3, cy - r + 3, cx - r + 5, cy - r + 5], fill=(255, 255, 255, 255))
+
+
 def _menu_pointer(d: ImageDraw.ImageDraw, x: int, y: int) -> None:
     """FFXI's pointer, drawn: a small white arrow."""
     d.polygon([(x, y), (x + 11, y + 6), (x, y + 12)], fill=(255, 255, 255, 255), outline=(40, 40, 60, 255))
@@ -404,8 +421,10 @@ def demo() -> UiState:
                             ("5", "Fast Blade", True, ""), ("6", "Savage Blade", False, ""),
                             ("7", "Cure IV", True, ""), ("8", "Haste", False, "12s"), ("9", "Fire II", True, ""),
                             ("0", "Refresh", True, "")),
-                   menu=(("Command", (("Weapon Skills", True, ""), ("Job Abilities", True, ""), ("Magic", True, ""),
-                                      ("Pouch Item", True, ""), ("Job", True, "RDM40/WHM20")), 2, False, False),
+                   nameplate=(0.0, 0.35), linkpearl=(60, 140, 255),
+                   menu=(("Command", (("Attack", True, ""), ("Magic", True, ""), ("Abilities", True, ""),
+                                      ("Items", True, "13"), ("Equipment", True, ""), ("Pouch Item", True, ""),
+                                      ("Job", True, "RDM40/WHM20")), 1, False, False),
                          ("Magic", (("White Magic", True, ""), ("Black Magic", True, "")), 1, False, False),
                          ("Black Magic", (("Stone", True, "4 MP"), ("Water", True, "5 MP"), ("Aero", True, "6 MP"),
                                           ("Fire", True, "7 MP"), ("Blizzard", True, "8 MP"), ("Thunder", True, "9 MP"),
