@@ -831,7 +831,7 @@ struct ModelBlock {
     uint32_t act_clip;      //   play this action once (kNone: end the one playing),
     uint32_t act_next;      //   then loop this one until the next request (kNone: back to moving)
     uint32_t battle;        // the port's: 1 while Monster Hunter's hunter has its weapon out
-    uint32_t reserved;
+    float light_gain;       // the layer's: its textures' brightness under the game's light (video_model_gain; 0: 1)
     char motion[16];        // the port's: the hunter's motion now (Monster Hunter's animation's name)
     float place[12];                                      // the model's space to the hunter's, 3x4 rows
     int32_t parents[kModelMaxJoints];                     // -1: the root; a parent comes before its children
@@ -1256,6 +1256,7 @@ void model_frame() {
         std::memcpy(mb->motion, motion, sizeof motion);
     }
     mb->battle = g_anim.battle ? 1 : 0;
+    video_model_gain(mb->light_gain > 0.0f ? mb->light_gain : 1.0f);
     g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
     if (visible) {
         float v[12], hp[12];

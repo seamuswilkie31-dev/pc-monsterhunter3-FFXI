@@ -800,7 +800,8 @@ class App:
 
     def chat_command(self, text: str) -> None:
         """A line from the chat line: an emote (/wave), an action (/ma "Cure", /ja, /ws), /echo, /hunter
-        (Monster Hunter's hunter in the character's place, and back), or words said."""
+        (Monster Hunter's hunter in the character's place, and back), /light 2 (the character's brightness
+        under the game's light), or words said."""
         import ffxi_model as FM
         e, text = self.e, text.strip()
         if not text:
@@ -823,6 +824,15 @@ class App:
             e.say(f"{e.me} : {rest}", "say")
         elif word == "echo":
             e.say(rest, "info")
+        elif word == "light":                                      # the character's brightness, tuned by eye
+            try:
+                self.cfg["character_light"] = max(0.1, min(8.0, float(rest)))
+            except ValueError:
+                pass
+            if self.character:
+                self._show_flags(self.character)
+            e.say(f"Character light: {self.cfg.get('character_light', 2.0):g} (/light 1.5 dimmer, /light 2.5 "
+                  "brighter; character_light in config.toml keeps it).", "info")
         elif word in ("hunter", "compare"):                        # the two in the same light, one then the other
             self.show_hunter = not self.show_hunter
             if self.character:
@@ -840,8 +850,10 @@ class App:
             e.say(f"Unknown command: /{word}.", "warn")
 
     def _show_flags(self, pm) -> None:
-        """The character drawn and the hunter hidden, or (/hunter) the hunter alone."""
+        """The character drawn and the hunter hidden, or (/hunter) the hunter alone; and how bright it is
+        under the game's light (character_light: FFXI's textures are made for twice the light)."""
         pm.set_flags(not self.show_hunter, not self.show_hunter and self.cfg.get("hide_hunter", True))
+        pm.set_light(self.cfg.get("character_light", 2.0))
 
     def _weapon_watch(self) -> None:
         """Monster Hunter's weapon, from its hunter's motion's name (w03_*: the lance): when it changes,

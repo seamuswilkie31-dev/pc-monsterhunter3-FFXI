@@ -23,7 +23,7 @@ MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 100000, 20, 16, 256    # VERT_FLOATS: 
 MAX_JOINTS, MAX_CLIPS, POOL = 128, 96, 1 << 22
 NONE = 0xFFFFFFFF
 # magic, version, serial, n_verts, layers, tex_w, tex_h, flags, alive, n_joints, n_clips,
-# act_seq, act_clip, act_next, battle, reserved
+# act_seq, act_clip, act_next, battle, light_gain (a float)
 HEADER = struct.Struct("<16I")
 CLIP = struct.Struct("<IIffIIII")  # frames, first float in the pool, rate, speed, kind, set, tag, reserved
 MOTION_AT = HEADER.size                                 # the port's: Monster Hunter's hunter's motion's name
@@ -101,6 +101,11 @@ class PortModel:
         self._set(13, self.clips.get(then, NONE) if then else NONE)
         self._set(11, self._get(11) + 1)          # the sequence last: the port reads after it moves
         return True
+
+    def set_light(self, gain: float) -> None:
+        """How bright the textures are under the game's light: texel x light x gain (FFXI's are made for
+        twice the light: 2)."""
+        self.mm[15 * 4:16 * 4] = struct.pack("<f", float(gain))
 
     def battle(self) -> bool:
         """Whether Monster Hunter's hunter has its weapon out (the port's reading)."""
