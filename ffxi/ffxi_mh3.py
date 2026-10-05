@@ -801,7 +801,7 @@ class App:
     def chat_command(self, text: str) -> None:
         """A line from the chat line: an emote (/wave), an action (/ma "Cure", /ja, /ws), /echo, /hunter
         (Monster Hunter's hunter in the character's place, and back), /light 2 (the character's brightness
-        under the game's light), or words said."""
+        under the game's light), /shade 0.5 (how much dark ground dims it), or words said."""
         import ffxi_model as FM
         e, text = self.e, text.strip()
         if not text:
@@ -833,6 +833,15 @@ class App:
                 self._show_flags(self.character)
             e.say(f"Character light: {self.cfg.get('character_light', 2.0):g} (/light 1.5 dimmer, /light 2.5 "
                   "brighter; character_light in config.toml keeps it).", "info")
+        elif word == "shade":                                      # how much dark ground dims it, by eye
+            try:
+                self.cfg["character_ground_shade"] = max(0.0, min(1.0, float(rest)))
+            except ValueError:
+                pass
+            if self.character:
+                self._show_flags(self.character)
+            e.say(f"Ground shade: {self.cfg.get('character_ground_shade', 0.0):g} (0: as the hunter, not dimmed; "
+                  "1: as dark as the ground; character_ground_shade in config.toml keeps it).", "info")
         elif word in ("hunter", "compare"):                        # the two in the same light, one then the other
             self.show_hunter = not self.show_hunter
             if self.character:
@@ -851,9 +860,10 @@ class App:
 
     def _show_flags(self, pm) -> None:
         """The character drawn and the hunter hidden, or (/hunter) the hunter alone; and how bright it is
-        under the game's light (character_light: FFXI's textures are made for twice the light)."""
+        under the game's light (character_light: FFXI's textures are made for twice the light) and how
+        much dark ground dims it (character_ground_shade: 0, as the game's own hunter)."""
         pm.set_flags(not self.show_hunter, not self.show_hunter and self.cfg.get("hide_hunter", True))
-        pm.set_light(self.cfg.get("character_light", 2.0))
+        pm.set_light(self.cfg.get("character_light", 2.0), self.cfg.get("character_ground_shade", 0.0))
 
     def _weapon_watch(self) -> None:
         """Monster Hunter's weapon, from its hunter's motion's name (w03_*: the lance): when it changes,

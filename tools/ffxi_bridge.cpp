@@ -801,7 +801,7 @@ void hook_cam_posture(PPCContext& c) {
 // set or, while the hunter's weapon is out, the battle set; and actions over them, on the layer's
 // request (a spell's casting) or the hunter's (Monster Hunter's attacks: hunter_motion).
 // ================================================================================================
-constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 6;     // 'MH3M'
+constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 7;     // 'MH3M'
 constexpr int kModelMaxVerts = 100000, kModelVertFloats = 20, kModelMaxLayers = 16, kModelTex = 256;
 constexpr int kModelMaxJoints = 128, kModelMaxClips = 96, kModelPool = 1 << 22, kXf = 10;
 enum : uint32_t { kStand = 0, kMove = 1, kAction = 2 };
@@ -831,7 +831,9 @@ struct ModelBlock {
     uint32_t act_clip;      //   play this action once (kNone: end the one playing),
     uint32_t act_next;      //   then loop this one until the next request (kNone: back to moving)
     uint32_t battle;        // the port's: 1 while Monster Hunter's hunter has its weapon out
-    float light_gain;       // the layer's: its textures' brightness under the game's light (video_model_gain; 0: 1)
+    float light_gain;       // the layer's: its textures' brightness under the game's light (0: 1),
+    float ground_shade;     //   and how much the ground's baked light dims it (video_model_shading)
+    uint32_t spare[3];
     char motion[16];        // the port's: the hunter's motion now (Monster Hunter's animation's name)
     float place[12];                                      // the model's space to the hunter's, 3x4 rows
     int32_t parents[kModelMaxJoints];                     // -1: the root; a parent comes before its children
@@ -840,7 +842,7 @@ struct ModelBlock {
     float pool[kModelPool];
     uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
 };
-static_assert(sizeof(ModelBlock) == 28975232, "ffxi/port_model.py mirrors this layout");
+static_assert(sizeof(ModelBlock) == 28975248, "ffxi/port_model.py mirrors this layout");
 
 // The character's motions, copied from the block when it changes. Moving: under 15 units a second (30
 // to start) the set's standing one; moving, the one made for the nearest speed, played that much faster
@@ -1256,7 +1258,7 @@ void model_frame() {
         std::memcpy(mb->motion, motion, sizeof motion);
     }
     mb->battle = g_anim.battle ? 1 : 0;
-    video_model_gain(mb->light_gain > 0.0f ? mb->light_gain : 1.0f);
+    video_model_shading(mb->light_gain > 0.0f ? mb->light_gain : 1.0f, mb->ground_shade);
     g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
     if (visible) {
         float v[12], hp[12];
