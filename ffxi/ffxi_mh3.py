@@ -345,7 +345,7 @@ class App:
             print("FFXI effects: casting and spells drawn in the scene")
             return {"lib": lib, "effects": FX.Effects(lib), "port": PortFx(), "me": me, "them": them,
                     "has_target": False, "cast": None, "layers": {}, "images": [], "tex": {}, "last": 0.0,
-                    "drawn": False}
+                    "drawn": False, "hits": None, "pulsed": {}, "hunter": None}
         except Exception as ex:                                       # noqa: BLE001  the layer runs without them
             print(f"[FFXI effects unavailable: {ex}]")
             return None
@@ -400,6 +400,10 @@ class App:
                 yaw = float(np.arctan2(h[0, 3] - t[0], h[2, 3] - t[2]))
                 them = FX.actor_from_mh(t[:3], FX.yaw_matrix(yaw), max(50.0, t[3]))
                 fx["them"].pos, fx["them"].facing, fx["them"].height = them.pos, them.facing, them.height
+        if scene:
+            fx["hunter"] = scene["hunter"]
+            self._fx_hits(scene)
+            self._fx_status(now)
         effects.step(min(dt, 0.25))
         if effects.busy() and effects.camera is not None:
             verts, counts, keys = effects.geometry()
@@ -411,6 +415,59 @@ class App:
             port.send(np.zeros((0, 10), np.float32), [0] * 5)
             fx["drawn"] = False
         port.keep_alive()
+
+    def _fx_hits(self, scene) -> None:
+        """A blow of the hunter's taking HP off a monster (the port counts the game's): FFXI's spark for the
+        weapon in hand, where the blade lands: toward the monster, a reach ahead, at its middle's height."""
+        import numpy as np
+        import ffxi_fx as FX
+        fx = self.fx
+        o = self.mem.objects() if hasattr(self.mem, "objects") else None
+        if not o:
+            return
+        hits, before = o.get("monster_hits"), fx["hits"]
+        fx["hits"] = hits
+        if before is None or hits == before or o.get("monster_delta", 0) >= 0:
+            return
+        h = scene["hunter"]
+        me = h[:, 3]
+        t = scene["target"]
+        if t is not None and np.hypot(t[0] - me[0], t[2] - me[2]) > 1:
+            way = np.array([t[0] - me[0], 0.0, t[2] - me[2]])
+            reach = min(float(np.linalg.norm(way)), 130.0)
+            up = float(np.clip(0.5 * t[3], 60.0, 140.0))
+        else:
+            way = h[:, 2] * np.array([1.0, 0.0, 1.0])
+            reach, up = 130.0, 100.0
+        way = way / (np.linalg.norm(way) or 1.0)
+        spot = me + way * reach
+        yaw = float(np.arctan2(-way[0], -way[2]))                   # facing back toward the hunter
+        struck = FX.actor_from_mh(spot, FX.yaw_matrix(yaw), 2 * up)   # its "middle" (a joint named) the height struck
+        routine = FX.HIT_ROUTINE.get(self.mh_weapon, "hit9")
+        fx["effects"].play(fx["lib"].shared, routine, fx["me"], struck)
+
+    def _fx_status(self, now: float) -> None:
+        """A debuff lasting on the monster: every 3 s its spell's look on it again, faint and short."""
+        fx = self.fx
+        if not fx["has_target"]:
+            return
+        active = {src for (src, eff), b in self.e.debuffs.items() if b["until"] > now + 1}
+        pulsed = fx["pulsed"]
+        for src in list(pulsed):
+            if src not in active:
+                del pulsed[src]
+        for src in active:
+            anim = D.SPELL_ANIMATION.get(src)
+            if anim is None:
+                continue
+            if src not in pulsed:
+                pulsed[src] = now + 4.0                             # its own effect plays first
+            if now < pulsed[src]:
+                continue
+            pulsed[src] = now + 3.0
+            f = fx["lib"].spell(anim)
+            if f is not None:
+                fx["effects"].pulse(f, "main", fx["me"], fx["them"], alpha=0.35, length=0.45)
 
     def _fx_layers(self, keys, column):
         """The frame's textures as the port's layers (new ones loaded and sent), each corner's index in

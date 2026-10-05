@@ -58,6 +58,11 @@ RACE_FILES = {"hume_male": "ROM/10/0.DAT", "hume_female": "ROM/10/1.DAT", "elvaa
 # casting, by school: the race's routine while a spell is cast (its release is the spell's own `main`)
 CAST_ROUTINE = {"white": "cawh", "black": "cabk", "summoning": "casm", "ninjutsu": "canj", "song": "caso",
                 "blue": "cabk", "geomancy": "cawh"}
+# a blow landing, by Monster Hunter's weapon: the shared file's spark for FFXI's like of it (its `atpr`
+# picks by weapon type: 3 a sword hit9, 4 a great sword hit8, 6 a great axe hi10, 8 a polearm hit7, 10 a
+# great katana hi16, 11 a club hi17; a dagger's hit5 for a bowgun's shot)
+HIT_ROUTINE = {"sword_and_shield": "hit9", "great_sword": "hit8", "switch_axe": "hi10", "lance": "hit7",
+               "long_sword": "hi16", "hammer": "hi17", "bowgun": "hit5"}
 DIR, END, GEN, ROUTINE, CURVE, PMESH, TEX, SPRITES = 0x01, 0x00, 0x05, 0x07, 0x19, 0x1F, 0x20, 0x21
 # FFXI's space to Monster Hunter's: FFXI's +X (a model's forward) Monster Hunter's +Z, its Y (down) up,
 # its Z the -X; and a metre 97.2 units (a Hume 1.8 tall, the hunter 175: ffxi_model.pack's scale)
@@ -996,6 +1001,7 @@ class Play:
     started: float
     generators: list = field(default_factory=list)
     stopped: bool = False
+    alpha: float = 1.0                   # its particles' alpha times this (a status's faint pulse)
 
 
 @dataclass
@@ -1019,6 +1025,26 @@ class Effects:
              op: int = 0x03) -> Play:
         events, ticks = self.lib.schedule(file, routine, op)
         pl = Play(routine, source, target, sorted(events, key=lambda e: e.tick), self.clock)
+        self.plays.append(pl)
+        return pl
+
+    def pulse(self, file: EffectFile, routine: str, source: Actor, target: Actor, alpha: float = 0.5,
+              length: float = 0.5) -> Play | None:
+        """What a routine shows on its target alone (none of the caster's), at once, its generators
+        emitting `length` as long, `alpha` as bright: a status lasting on a monster, its spell's look."""
+        events, _ = self.lib.schedule(file, routine)
+        keep = []
+        for e in events:
+            if not isinstance(e, Spawn):
+                continue
+            r = e.file.find(GEN, e.gen, e.dir)
+            if r and e.file.generator(r[0], r[1], r[2]).attach in (2, 4, 6):
+                keep.append(e)
+        if not keep:
+            return None
+        t0 = min(e.tick for e in keep)
+        spawns = [Spawn((e.tick - t0) * length, e.file, e.dir, e.gen, max(1, int(e.dur * length))) for e in keep]
+        pl = Play(routine, source, target, sorted(spawns, key=lambda e: e.tick), self.clock, alpha=alpha)
         self.plays.append(pl)
         return pl
 
@@ -1080,6 +1106,7 @@ class Effects:
             tf = np.clip(p.color * p.mult, 0.0, 1.0)
             if p.alpha_override is not None:
                 tf[3] = p.alpha_override
+            tf[3] *= p.gen.play.alpha
             for m in meshes:
                 v = np.c_[m.pos, np.ones(len(m.pos))]
                 if s["billboard"] in (XYZ, XZ) and cam is not None:
