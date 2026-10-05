@@ -511,6 +511,30 @@ class Library:
         return out, clock[0] - start
 
 
+SOUND_OPS = {0x0A, 0x0B, 0x4A, 0x53, 0x60}
+
+
+def voice_options(f: EffectFile, routine: str) -> list:
+    """A race's voice routine (vatk: attacking, vdam: hurt, vded: falling): the sounds it picks one of at
+    random (its 0x3D block), a silent choice as None; each a sound's number (its 0x3D SeSep chunk's)."""
+    r = f.find(ROUTINE, routine)
+    if not r:
+        return []
+    ids = {}
+    for at, nm, typ, size in A.chunks(f.b):
+        body = f.b[at + 16:at + size]
+        if typ == 0x3D and body[:5] == b"SeSep" and len(body) >= 12:
+            ids[nm.decode("latin-1").rstrip("\0 ")] = struct.unpack_from("<I", body, 8)[0]
+    out = []
+    for e in f.routine(r[0], r[1]):
+        for c in (e.body or [e]) if e.op == RANDOM_OPEN else [e]:
+            if c.op in SOUND_OPS and c.ref in ids:
+                out.append(ids[c.ref])
+            elif e.op == RANDOM_OPEN:
+                out.append(None)                                 # a choice that says nothing
+    return out
+
+
 def decide(operands: list, regs: dict) -> bool:
     """An if over a register and a literal (the engine's combat state, which isn't here): the first case
     taken, the register bound to it, so a switch's later cases are false."""

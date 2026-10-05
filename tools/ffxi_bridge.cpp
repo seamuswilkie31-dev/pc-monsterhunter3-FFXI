@@ -190,6 +190,29 @@ void hook_bgm_vol(PPCContext& c) {
     orig_bgm_vol(c);
 }
 
+// fn_800D9D2C(se_w, code, ...): a sound effect requested for an actor (the se_w's +4 the actor, +8 its
+// kind). The hunter's own voice gives way to FFXI's (the layer plays its race's): the codes MH3_MUTE_SE
+// names ("a1b2,a1b3", hex) are dropped for the hunter; MH3_SE_TRACE=1 logs each of the hunter's (and
+// each a hunter's kind of actor asks for), to find them.
+PPCFunc orig_se_req;
+uint32_t object(uint32_t base);
+std::vector<uint32_t> g_mute_se;
+bool g_se_trace = false;
+void hook_se_req(PPCContext& c) {
+    uint32_t w = c.r[3], code = c.r[4] & 0xFFFF;
+    uint32_t owner = in_ram(w + 4, 8) ? ld32(w + 4) : 0, kind = in_ram(w + 4, 8) ? ld32(w + 8) : 0;
+    uint32_t pl = object(kBasePlayer);
+    bool hunter = pl && owner == pl;
+    if (g_se_trace && (hunter || kind == 1 || kind == 3))
+        rt_log("ffxi: sound %04X for %08X%s (kind %u; %08X %08X), from %08X", code, owner, hunter ? " the hunter" : "",
+               kind, c.r[5], c.r[6], c.lr);
+    if (hunter && std::find(g_mute_se.begin(), g_mute_se.end(), code) != g_mute_se.end()) {
+        c.r[3] = 0;
+        return;
+    }
+    orig_se_req(c);
+}
+
 // The map: the game links one code module per map (wiikit's RSO table: "...\\map01.plf"); its name's last
 // part, without ".plf"
 void serve_map(Block* b) {
@@ -903,7 +926,8 @@ struct ModelBlock {
     uint32_t battle;        // the port's: 1 while Monster Hunter's hunter has its weapon out
     float light_gain;       // the layer's: its textures' brightness under the game's light (0: unlit),
     float ground_shade;     //   and how much the ground's baked light dims it (video_model_shading)
-    uint32_t spare[3];
+    uint32_t swings;        // the port's: bumped with each of Monster Hunter's hunter's attacks (FFXI's voice)
+    uint32_t spare[2];
     char motion[16];        // the port's: the hunter's motion now (Monster Hunter's animation's name)
     float place[12];                                      // the model's space to the hunter's, 3x4 rows
     int32_t parents[kModelMaxJoints];                     // -1: the root; a parent comes before its children
@@ -1393,7 +1417,10 @@ void model_frame() {
     bool attacking = g_block && (g_block->engage & 1);        // FFXI's Attack: the weapon out
     if (fresh && pl && hunter_motion(motion)) {              // what Monster Hunter's hunter is doing
         g_anim.set_battle(motion_battle(motion) || attacking);
-        if (motion_attack(motion) && std::strcmp(motion, last_motion) != 0) g_anim.attack();
+        if (motion_attack(motion) && std::strcmp(motion, last_motion) != 0) {
+            g_anim.attack();
+            mb->swings = mb->swings + 1;
+        }
         std::memcpy(last_motion, motion, sizeof motion);
         std::memcpy(mb->motion, motion, sizeof motion);
     }
@@ -1520,6 +1547,18 @@ void install() {
     orig_scn_world = ppc_hook("mh3_ScnMdlCalcWorldMtx", hook_scn_world);
     orig_play_stream = ppc_hook("PlayStream__FUlUl", hook_play_stream);
     orig_bgm_vol = ppc_hook("set_str_bgm_main_vol__Ff", hook_bgm_vol);
+    orig_se_req = ppc_hook("fn_800D9D2C", hook_se_req);
+    g_se_trace = std::getenv("MH3_SE_TRACE") && !std::strcmp(std::getenv("MH3_SE_TRACE"), "1");
+    if (const char* m = std::getenv("MH3_MUTE_SE")) {
+        for (const char* p = m; *p;) {
+            char* end = nullptr;
+            unsigned long v = std::strtoul(p, &end, 16);
+            if (end == p) { ++p; continue; }
+            g_mute_se.push_back((uint32_t)v & 0xFFFF);
+            p = end;
+        }
+        rt_log("ffxi: %zu of the hunter's sounds muted (MH3_MUTE_SE)", g_mute_se.size());
+    }
     orig_cam_position = ppc_hook("SetPosition__Q34nw4r3g3d6CameraFRCQ34nw4r4math4VEC3", hook_cam_position);
     orig_cam_posture = ppc_hook("SetPosture__Q34nw4r3g3d6CameraFRCQ44nw4r3g3d6Camera11PostureInfo", hook_cam_posture);
     if (!orig_cam_position || !orig_cam_posture) rt_log("ffxi: the camera's hooks are missing (tools/mh3-hooks.txt): no lock-on");

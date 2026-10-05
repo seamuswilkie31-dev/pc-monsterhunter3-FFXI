@@ -17,3 +17,4 @@ SetPosition__Q34nw4r3g3d6CameraFRCQ34nw4r4math4VEC3   # the camera's eye: FFXI's
 SetPosture__Q34nw4r3g3d6CameraFRCQ44nw4r3g3d6Camera11PostureInfo   # where it looks: FFXI's lock-on
 PlayStream__FUlUl        # the game's music started: FFXI's in its place
 set_str_bgm_main_vol__Ff # the game's music volume: held at 0 while FFXI's plays
+fn_800D9D2C              # a sound effect requested for an actor: the hunter's voice, FFXI's in its place

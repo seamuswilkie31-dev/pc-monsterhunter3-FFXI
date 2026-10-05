@@ -23,7 +23,7 @@ MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 100000, 20, 16, 256    # VERT_FLOATS: 
 MAX_JOINTS, MAX_CLIPS, POOL = 128, 96, 1 << 22
 NONE = 0xFFFFFFFF
 # magic, version, serial, n_verts, layers, tex_w, tex_h, flags, alive, n_joints, n_clips,
-# act_seq, act_clip, act_next, battle, light_gain and ground_shade (floats), 3 spare
+# act_seq, act_clip, act_next, battle, light_gain and ground_shade (floats), swings (the port's), 2 spare
 HEADER = struct.Struct("<20I")
 CLIP = struct.Struct("<IIffIIII")  # frames, first float in the pool, rate, speed, kind, set, tag, reserved
 MOTION_AT = HEADER.size                                 # the port's: Monster Hunter's hunter's motion's name
@@ -107,6 +107,10 @@ class PortModel:
         twice the light: 2; 0: not lit, the textures as they are); and how much the scenery's baked light
         under it dims it (0: not at all, as the game's own hunter; 1: as dark as the ground)."""
         self.mm[15 * 4:17 * 4] = struct.pack("<ff", float(gain), float(ground))
+
+    def swings(self) -> int:
+        """How many attacks Monster Hunter's hunter has begun (the port counts): FFXI's voice for each."""
+        return self._get(17)
 
     def battle(self) -> bool:
         """Whether Monster Hunter's hunter has its weapon out (the port's reading)."""

@@ -370,6 +370,7 @@ class App:
                     self._fx_skillchain(name)
         if not self.sounds:
             return
+        self._voices(events)
         import ffxi_sound as FS
         for kind, name in dict.fromkeys(events):                    # several levels at once: one fanfare
             anim = D.SPELL_ANIMATION.get(name)
@@ -581,6 +582,51 @@ class App:
         idx = np.where(half, column - 1000, column).astype(np.int64)
         out = np.where(idx >= 0, lut[np.clip(idx, 0, len(keys))], -1.0)
         return np.where(half & (idx >= 0), out + 1000, out)
+
+    # --- the race's voice in place of the hunter's: attacking, hurt, falling ---
+    def _voices(self, events) -> None:
+        """FFXI's voice for the character's race (its file's vatk, vdam, vded: four grunts or none, at
+        random): on each of the hunter's attacks (the port counts them) and each swing, when hurt, when
+        falling. Monster Hunter's own grunts are muted by the port (MH3_MUTE_SE)."""
+        if self.cfg.get("race_voice", True) is False or not self.cfg.get("character_race"):
+            return
+        if not hasattr(self, "_voice_sets"):
+            self._voice_sets, self._voice_at = {}, 0.0
+            try:
+                import ffxi_fx as FX
+                import ffxi_model as FM
+                lib = self.fx["lib"] if self.fx else FX.Library(FM.ffxi_root(self.cfg.get("ffxi_path")),
+                                                                self.cfg["character_race"])
+                import ffxi_sound as FS
+                face = int(self.cfg.get("character_look", {}).get("face", 1))
+                vset = self.cfg.get("voice_set") or FS.voice_set(lib.root, self.cfg["character_race"], face)
+                for kind, routine in (("attack", "vatk"), ("hurt", "vdam"), ("faint", "vded")):
+                    opts = FX.voice_options(lib.caster, routine)            # se236's, as the file names them
+                    self._voice_sets[kind] = [None if n is None else (int(vset) * 1000 + n % 1000 if vset else n)
+                                              for n in opts]
+                print(f"FFXI voice: set se{vset} ({self.cfg['character_race']}, face {face})")
+            except Exception as ex:                                  # noqa: BLE001  silent then
+                print(f"[FFXI voices unavailable: {ex}]")
+        want = None
+        swings = self.character.swings() if self.character and hasattr(self.character, "swings") else None
+        if swings is not None:
+            if getattr(self, "_swings_seen", None) is not None and swings != self._swings_seen:
+                want = "attack"
+            self._swings_seen = swings
+        for kind, _name in events:
+            if kind == "swing":
+                want = want or "attack"
+            elif kind == "hurt":
+                want = "hurt"
+            elif kind == "faint":
+                want = "faint"
+        options = self._voice_sets.get(want) if want else None
+        now = time.monotonic()
+        if options and (want != "attack" or now - self._voice_at > 0.4):
+            self._voice_at = now
+            pick = random.choice(options)
+            if pick is not None:
+                self.sounds.play(pick)
 
     def _music(self, now: float, player_hp) -> None:
         """FFXI's music in place of Monster Hunter's: the village's, the field's, or, engaged (the weapon

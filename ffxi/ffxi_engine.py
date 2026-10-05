@@ -410,6 +410,7 @@ class Engine:
         after -= self._use_count("stoneskin", max(0.0, after))
         after = max(0, round(after))
         if after > 0:
+            self._event("hurt", str(after))                              # the race's voice (the layer's)
             self.tp = min(D.TP_MAX, self.tp + D.TP_WHEN_HIT * self.j["tp_mult"])
             if self.casting:
                 if self.effect("aquaveil") >= 1:
@@ -502,6 +503,7 @@ class Engine:
         self.dirty = True
 
     def _on_faint(self) -> None:
+        self._event("faint", "")
         self.buffs.clear()
         self.pet = None
         self.casting = None

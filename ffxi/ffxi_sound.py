@@ -47,6 +47,30 @@ def sound_path(root: Path, n: int) -> Path:
     return root / "sound" / "win" / "se" / f"se{n // 1000:03d}" / f"se{n:06d}.spw"
 
 
+# A character's voice (grunts attacking, hurt, falling): a set of 16 sounds (se2NN001-016: idle 1-2,
+# attacking 3-6, hurt 7-10, staggering 11-13, falling 14-16), one per race and face, 16 a race in FFXI's
+# order of races from se201 (the race's effect file names se236's, the client putting the character's in
+# its place). A few are ATRAC3, which isn't read here: the nearest face's of the race then.
+VOICE_RACES = ["hume_male", "hume_female", "elvaan_male", "elvaan_female", "tarutaru_male", "tarutaru_female",
+               "mithra", "galka"]
+
+
+def voice_set(root: Path, race: str, face: int) -> int | None:
+    """The voice set (se2NN) for a race and face (1-16), the nearest readable face's if its isn't."""
+    if race not in VOICE_RACES:
+        return None
+    base = 201 + 16 * VOICE_RACES.index(race)
+    want = max(0, min(15, int(face) - 1))
+    for d in sorted(range(16), key=lambda f: (abs(f - want), f)):
+        p = sound_path(root, (base + d) * 1000 + 3)
+        try:
+            read_spw(p.read_bytes())
+            return base + d
+        except Exception:                                              # noqa: BLE001  ATRAC3, or missing
+            continue
+    return None
+
+
 MUSIC_ROOTS = ("sound", "sound2", "sound3", "sound4", "sound5", "sound6", "sound9")   # the base game, then each expansion's
 
 
