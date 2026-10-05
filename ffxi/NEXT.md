@@ -89,7 +89,17 @@ reads its baked vertex colour (`video_model_shading(gain, ground)`; the layer's 
   (gain 1), the character came out at half the hunter's brightness, and the ground probe's shade made
   it darker still. Tuning gain and shade by eye against `/hunter` was where it stopped.
 
-Next: spell visual effects (started 2026-10-04: the format studied, nothing written yet). What's known:
+**Spell effects** (2026-10-04, checked in play). `ffxi_fx.py` reads FFXI's effect files and runs them as
+FFXI does (routines on the 60-tick clock with their calls, holds and branches; generators through their
+opcode streams; drawn 4x vertex colour x texel x particle colour, camera-facing sprites); `port_fx.py`
+hands each frame's triangles to the port (block `mh3-ffxi-fx`; wiikit's `video_fx_*` draws them after the
+character). Shown: the school's casting about the character (the race file's `cawh`, `cabk`...), the
+spell's `main` (the shared release, then on the monster or the character), a blow's spark by weapon
+(`HIT_ROUTINE`: the shared file's `atpr` cases), and a debuff's spell look pulsing faintly on the monster
+every 3 s while it lasts (FFXI has none of its own). `uv run ffxi_fx.py preview Cure` renders one offline.
+Not yet: child generators (0x44, 0x53, 0x6A, 0x3C), point lights, distortion, weapon skills and
+skillchains (the shared file's `sb00`-`sb09`), the monster's own hit reactions (`damg`, `sdam`).
+The format, as studied first:
 - A spell's effect is file 2800 + its animation number (`ffxi_sound.file_path`); across the 154 spell
   files: 2152 generators (0x05), 2252 keyframe curves (0x19), 1082 particle meshes (0x1F), 1000 textures
   (0x20), 351 routines (0x07), a few sprite sheets (0x21).
@@ -114,10 +124,8 @@ Next: spell visual effects (started 2026-10-04: the format studied, nothing writ
   from chunk+0x10 u32 version (3/5/6), u8 meshes with texture, u8 without, u16, a padded u16 triangle-count
   array (3/4/7/8/11/12/15 long), texture names (16 chars), then per vertex position, normal, BGRA colour,
   UV.
-- Plan: `ffxi_fx.py` parses and simulates (the layer, 60 Hz), the port draws: particle instances (mesh, place
-  relative to the caster or the target, rotation, scale, colour, UV offset, billboard, blend) through a
-  shared block, expanded to triangles in the frame hook with the camera and drawn after the character
-  (additive or alpha). Start with Cure and Dia (the spells the character has), a software preview first.
+- Built as planned, but the layer expands the particles to triangles in the world itself (the port
+  writes the camera, the hunter and the target into the block each frame) and the port only draws them.
 
 The lock-on's camera against walls.
 
