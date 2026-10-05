@@ -86,7 +86,8 @@ struct Block {
     uint32_t menu_close_seq, menu_close_ack;   // the layer closes it: bumps seq; the port acks
     uint32_t item_seq, item_ack;        // the layer asks for one Y press to reach the game (its item)
     uint32_t ev_head;                   // port: events written so far
-    uint32_t reserved[2];
+    uint32_t engage;                    // layer: FFXI's Attack: 1 the weapon out, 2 the camera locked on the target
+    uint32_t reserved;
     uint32_t events[32];                // port: the buttons newly pressed, a ring
     // Your nameplate, FFXI's name above your head: the hunter's head projected through the game's
     // 3D camera, in the picture's normalised coordinates (-1..1, y up).
@@ -465,12 +466,56 @@ bool monster_ok(uint32_t obj) {
     return max >= 10 && max <= 1000000 && hp >= 0 && hp <= max;
 }
 
+// The game's monsters (get_move_work_adrs(3), get_move_work_max(3)): a table of ENEMY_WORK, 0xB18 apart,
+// each in use while its first byte is set; its HP at +0x7A0 as mh3_EmHpAdd's. A monster's scene model is
+// found from it through a word in it pointing at the model, or at an MHchar holding it (+0x118): the
+// word's place found once, by looking through a monster's words.
+std::atomic<uint32_t> g_target_em{0};      // the target's ENEMY_WORK (0: not found)
+uint32_t em_of_model(uint32_t scn) {
+    static uint32_t cached_scn = 0, cached_em = 0;
+    static int link = -1;
+    auto links = [&](uint32_t w, int i) {
+        uint32_t p = ld32(w + 4 * (uint32_t)i);
+        return p == scn || (in_ram(p + 0x118, 4) && ld32(p + 0x118) == scn);
+    };
+    if (!scn) return 0;
+    if (scn == cached_scn && cached_em && in_ram(cached_em, 0xB18) && ld8(cached_em) && link >= 0 && links(cached_em, link))
+        return cached_em;
+    cached_scn = scn, cached_em = 0;
+    if (!in_ram(0x8065AA60 + 0xA4, 4)) return 0;
+    uint32_t t = ld32(0x8065AA60 + 0xA4);
+    if (!in_ram(t, 0x30)) return 0;
+    uint32_t base = ld32(t + 0x10 + 3 * 4), n = ld16(t + 3 * 2);
+    if (!n || n > 256 || !in_ram(base, n * 0xB18)) return 0;
+    for (uint32_t k = 0; k < n; ++k) {
+        uint32_t w = base + k * 0xB18;
+        if (!ld8(w)) continue;
+        if (link >= 0) {
+            if (links(w, link)) return cached_em = w;
+            continue;
+        }
+        for (int i = 1; i < 0xB18 / 4; ++i)
+            if (links(w, i)) {
+                link = i;
+                rt_log("ffxi: a monster's model is linked from its ENEMY_WORK +0x%X (monster %u of %u, HP %d of %d)",
+                       4 * i, k, n, (int32_t)ld32(w + 0x7A0), (int32_t)ld32(w + 0x7A4));
+                return cached_em = w;
+            }
+    }
+    return 0;
+}
+
+bool monster_ok(uint32_t obj);
+
 uint32_t object(uint32_t base) {
     if (base == kBasePlayer) {
         uint32_t o = g_player.load(std::memory_order_relaxed);
         if (hunter_ok(o)) return o;
         g_player.compare_exchange_strong(o, 0);
     } else if (base == kBaseMonster) {
+        // FFXI acts on its target: the target's own monster, else the one the game last hurt
+        uint32_t t = g_target_em.load(std::memory_order_relaxed);
+        if (t && monster_ok(t)) return t;
         uint32_t o = g_monster.load(std::memory_order_relaxed);
         if (monster_ok(o)) return o;
         g_monster.compare_exchange_strong(o, 0);
@@ -703,6 +748,18 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
         }
         rt_log("ffxi: lock-on %s %s", g_lock.on ? "on" : "off", t ? t->name : "(no target)");
     }
+    // FFXI's Attack (the layer's engage): the camera locked on the target while it lasts (and let go after
+    // if it was the attack that locked it)
+    static bool locked_by_attack = false;
+    bool attack_lock = b && (b->engage & 2);
+    if (attack_lock && t && !g_lock.on && cam) {
+        g_lock.on = locked_by_attack = true;
+        if (g_lock.weight <= 0.0f && g_lock.have_game)
+            g_lock.yaw = std::atan2(g_lock.look[0] - g_lock.eye[0], g_lock.look[2] - g_lock.eye[2]);
+    } else if (!attack_lock && locked_by_attack) {
+        g_lock.on = locked_by_attack = false;
+    }
+    g_target_em.store(t ? em_of_model(t->obj) : 0, std::memory_order_relaxed);
     static uint32_t told_target = 0;
     if (t && t->obj != told_target) {                        // each new target, for a report of a strange one
         told_target = t->obj;
@@ -1333,12 +1390,14 @@ void model_frame() {
     }
     if (pl) g_anim.set_dead((int16_t)ld16(pl + 0x370) <= 0);
     char motion[16] = {};
+    bool attacking = g_block && (g_block->engage & 1);        // FFXI's Attack: the weapon out
     if (fresh && pl && hunter_motion(motion)) {              // what Monster Hunter's hunter is doing
-        g_anim.set_battle(motion_battle(motion));
+        g_anim.set_battle(motion_battle(motion) || attacking);
         if (motion_attack(motion) && std::strcmp(motion, last_motion) != 0) g_anim.attack();
         std::memcpy(last_motion, motion, sizeof motion);
         std::memcpy(mb->motion, motion, sizeof motion);
     }
+    if (attacking) g_anim.set_battle(true);
     mb->battle = g_anim.battle ? 1 : 0;
     video_model_shading(mb->light_gain, mb->ground_shade);    // (0: unlit)
     g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
@@ -1399,7 +1458,7 @@ void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
         }
         serve_map(b);
         b->player_obj = g_player.load(std::memory_order_relaxed);
-        b->monster_obj = g_monster.load(std::memory_order_relaxed);
+        b->monster_obj = object(kBaseMonster);
         b->monster_delta = g_delta.load(std::memory_order_relaxed);
         b->monster_hits = g_hits.load(std::memory_order_relaxed);
         std::atomic_thread_fence(std::memory_order_release);

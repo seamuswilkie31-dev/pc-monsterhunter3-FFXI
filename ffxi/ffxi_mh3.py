@@ -279,6 +279,7 @@ class App:
             name = self.macros()[a[1]] if a[0] == "macro" and a[1] < len(self.macros()) else a[1]
             if a[0] in ("macro", "use") and name:
                 writes.update(self.e.use(name, now, writes.get("monster_hp", m), writes.get("player_hp", p)))
+        self._attack_step(now, m, writes)
         for name, val in writes.items():
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
@@ -292,6 +293,44 @@ class App:
         if self.rec:
             self._record(now, p)
 
+    # --- FFXI's Attack: engaged, the weapon out, swinging at the target on the weapon's delay ---
+    def attack(self, on: bool) -> None:
+        """Engage the target (the weapon out, the camera on it, a swing on the weapon's delay while magic and
+        abilities go on), or disengage."""
+        if on and self.monster_hp is None:
+            self.e.say("Unable to attack: no target.", "warn")
+            return
+        self.e.engage(on, time.monotonic())
+        self._engage_port()
+
+    def _engage_port(self) -> None:
+        if hasattr(self.mem, "set_engage"):
+            self.mem.set_engage(self.e.engaged, self.e.engaged and self.cfg.get("attack_lock_camera", True) is not False)
+
+    def _in_reach(self) -> bool:
+        """The target within a swing: its middle a reach away, a big one's reach the longer."""
+        t = self.port_target
+        if not t:
+            return False
+        scene = self.fx.get("scene") if self.fx else None
+        height = scene["target"][3] if scene and scene.get("target") is not None else 150.0
+        return t["dist"] <= float(self.cfg.get("attack_reach", 300.0)) + 0.6 * height
+
+    def _attack_step(self, now: float, m, writes: dict) -> None:
+        e = self.e
+        if e.engaged and m is None:                    # the target gone (dead, or left): disengage
+            self._lost_target = getattr(self, "_lost_target", None) or now
+            if now - self._lost_target > 2.0:
+                self.attack(False)
+        else:
+            self._lost_target = None
+        if e.engaged:
+            before = writes.get("monster_hp", m)
+            after = e.swing(now, before, self._in_reach())
+            if after is not None and after != before:
+                writes["monster_hp"] = e.prev_monster = after
+        self._engage_port()
+
     def _play_events(self):
         """The engine's events as FFXI's: a spell's casting by the character (its school's motions: start,
         chant, release) and its sound as it goes off, a level gained or lost."""
@@ -299,6 +338,14 @@ class App:
         for kind, name in events:
             if kind == "kill" and self.gear:
                 self._drops(int(name))
+            if kind == "kill" and self.e.engaged:
+                self.attack(False)
+            if kind == "swing":
+                if self.character:                     # FFXI's attack motions in turn
+                    self._swing_n = getattr(self, "_swing_n", 0) + 1
+                    self.character.request(f"at{self._swing_n % 3}")
+                if self.fx and name != "miss":
+                    self._fx_strike(self.fx.get("scene"), name == "critical")
         if self.character:
             import ffxi_model as FM
             for kind, name in events:
@@ -349,7 +396,7 @@ class App:
             print("FFXI effects: casting and spells drawn in the scene")
             return {"lib": lib, "effects": FX.Effects(lib), "port": PortFx(), "me": me, "them": them,
                     "has_target": False, "cast": None, "layers": {}, "images": [], "tex": {}, "last": 0.0,
-                    "drawn": False, "hits": None, "pulsed": {}, "hunter": None}
+                    "drawn": False, "hits": None, "pulsed": {}, "hunter": None, "scene": None}
         except Exception as ex:                                       # noqa: BLE001  the layer runs without them
             print(f"[FFXI effects unavailable: {ex}]")
             return None
@@ -424,7 +471,7 @@ class App:
                 them = FX.actor_from_mh(t[:3], FX.yaw_matrix(yaw), max(50.0, t[3]))
                 fx["them"].pos, fx["them"].facing, fx["them"].height = them.pos, them.facing, them.height
         if scene:
-            fx["hunter"] = scene["hunter"]
+            fx["hunter"], fx["scene"] = scene["hunter"], scene
             self._fx_hits(scene)
             self._fx_status(now)
         effects.step(min(dt, 0.25))
@@ -455,7 +502,16 @@ class App:
         blow = -o["monster_delta"]
         usual = fx.get("usual_blow") or blow
         fx["usual_blow"] = 0.85 * usual + 0.15 * blow                  # what the hunter's blows have been doing
-        critical = blow >= 1.8 * usual and blow >= 10
+        self._fx_strike(scene, blow >= 1.8 * usual and blow >= 10)
+
+    def _fx_strike(self, scene, critical: bool = False) -> None:
+        """A blow landing: FFXI's spark for the weapon in hand (and its critical flash), where the blade lands:
+        toward the monster, a reach ahead, at its middle's height."""
+        import numpy as np
+        import ffxi_fx as FX
+        fx = self.fx
+        if not scene:
+            return
         h = scene["hunter"]
         me = h[:, 3]
         t = scene["target"]
@@ -659,12 +715,12 @@ class App:
             return {"label": n, "ok": ok, "detail": detail, "act": ("use", n)}
 
         root = []
-        if e.known_ws():
-            root.append({"label": "Weapon Skills", "ok": e.tp >= D.TP_WS_MIN, "detail": "",
-                         "children": [action(n) for n in e.known_ws()]})
-        if e.known_abilities():
-            root.append({"label": "Job Abilities", "ok": True, "detail": "",
-                         "children": [action(n) for n in e.known_abilities()]})
+        # FFXI's command menu, in its order: Attack (Disengage while attacking), Magic, Abilities, Items...
+        has_target = self.monster_hp is not None
+        root.append({"label": "Disengage" if e.engaged else "Attack", "ok": e.engaged or has_target, "detail": "",
+                     "act": ("attack",), "help": "Draw your weapon and attack your target on your weapon's delay "
+                                                 "(magic and abilities go on meanwhile)." if not e.engaged else
+                                                 "Put your weapon away."})
         spells = e.known_spells()
         if spells:
             schools = {}
@@ -678,6 +734,15 @@ class App:
                 root.append({"label": "Magic", "ok": True, "detail": "", "children": [
                     {"label": names.get(s, s.title()), "ok": True, "detail": "",
                      "children": [action(n) for n in ns]} for s, ns in schools.items()]})
+        abilities = []
+        if e.known_abilities():
+            abilities.append({"label": "Job Abilities", "ok": True, "detail": "",
+                              "children": [action(n) for n in e.known_abilities()]})
+        if e.known_ws():
+            abilities.append({"label": "Weapon Skills", "ok": e.tp >= D.TP_WS_MIN, "detail": "",
+                              "children": [action(n) for n in e.known_ws()]})
+        if abilities:
+            root.append({"label": "Abilities", "ok": True, "detail": "", "children": abilities})
         if self.gear:
             root += self._gear_menu()
         # Monster Hunter's own item use (as a tap of the pad's X): named apart from FFXI's Items, the inventory
@@ -691,7 +756,10 @@ class App:
                   "act": ("sub", j)} for j, d in D.JOBS.items()]
         root.append({"label": "Job", "ok": True, "detail": e.job_label(), "children": [
             {"label": "Main Job", "ok": True, "detail": e.job, "children": jobs},
-            {"label": "Support Job", "ok": True, "detail": e.sub or "", "children": subs}]})
+            {"label": "Support Job", "ok": not e.all_jobs, "detail": e.sub or "", "children": subs},
+            {"label": "All Jobs", "ok": True, "detail": "On" if e.all_jobs else "Off", "act": ("all_jobs",),
+             "help": "On: every job's magic and abilities at your level on one character (solo play). "
+                     "Off: your main job's, and your support job's at half its level."}]})
         return root
 
     def _gear_menu(self) -> list[dict]:
@@ -796,6 +864,13 @@ class App:
         e = self.e
         if act[0] == "use":
             self.actions.put(("use", act[1]))
+        elif act[0] == "attack":
+            self.attack(not e.engaged)
+        elif act[0] == "all_jobs":
+            e.set_all_jobs(not e.all_jobs)
+            self._gear_check()
+            self.save()
+            return                                     # the menu stays open: its detail shows the change
         elif act[0] == "item":
             self.mem.use_item()                    # Monster Hunter's own item use
         elif act[0] == "job":
@@ -1023,6 +1098,8 @@ class App:
             e.say(msg.format(me=e.me, their="their"), "emote")
             if self.character:
                 self.character.request(code, hold if isinstance(hold, str) else (code if hold else None))
+        elif word in ("attack", "a"):
+            self.attack(rest.lower() != "off" and not (self.e.engaged and not rest))
         elif word in ("s", "say"):
             e.say(f"{e.me} : {rest}", "say")
         elif word == "echo":

@@ -264,8 +264,8 @@ def test() -> int:
     app.step()
     check(app.menu == {"stack": [[0, 0]]}, "the pad's X opens the command menu")
     titles = [r[0] for r in app.menu_view(0)[0][1]]
-    check(titles == ["Weapon Skills", "Job Abilities", "Magic", "Pouch Item", "Job"], f"its first level ({titles})")
-    press(mm, P.CL_DOWN); press(mm, P.CL_DOWN); press(mm, P.CL_B)   # Magic
+    check(titles == ["Attack", "Magic", "Abilities", "Pouch Item", "Job"], f"its first level, FFXI's order ({titles})")
+    press(mm, P.CL_DOWN); press(mm, P.CL_B)               # Magic
     app.step()
     view = app.menu_view(0)
     check(len(view) == 2 and [r[0] for r in view[1][1]] == ["White Magic", "Black Magic"],
@@ -290,9 +290,9 @@ def test() -> int:
     app.step(); serve_once(mm, ram)
     check(app.e.sub == "WAR" and app.menu is None, f"Job: a support job chosen ({app.e.job_label()})")
     press(mm, P.CL_Y); app.step()
-    press(mm, P.CL_B); press(mm, P.CL_A)                  # Weapon Skills, then back
+    press(mm, P.CL_DOWN); press(mm, P.CL_B); press(mm, P.CL_A)   # Magic, then back
     app.step()
-    check(app.menu == {"stack": [[0, 0]]}, "back from a list returns to the first level")
+    check(app.menu == {"stack": [[1, 0]]}, "back from a list returns to the first level")
     press(mm, P.CL_A); app.step(); serve_once(mm, ram)    # back again: closed
     check(app.menu is None and not app.mem.menu_open(), "back from the first level closes it")
 

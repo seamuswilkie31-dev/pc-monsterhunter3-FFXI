@@ -45,7 +45,7 @@ SNAP_PATH_LEN = 260
 OBJ_AT = SNAP_AT + 12 + SNAP_PATH_LEN
 OBJ = struct.Struct("<3Ii")
 MENU_AT = OBJ_AT + OBJ.size
-MENU = struct.Struct("<8I")              # menu_open, close_seq, close_ack, item_seq, item_ack, ev_head, reserved x2
+MENU = struct.Struct("<8I")              # menu_open, close_seq, close_ack, item_seq, item_ack, ev_head, engage, reserved
 EVENTS_AT = MENU_AT + MENU.size
 NAME_AT = EVENTS_AT + 32 * 4
 NAME = struct.Struct("<ffIfII")         # name_x, name_y, name_ok, name_height, camera, reserved
@@ -210,6 +210,10 @@ class PortBackend:
             out.append(u32(self.mm, EVENTS_AT + 4 * (self._ev_tail % 32)))
             self._ev_tail = (self._ev_tail + 1) & 0xFFFFFFFF
         return out
+
+    def set_engage(self, weapon_out: bool, lock_camera: bool) -> None:
+        """FFXI's Attack, for the port: the character's weapon out, the camera locked on the target."""
+        put_u32(self.mm, MENU_AT + 24, (1 if weapon_out else 0) | (2 if lock_camera else 0))
 
     def close_menu(self) -> None:
         put_u32(self.mm, MENU_AT + 4, u32(self.mm, MENU_AT + 4) + 1)

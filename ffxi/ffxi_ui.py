@@ -318,16 +318,25 @@ class FfxiUi:
         self._text(d, (x0 + 12, y0 + 7), s.casting, self.f_val, KIND["magic"])
         self._bar(d, x0 + 12, y0 + 27, 236, s.cast_frac, MP_BAR)
 
+    def _log_top(self, s: UiState) -> int | None:
+        """Where the chat log's window begins (None: no log shown), as _log draws it."""
+        if not (s.log or s.chat_input is not None):
+            return None
+        n = len(s.log[-7:]) + (1 if s.chat_input is not None else 0)
+        return H - 12 - 16 - 20 * n
+
     def _menu(self, img, d, s: UiState) -> None:
-        """The command menu above the target window: the first level rightmost, each deeper one left of it."""
-        x1, y1 = W - 12, H - 160
+        """FFXI's command menu, bottom left: on the chat log, rising as the log fills (at the bottom with no
+        log), the first level leftmost, each deeper one to the right of it."""
+        top = self._log_top(s)
+        x0, y1 = 12, (top - 6) if top is not None else H - 12
         for title, rows, cursor, up, down in s.menu:
             label_w = max([int(d.textlength(t, font=self.f_val)) for t, _, _ in rows]
                           + [int(d.textlength(title, font=self.f_small))])
             detail_w = max([int(d.textlength(x, font=self.f_small)) for _, _, x in rows if x] + [0])
             width = (50 if self.skin else 44) + label_w + (detail_w + 16 if detail_w else 0) + (12 if up or down else 0)
-            x0 = x1 - width
-            y0 = y1 - (34 + 22 * max(1, len(rows)))
+            x1 = x0 + width
+            y0 = max(40, y1 - (34 + 22 * max(1, len(rows))))
             self.window(img, (x0, y0, x1, y1))
             self._text(d, (x0 + 12, y0 + 8), title, self.f_small, DIM)
             if up:
@@ -347,7 +356,7 @@ class FfxiUi:
                 if detail:
                     self._text(d, (x1 - (24 if up or down else 12), y + 2), detail, self.f_small,
                                KIND["magic"] if ok else DIM, anchor="ra")
-            x1 = x0 - 6
+            x0 = x1 + 6
 
     def _help(self, img, d, s: UiState) -> None:
         """An item's description, as FFXI shows it: its name first, then its slots, stats and jobs."""

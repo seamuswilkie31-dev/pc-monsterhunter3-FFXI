@@ -91,6 +91,10 @@ class Engine:
     equipment: dict = field(default_factory=dict)    # slot -> the item id worn there
     gear: dict = field(default_factory=dict)         # the equipment's stats summed (set_gear): DEF, STR, HP...
     gear_effects: dict = field(default_factory=dict) # what they do, as effects (gear_effect)
+    all_jobs: bool = False                           # every job's spells and abilities at your level (solo)
+    engaged: bool = False                            # FFXI's Attack: swinging at the target on the weapon's delay
+    next_swing: float = 0.0
+    reach_said: float = -99.0
 
     def __post_init__(self):
         self.set_jobs(self.job, self.sub)
@@ -134,14 +138,69 @@ class Engine:
     @property
     def max_mp(self) -> int:
         mp = D.mp_at(self.job, self.level)
-        if self.sub:
+        if self.all_jobs:                                           # the most any job has at your level
+            mp = max(D.mp_at(j, self.level) for j in D.JOBS)
+        elif self.sub:
             mp += D.mp_at(self.sub, self.sub_level) // 2
         if mp:
             mp += int(self.gear.get("MP", 0))                       # gear's MP: only for a job with MP
         return max(0, mp)
 
     def job_label(self) -> str:
+        if self.all_jobs:
+            return f"{self.job}{self.level}+all"
         return f"{self.job}{self.level}" + (f"/{self.sub}{self.sub_level}" if self.sub else "")
+
+    def set_all_jobs(self, on: bool) -> None:
+        """Every job's spells and abilities at your level, on one character (solo), or the chosen ones."""
+        self.all_jobs = bool(on)
+        self.mp = min(self.mp, self.max_mp)
+        self.dirty = True
+        self.say(f"{self.me} now uses {'every job' if on else 'the chosen jobs'} ({self.job_label()}).", "info")
+
+    # ================================================================================================
+    # FFXI's Attack: the weapon out, a swing at the target on the weapon's delay
+    # ================================================================================================
+    def engage(self, on: bool, now: float) -> None:
+        if on == self.engaged:
+            return
+        self.engaged = bool(on)
+        self.next_swing = now + 1.2                                  # the weapon drawn first
+        self.say(f"{self.me} {'draws a weapon and engages the ' + self.target if on else 'disengages'}.", "info")
+
+    @property
+    def swing_delay(self) -> float:
+        """Seconds between swings: the weapon's delay (FFXI's: in 60ths of a second), Haste shortening it."""
+        delay = self.gear.get("Delay") or self.w["delay"]
+        return max(1.0, delay / 60.0 * (1 - min(0.8, self.effect("haste"))))
+
+    def swing(self, now: float, m, in_reach: bool):
+        """A swing when its time has come (none while casting): a hit, a critical one or a miss, TP for a
+        hit; the monster's HP after it."""
+        if not self.engaged or m is None or self.casting or now < self.next_swing:
+            return m
+        self.next_swing = now + self.swing_delay
+        if not in_reach:
+            if now - self.reach_said > 5:
+                self.reach_said = now
+                self.say(f"The {self.target} is out of range.", "warn")
+            return m
+        if self.rng.random() > 0.9:
+            self.say(f"{self.me} misses the {self.target}.", "info")
+            self._event("swing", "miss")
+            return m
+        critical = self.rng.random() < 0.05 + self.effect("crit")
+        dmg = self.avg_hit * self.rng.uniform(0.85, 1.15) * self.phys_mult
+        dmg *= (1 + self.effect("atk") + self.mob("def_down")) * (1.5 if critical else 1.0)
+        dmg = max(1, int(dmg))
+        if critical:
+            self.say(f"{self.me} scores a critical hit!", "skillchain")
+        self.say(f"{self.me} hits the {self.target} for {dmg} points of damage.", "damage")
+        gain = self.tp_hit * self.j["tp_mult"] * (1 + self.effect("haste") + self.effect("store_tp"))
+        self.tp = min(D.TP_MAX, self.tp + gain)
+        self._wake()
+        self._event("swing", "critical" if critical else "hit")
+        return max(self._floor(), m - dmg)
 
     @property
     def exp_now(self) -> int:
@@ -152,8 +211,17 @@ class Engine:
         return D.TNL[self.level] if self.level < D.LEVEL_CAP else 0
 
     def _learnt(self, key: str) -> list[str]:
-        """What the main job knows at its level, then the subjob at its own (no SP ability from it)."""
+        """What the main job knows at its level, then the subjob at its own (no SP ability from it); with
+        all jobs, every job's at the main job's level after them."""
         out = [n for lv, n in sorted(self.j[key], key=lambda t: t[0]) if lv <= self.level]
+        if self.all_jobs:
+            for j, d in D.JOBS.items():
+                if j == self.job:
+                    continue
+                for lv, n in sorted(d[key], key=lambda t: t[0]):
+                    if lv <= self.level and n not in out and not D.ABILITIES.get(n, {}).get("sp"):
+                        out.append(n)
+            return out
         if self.sj:
             for lv, n in sorted(self.sj[key], key=lambda t: t[0]):
                 if lv <= self.sub_level and n not in out and not D.ABILITIES.get(n, {}).get("sp"):
@@ -718,12 +786,13 @@ class Engine:
     # ================================================================================================
     def progress(self) -> dict:
         return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp),
-                "inventory": list(self.inventory), "equipment": dict(self.equipment)}
+                "inventory": list(self.inventory), "equipment": dict(self.equipment), "all_jobs": self.all_jobs}
 
     def load_progress(self, d: dict) -> None:
         self.levels = {k: int(v) for k, v in d.get("levels", {}).items() if k in D.JOBS}
         self.exp = {k: int(v) for k, v in d.get("exp", {}).items() if k in D.JOBS}
         self.inventory = [int(i) for i in d.get("inventory", [])]
+        self.all_jobs = bool(d.get("all_jobs", False))
         self.equipment = {k: int(v) for k, v in d.get("equipment", {}).items()}
         job, sub = d.get("job", self.job), d.get("sub", self.sub)
         if job in D.JOBS and (sub is None or (sub in D.JOBS and sub != job)):
