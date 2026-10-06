@@ -41,7 +41,7 @@ extern uint32_t g_rso_base[];
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 8;
+constexpr uint32_t kVersion = 9;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -118,8 +118,11 @@ struct Block {
     uint32_t chat_seq;                  // port: bumped with each line sent
     char chat_line[128];                // port: what's typed so far (UTF-8)
     char chat_sent[128];                // port: the last line sent
+    // The hunter's own sounds the layer silences (hook_se_req): each kind << 16 | code, code 0xFFFF
+    // every one of that kind (kind 1, the hunter's voice: its grunts); 0 an empty place.
+    uint32_t mute_se[8];                // layer
 };
-static_assert(sizeof(Block) == 1272, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 1304, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -191,22 +194,34 @@ void hook_bgm_vol(PPCContext& c) {
 }
 
 // fn_800D9D2C(se_w, code, ...): a sound effect requested for an actor (the se_w's +4 the actor, +8 its
-// kind). The hunter's own voice gives way to FFXI's (the layer plays its race's): the codes MH3_MUTE_SE
-// names ("a1b2,a1b3", hex) are dropped for the hunter; MH3_SE_TRACE=1 logs each of the hunter's (and
-// each a hunter's kind of actor asks for), to find them.
+// kind: the hunter has three, 1 its voice, 2 its feet on the ground, 3 its weapon). The hunter's own
+// voice gives way to FFXI's (the layer plays its race's): the sounds the layer names (Block::mute_se),
+// and MH3_MUTE_SE's ("1:15,1:*": kind, then the code in hex or * for all), are dropped for the hunter;
+// MH3_SE_TRACE=1 logs each of the hunter's (and each a hunter's kind of actor asks for), to find them.
 PPCFunc orig_se_req;
 uint32_t object(uint32_t base);
-std::vector<uint32_t> g_mute_se;
+extern Block* g_block;
+std::vector<uint32_t> g_mute_se;                   // MH3_MUTE_SE's, as Block::mute_se's
 bool g_se_trace = false;
+bool se_muted(uint32_t kind, uint32_t code) {
+    auto hit = [&](uint32_t m) { return m && m >> 16 == kind && ((m & 0xFFFF) == 0xFFFF || (m & 0xFFFF) == code); };
+    for (uint32_t m : g_mute_se)
+        if (hit(m)) return true;
+    if (g_block)
+        for (uint32_t m : g_block->mute_se)
+            if (hit(m)) return true;
+    return false;
+}
 void hook_se_req(PPCContext& c) {
     uint32_t w = c.r[3], code = c.r[4] & 0xFFFF;
     uint32_t owner = in_ram(w + 4, 8) ? ld32(w + 4) : 0, kind = in_ram(w + 4, 8) ? ld32(w + 8) : 0;
     uint32_t pl = object(kBasePlayer);
     bool hunter = pl && owner == pl;
+    bool mute = hunter && se_muted(kind, code);
     if (g_se_trace && (hunter || kind == 1 || kind == 3))
-        rt_log("ffxi: sound %04X for %08X%s (kind %u; %08X %08X), from %08X", code, owner, hunter ? " the hunter" : "",
-               kind, c.r[5], c.r[6], c.lr);
-    if (hunter && std::find(g_mute_se.begin(), g_mute_se.end(), code) != g_mute_se.end()) {
+        rt_log("ffxi: sound %04X for %08X%s (kind %u; %08X %08X), from %08X%s", code, owner, hunter ? " the hunter" : "",
+               kind, c.r[5], c.r[6], c.lr, mute ? ": muted" : "");
+    if (mute) {
         c.r[3] = 0;
         return;
     }
@@ -927,7 +942,9 @@ struct ModelBlock {
     float light_gain;       // the layer's: its textures' brightness under the game's light (0: unlit),
     float ground_shade;     //   and how much the ground's baked light dims it (video_model_shading)
     uint32_t swings;        // the port's: bumped with each of Monster Hunter's hunter's attacks (FFXI's voice)
-    uint32_t spare[2];
+    uint32_t shadow;        // the layer's: 1 Monster Hunter's foot shadows under the hunter hidden, 2 FFXI's round
+                            //   one drawn under the character; bits 8-15 its darkness (0-255)
+    float shadow_radius;    // the layer's: the round shadow's radius, in the game's units
     char motion[16];        // the port's: the hunter's motion now (Monster Hunter's animation's name)
     float place[12];                                      // the model's space to the hunter's, 3x4 rows
     int32_t parents[kModelMaxJoints];                     // -1: the root; a parent comes before its children
@@ -1247,11 +1264,64 @@ bool owned_by_hunter(uint32_t obj, uint32_t pl) {
     return false;
 }
 
+// Monster Hunter's foot shadows: the common effects' model e_qc_000 (efm_com.bin, its texture e_qc_000_BM),
+// one under each creature, a quad under each foot. The hunter's (those at its feet) go while the FFXI
+// character stands in its place with its own round shadow (ModelBlock::shadow bit 1); /hunter, or
+// character_shadow = "mh", gives them back. A monster's stay.
+std::atomic<uint32_t> g_shadow{0};                   // ModelBlock::shadow, while the character is drawn
+std::atomic<float> g_shadow_radius{0.0f};
+struct HiddenShadow { uint32_t obj, vt, bits; };
+std::vector<HiddenShadow> g_hidden_shadows;
+
+bool model_named(uint32_t obj, const char* want) {
+    if (!in_ram(obj + 0xE8, 4)) return false;
+    uint32_t mdl = ld32(obj + 0xE8);
+    if (!in_ram(mdl, 0x50) || ld32(mdl) != 0x4D444C30) return false;              // 'MDL0'
+    uint32_t sections = ld32(mdl + 8) >= 10 ? 14 : 11;
+    uint32_t at = mdl + ld32(mdl + 0x10 + 4 * sections);
+    size_t n = std::strlen(want);
+    if (!in_ram(at, (uint32_t)n + 1)) return false;
+    for (size_t i = 0; i <= n; ++i)
+        if (ld8(at + (uint32_t)i) != (uint8_t)want[i]) return false;
+    return true;
+}
+
+void foot_shadow(uint32_t obj, uint32_t pl) {
+    if (!in_ram(obj + 0x3C, 0x94)) return;
+    float dx = f32(obj + 0x48) - f32(pl + 0x3C), dy = f32(obj + 0x58) - f32(pl + 0x40), dz = f32(obj + 0x68) - f32(pl + 0x44);
+    bool hunters = dx * dx + dz * dz < 120.0f * 120.0f && std::fabs(dy) < 150.0f;
+    static int told = 0;
+    static bool seen = false;
+    if (!seen) {
+        seen = true;
+        rt_log("ffxi: Monster Hunter's foot shadows found (model e_qc_000): the first at %.0f %.0f %.0f, the hunter at %.0f %.0f %.0f",
+               f32(obj + 0x48), f32(obj + 0x58), f32(obj + 0x68), f32(pl + 0x3C), f32(pl + 0x40), f32(pl + 0x44));
+    }
+    if (told < 6 && hunters) {
+        ++told;
+        rt_log("ffxi: Monster Hunter's foot shadow under the hunter: scene model %08X, %.0f %.0f %.0f from it", obj, dx, dy, dz);
+    }
+    bool hide = hunters && g_hide_hunter.load(std::memory_order_relaxed) && (g_shadow.load(std::memory_order_relaxed) & 1);
+    auto it = std::find_if(g_hidden_shadows.begin(), g_hidden_shadows.end(), [&](auto& h) { return h.obj == obj; });
+    if (hide && it == g_hidden_shadows.end()) {
+        if (g_hidden_shadows.size() >= 16) g_hidden_shadows.erase(g_hidden_shadows.begin());
+        g_hidden_shadows.push_back({obj, ld32(obj), ld32(obj + 0xCC) & kNoDraw});
+        st32(obj + 0xCC, ld32(obj + 0xCC) | kNoDraw);
+    } else if (!hide && it != g_hidden_shadows.end()) {
+        if (ld32(obj) == it->vt) st32(obj + 0xCC, (ld32(obj + 0xCC) & ~kNoDraw) | it->bits);
+        g_hidden_shadows.erase(it);
+    }
+}
+
 void hook_scn_world(PPCContext& c) {
     uint32_t obj = c.r[3];
     orig_scn_world(c);
     note_enemy(obj);                                         // a monster: FFXI's targets
     uint32_t pl = object(kBasePlayer);
+    if (pl && model_named(obj, "e_qc_000")) {                // a foot shadow
+        foot_shadow(obj, pl);
+        return;
+    }
     bool hide = g_hide_hunter.load(std::memory_order_relaxed);
     if (!hide && !g_hidden.empty()) {                         // shown again: our bits off
         for (auto [o, vt] : g_hidden)                        // still that object (not memory reused)
@@ -1344,20 +1414,24 @@ void fx_frame(uint32_t pl, uint32_t cam) {
     std::memcpy(f->target, g_target_place, sizeof f->target);
     f->scene_ok = ok ? 1 : 0;
     f->scene_seq = f->scene_seq + 1;
-    if (!up || !ok) return;
-    if (f->tex_serial != tex_seen) {
+    if (!ok) return;
+    uint32_t counts[5] = {}, n = 0;
+    const float* verts = nullptr;
+    if (up) {
+        if (f->tex_serial != tex_seen) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            tex_seen = f->tex_serial;
+            video_fx_textures(f->tex, (int)std::min<uint32_t>(f->tex_layers, kFxMaxLayers), kFxTex, kFxTex);
+        }
+        uint32_t front = f->front & 1;
         std::atomic_thread_fence(std::memory_order_acquire);
-        tex_seen = f->tex_serial;
-        video_fx_textures(f->tex, (int)std::min<uint32_t>(f->tex_layers, kFxMaxLayers), kFxTex, kFxTex);
+        for (int i = 0; i < 5; ++i) {
+            counts[i] = std::min<uint32_t>(f->counts[front][i], (uint32_t)kFxMaxVerts - n);
+            n += counts[i];
+        }
+        verts = f->verts[front];
     }
-    uint32_t front = f->front & 1;
-    std::atomic_thread_fence(std::memory_order_acquire);
-    uint32_t counts[5], n = 0;
-    for (int i = 0; i < 5; ++i) {
-        counts[i] = std::min<uint32_t>(f->counts[front][i], (uint32_t)kFxMaxVerts - n);
-        n += counts[i];
-    }
-    if (n) video_fx_frame(view, proj, f->verts[front], counts);
+    if (n) video_fx_frame(view, proj, verts, counts);
 }
 
 void model_frame() {
@@ -1387,6 +1461,8 @@ void model_frame() {
                loaded ? "" : " (not drawn: no joints or motions)");
     }
     g_hide_hunter.store(up && loaded && (mb->flags & 2), std::memory_order_relaxed);
+    g_shadow.store(up && loaded && (mb->flags & 1) ? mb->shadow : 0, std::memory_order_relaxed);
+    g_shadow_radius.store(mb->shadow_radius, std::memory_order_relaxed);
     {
         uint32_t tp = object(kBasePlayer), tc = follow_camera(tp);
         target_frame(tp, tc, dt);                             // FFXI's target, and the lock-on
@@ -1443,6 +1519,10 @@ void model_frame() {
         }
     }
     video_model_frame(view, proj, visible, g_anim.rows.data(), g_anim.nj, camera);   // camera: lit as the game lights
+    // FFXI's round shadow (ModelBlock::shadow bit 2), lying on the ground the renderer finds under the feet
+    uint32_t sh = g_shadow.load(std::memory_order_relaxed);
+    video_model_shadow((sh & 2) ? g_shadow_radius.load(std::memory_order_relaxed) : 0.0f, (float)(sh >> 8 & 0xFF) / 255.0f,
+                       g_anim.place[7]);
 }
 
 void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
@@ -1552,10 +1632,17 @@ void install() {
     if (const char* m = std::getenv("MH3_MUTE_SE")) {
         for (const char* p = m; *p;) {
             char* end = nullptr;
-            unsigned long v = std::strtoul(p, &end, 16);
-            if (end == p) { ++p; continue; }
-            g_mute_se.push_back((uint32_t)v & 0xFFFF);
-            p = end;
+            unsigned long kind = std::strtoul(p, &end, 10);
+            if (end == p || *end != ':') { ++p; continue; }
+            p = end + 1;
+            unsigned long code = 0xFFFF;
+            if (*p == '*') ++p;
+            else {
+                code = std::strtoul(p, &end, 16);
+                if (end == p) continue;
+                p = end;
+            }
+            g_mute_se.push_back((uint32_t)kind << 16 | ((uint32_t)code & 0xFFFF));
         }
         rt_log("ffxi: %zu of the hunter's sounds muted (MH3_MUTE_SE)", g_mute_se.size());
     }

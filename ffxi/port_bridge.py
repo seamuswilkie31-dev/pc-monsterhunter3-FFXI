@@ -32,7 +32,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 8
+VERSION = 9
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -56,8 +56,9 @@ BGM = struct.Struct("<4I")              # stream, seq, mute, reserved
 MAP_AT = BGM_AT + BGM.size              # the map's code module linked now: "map_village", "map01"; "": none
 CHAT_AT = MAP_AT + 16
 CHAT = struct.Struct("<II128s128s")     # open, seq, line, sent
-SIZE = CHAT_AT + CHAT.size
-assert SIZE == 1272, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+MUTE_AT = CHAT_AT + CHAT.size          # the hunter's sounds silenced: 8 of kind << 16 | code (0xFFFF: all)
+SIZE = MUTE_AT + 8 * 4
+assert SIZE == 1304, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
 # the Classic's buttons, as the port's filter reports them (the pad's: by position)
 CL_UP, CL_LEFT, CL_X, CL_A, CL_Y, CL_B, CL_DOWN, CL_RIGHT = 0x0001, 0x0002, 0x0008, 0x0010, 0x0020, 0x0040, 0x4000, 0x8000
@@ -214,6 +215,12 @@ class PortBackend:
     def set_engage(self, weapon_out: bool, lock_camera: bool) -> None:
         """FFXI's Attack, for the port: the character's weapon out, the camera locked on the target."""
         put_u32(self.mm, MENU_AT + 24, (1 if weapon_out else 0) | (2 if lock_camera else 0))
+
+    def mute_hunter_sounds(self, sounds: list[tuple[int, int | None]]) -> None:
+        """The hunter's own sounds the port drops: (kind, code), code None for all of that kind (kind 1
+        its voice, 2 its feet, 3 its weapon). Eight at most."""
+        words = [(k & 0xFFFF) << 16 | (0xFFFF if c is None else c & 0xFFFF) for k, c in sounds[:8]]
+        self.mm[MUTE_AT:MUTE_AT + 32] = struct.pack("<8I", *(words + [0] * (8 - len(words))))
 
     def close_menu(self) -> None:
         put_u32(self.mm, MENU_AT + 4, u32(self.mm, MENU_AT + 4) + 1)

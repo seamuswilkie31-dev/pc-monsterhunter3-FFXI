@@ -9,16 +9,19 @@
 3. Jobs: done. Job (main and support, swapped anywhere) and All Jobs (every job's spells and abilities,
    the highest MP; `engine.all_jobs`, saved) in the menu's Job; Magic and Abilities their own; the
    command menu bottom left above the chat log, rising with it (`ffxi_ui._menu`, `_log_top`).
-4. Round shadow: NOT YET. Monster Hunter's foot shadows aren't identified among the draws: an F12 trace
-   standing next to the hunter, then hide those draws behind a switch (the current drawing kept). The
-   linkpearl: done (launcher: the pearl and its colour; `FFXI_LINKPEARL`; drawn by the name).
+4. Round shadow: done. Monster Hunter's foot shadows are the common effects' model e_qc_000 (efm_com.bin,
+   texture e_qc_000_BM), one per foot: the bridge hides the hunter's (`foot_shadow`, by the model's name,
+   within 120 units) while the character is drawn. FFXI's round shadow (its fade measured from system
+   kage_tex, ROM/27/81) is drawn by wiikit (`video_model_shadow`, `draw_shadow`) on the ground a 9 x 9 grid
+   of rays finds, so it lies along slopes. config.toml `character_shadow = "mh"` goes back, "none" for
+   neither. The linkpearl: done (launcher: the pearl and its colour; `FFXI_LINKPEARL`; drawn by the name).
 5. Nameplate: done, the current font in italics (FFXI's nameplate isn't a sprite font).
 6. Trusts: NOT STARTED. Needs more than one FFXI model in the port (the block holds one), trusts' looks
    (LSB's trust table as data reference), following and fighting in the layer, a menu "Trust".
 7. Attack camera: done with 2 (the lock's camera while engaged; config.toml `attack_lock_camera = false` to go back).
 8. Race voices: done (`ffxi_sound.voice_set`: se2NN by race and face; attack/hurt/faint, 0.4 s apart).
-   The hunter's own grunts: the mute is built (`hook_se_req`, `MH3_MUTE_SE=code,code`) but the codes
-   aren't known yet: run with `MH3_SE_TRACE=1`, swing, read wiiboot.log's SE lines.
+   The hunter's own voice muted (`hook_se_req`: its se_w kinds are 1 voice, 2 feet, 3 weapon; config.toml
+   `mute_hunter_sounds = ["1:*"]`, through the block's `mute_se`; /hunter gives it back).
 9. /sit: done (si0/si1 from the race's own motions when the emote files lack them; /heal rx0/rx1).
 10. Area 10's invisible "Aptonoth": hidden monsters (flags & 0x60 == 0x60) are no longer targeted, and
     the target log (wiiboot.log) names what the arrow points at, to tell if it happens again.

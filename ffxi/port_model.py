@@ -23,7 +23,8 @@ MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 100000, 20, 16, 256    # VERT_FLOATS: 
 MAX_JOINTS, MAX_CLIPS, POOL = 128, 96, 1 << 22
 NONE = 0xFFFFFFFF
 # magic, version, serial, n_verts, layers, tex_w, tex_h, flags, alive, n_joints, n_clips,
-# act_seq, act_clip, act_next, battle, light_gain and ground_shade (floats), swings (the port's), 2 spare
+# act_seq, act_clip, act_next, battle, light_gain and ground_shade (floats), swings (the port's), shadow,
+# shadow_radius (a float)
 HEADER = struct.Struct("<20I")
 CLIP = struct.Struct("<IIffIIII")  # frames, first float in the pool, rate, speed, kind, set, tag, reserved
 MOTION_AT = HEADER.size                                 # the port's: Monster Hunter's hunter's motion's name
@@ -107,6 +108,13 @@ class PortModel:
         twice the light: 2; 0: not lit, the textures as they are); and how much the scenery's baked light
         under it dims it (0: not at all, as the game's own hunter; 1: as dark as the ground)."""
         self.mm[15 * 4:17 * 4] = struct.pack("<ff", float(gain), float(ground))
+
+    def set_shadow(self, hide_mh: bool, round_shadow: bool, radius: float, darkness: float) -> None:
+        """Monster Hunter's foot shadows under the hunter hidden; FFXI's round shadow drawn under the
+        character instead, `radius` across in the game's units, `darkness` 0 to 1 in its middle."""
+        dark = int(max(0.0, min(1.0, darkness)) * 255)
+        self.mm[18 * 4:20 * 4] = struct.pack("<If", (1 if hide_mh else 0) | (2 if round_shadow else 0) | dark << 8,
+                                             float(radius))
 
     def swings(self) -> int:
         """How many attacks Monster Hunter's hunter has begun (the port counts): FFXI's voice for each."""

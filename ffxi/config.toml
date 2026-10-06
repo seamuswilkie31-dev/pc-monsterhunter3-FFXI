@@ -17,6 +17,12 @@ character_model = "ROM/3/6.DAT"   # with character_race "": a model file instead
 character_height = 175   # a male Hume's height in the game's units; the other races to scale
 character_yaw = 0        # degrees, if it faces the wrong way
 hide_hunter = true       # hide Monster Hunter's hunter while it's drawn
+character_shadow = "ffxi"   # ffxi: FFXI's round shadow in place of Monster Hunter's foot shadows; mh: those
+                         # kept; none
+character_shadow_size = 1.0      # the round shadow's size, and how dark its middle is (0 to 1)
+character_shadow_darkness = 0.55
+mute_hunter_sounds = ["1:*"]   # the hunter's own sounds silenced, the race's voice in their place: "kind:code"
+                         # (kind 1 its voice, 2 its feet, 3 its weapon; code in hex, * for all); [] for none
 sounds = true            # FFXI's sounds from your FFXI installation: each spell's own as it goes off
 sound_volume = 0.7       # 0 to 1
 music = true             # FFXI's music in place of Monster Hunter's: the village's, the field's, battle music when

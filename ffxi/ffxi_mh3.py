@@ -307,6 +307,26 @@ class App:
         if hasattr(self.mem, "set_engage"):
             self.mem.set_engage(self.e.engaged, self.e.engaged and self.cfg.get("attack_lock_camera", True) is not False)
 
+    def _mute_port(self) -> None:
+        """The hunter's own sounds the port drops, FFXI's race's voice in their place (config.toml's
+        mute_hunter_sounds: "kind:code", kind 1 its voice, code in hex or * for all); none while /hunter
+        shows Monster Hunter's hunter, or with no FFXI character."""
+        if not hasattr(self.mem, "mute_hunter_sounds"):
+            return
+        if not hasattr(self, "_mute_list"):
+            self._mute_list = []
+            for s in self.cfg.get("mute_hunter_sounds", ["1:*"]):
+                kind, _, code = str(s).partition(":")
+                try:
+                    self._mute_list.append((int(kind), None if code.strip() in ("", "*") else int(code, 16)))
+                except ValueError:
+                    print(f"mute_hunter_sounds: {s!r} isn't kind:code")
+            self._mute_sent = None
+        want = [] if self.show_hunter or not self.cfg.get("character_race") else self._mute_list
+        if want != self._mute_sent:
+            self.mem.mute_hunter_sounds(want)
+            self._mute_sent = want
+
     def _in_reach(self) -> bool:
         """The target within a swing: its middle a reach away, a big one's reach the longer."""
         t = self.port_target
@@ -330,6 +350,7 @@ class App:
             if after is not None and after != before:
                 writes["monster_hp"] = e.prev_monster = after
         self._engage_port()
+        self._mute_port()
 
     def _play_events(self):
         """The engine's events as FFXI's: a spell's casting by the character (its school's motions: start,
@@ -1192,6 +1213,12 @@ class App:
         the game's own hunter)."""
         pm.set_flags(not self.show_hunter, not self.show_hunter and self.cfg.get("hide_hunter", True))
         pm.set_light(self.cfg.get("character_light", 2.0), self.cfg.get("character_ground_shade", 0.0))
+        # its shadow (character_shadow): "ffxi", FFXI's round one in place of Monster Hunter's foot shadows;
+        # "mh", Monster Hunter's kept; "none"
+        mode = str(self.cfg.get("character_shadow", "ffxi")).lower()
+        radius = 0.24 * getattr(self, "_char_top", 175.0) * float(self.cfg.get("character_shadow_size", 1.0))
+        pm.set_shadow(not self.show_hunter and mode != "mh", not self.show_hunter and mode == "ffxi", radius,
+                      float(self.cfg.get("character_shadow_darkness", 0.55)))
 
     def _weapon_watch(self) -> None:
         """Monster Hunter's weapon, from its hunter's motion's name (w03_*: the lance): when it changes,
@@ -1248,6 +1275,7 @@ class App:
                 rest = FM.skin_corners(packed["verts"], FM.joint_world(model["skeletons"][0]))
                 top = float((rest @ place[:, :3].T + place[:, 3])[:, 1].max())
                 self.mem.set_name_height(top + 25)
+                self._char_top = top
             pm = PortModel()
             pm.send(packed)
             self._show_flags(pm)
