@@ -28,6 +28,7 @@ BG_TOP, BG_BOTTOM = (18, 24, 62), (8, 12, 34)
 BG_ALPHA = 200
 BORDER, BORDER_IN = (214, 220, 236), (64, 78, 128)
 WHITE, DIM, SHADOW = (255, 255, 255), (150, 158, 184), (0, 0, 0)
+PARTY_NAME = (150, 215, 255)                      # a party member's name: light blue, as FFXI's
 HP_COL = [(1.0, (238, 240, 250)), (0.75, (246, 232, 120)), (0.5, (250, 170, 80)), (0.25, (240, 90, 80))]
 MP_BAR, TP_READY, TP_LOW = (122, 168, 255), (160, 236, 140), (190, 200, 220)
 EXP_BAR = (230, 200, 110)
@@ -144,6 +145,7 @@ class UiState:
     menu_help: str = ""                   # the menu's highlighted entry, described (an item's stats)
     party: tuple = ()                     # the Trusts with you: ((name, HP 0..1, MP 0..1 or None, TP), ...)
     gm: bool = False                      # a GM: FFXI's GM icon by your name
+    party_names: tuple = ()               # the Trusts' names above their heads: ((name, x, y), ...), -1..1, y up
     status: str = ""
 
 
@@ -164,6 +166,10 @@ class FfxiUi:
         self._last = s
         img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
+        for name, nx, ny in s.party_names:            # your party's names, as FFXI shows a party member's
+            px, py = (nx + 1) / 2 * W, (1 - ny) / 2 * H
+            if 0 <= px < W and 0 <= py < H:
+                self._text(d, (int(px), int(py)), name, self.f_tag, PARTY_NAME, anchor="ms")
         if s.nameplate:
             self._nameplate(img, d, s)
         if s.target_arrow:

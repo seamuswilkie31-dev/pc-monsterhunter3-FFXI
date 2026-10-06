@@ -432,9 +432,14 @@ class App:
         for what in shown:
             if what[0] == "strike" and self.fx:
                 self._fx_strike(scene, what[1])
+            elif what[0] == "cast" and self.fx:
+                self._fx_trust_cast(what[2], what[1])
             elif what[0] == "spell":
                 if self.fx:
-                    self._fx_spell(what[1])
+                    self._fx_trust_cast(what[2], None)
+                    actor = self._fx_trust_actor(what[2])
+                    if actor is not None:                       # (none yet: no effect, yours left alone)
+                        self._fx_spell(what[1], actor)
                 anim = D.SPELL_ANIMATION.get(what[1])
                 if self.sounds and anim is not None:
                     self.sounds.play_spell(anim)
@@ -578,18 +583,35 @@ class App:
             self.fx["effects"].stop(self.fx["cast"])
             self.fx["cast"] = None
 
-    def _fx_spell(self, name: str) -> None:
-        """A spell gone off: its own effect, the release about the character, then on its target (the
-        monster for a nuke or an enfeeble, else the character)."""
+    def _fx_trust_actor(self, slot: int):
+        """A Trust's place for its effects (refreshed each step, _fx_step), None if it isn't there."""
+        return self.fx.get("trusts", {}).get(slot) if self.fx else None
+
+    def _fx_trust_cast(self, slot: int, name: str | None) -> None:
+        """A Trust's casting about it (name None: ended), as yours is about you."""
+        import ffxi_fx as FX
         fx = self.fx
-        self._fx_cast_end()
+        plays = fx.setdefault("trust_casts", {})
+        if plays.get(slot) is not None:
+            fx["effects"].stop(plays.pop(slot))
+        actor = self._fx_trust_actor(slot)
+        routine = FX.CAST_ROUTINE.get(D.SPELLS.get(name, {}).get("school", "")) if name else None
+        if routine and actor is not None:
+            plays[slot] = fx["effects"].play(fx["lib"].caster, routine, actor, None, 0x3C)
+
+    def _fx_spell(self, name: str, source=None) -> None:
+        """A spell gone off: its own effect, the release about its caster (you, or a Trust), then on its
+        target (the monster for a nuke or an enfeeble, else you)."""
+        fx = self.fx
+        if source is None:
+            self._fx_cast_end()
         anim = D.SPELL_ANIMATION.get(name)
         f = fx["lib"].spell(anim) if anim is not None else None
         if f is None:
             return
         hostile = any(e[0] in ("damage", "drain", "aspir", "debuff") for e in D.SPELLS.get(name, {}).get("fx", []))
         target = fx["them"] if hostile and fx["has_target"] else fx["me"]
-        fx["effects"].play(f, "main", fx["me"], target)
+        fx["effects"].play(f, "main", source or fx["me"], target)
 
     def _fx_weapon_skill(self, name: str) -> None:
         """A weapon skill: the race's own file for it (its flash about the character, its strikes on the
@@ -627,6 +649,14 @@ class App:
             rot = h[:, :3] / np.maximum(np.linalg.norm(h[:, :3], axis=0), 1e-6)
             me = FX.actor_from_mh(h[:, 3], rot)
             fx["me"].pos, fx["me"].facing = me.pos, me.facing
+            trusts = fx.setdefault("trusts", {})                  # the Trusts' places, for their effects
+            for m in (self.party.members if self.party else []):
+                if m.ready and m.placed:
+                    a = FX.actor_from_mh(np.array([m.x, m.y, m.z]), FX.yaw_matrix(m.yaw), m.top)
+                    if m.slot in trusts:
+                        trusts[m.slot].pos, trusts[m.slot].facing, trusts[m.slot].height = a.pos, a.facing, a.height
+                    else:
+                        trusts[m.slot] = a
             t = scene["target"]
             fx["has_target"] = t is not None
             if t is not None:
@@ -1193,6 +1223,7 @@ class App:
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now), menu_help=self.menu_help(now),
             nameplate=self._nameplate(), linkpearl=self._linkpearl(), **self._target_arrow(now),
             chat_input=self.chat_typing, party=self.party.party_rows() if self.party else (), gm=self.gm,
+            party_names=self.party.nameplates() if self.party and self.cfg.get("nameplate", True) is not False else (),
             status="" if self.status == "connected" else self.status)
 
     def _target_arrow(self, now: float) -> dict:

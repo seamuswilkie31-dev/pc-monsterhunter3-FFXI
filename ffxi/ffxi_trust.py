@@ -325,7 +325,8 @@ class Party:
         foe), FFXI's words for each. f: engaged (yours), target (feet x y z, height; None: none), m (its HP;
         None: none), floor (the least it's left at: the game deals the last blow), p and p_max (your HP),
         level, avg_hit (your blows' usual damage: the scale of theirs), me, foe (its name). Returns the
-        monster's HP, yours, and what to show: ("strike", critical) and ("spell", name) each."""
+        monster's HP, yours, and what to show: ("strike", critical), ("cast", name, slot) as a Trust begins
+        a spell and ("spell", name, slot) as it goes off."""
         import random
         import ffxi_data as D
         self.level = f["level"]
@@ -373,7 +374,7 @@ class Party:
                                   * random.uniform(0.9, 1.1))
                         self.say(f"{name} casts {spell}. The {foe} takes {dmg} points of damage.", "magic")
                         m_hp = max(f["floor"], m_hp - dmg)
-                shown.append(("spell", spell))
+                shown.append(("spell", spell, mb.slot))
                 continue
             if mb.casting:
                 continue
@@ -383,7 +384,7 @@ class Party:
                 if need and p_hp < f["p_max"] * need and now >= mb.next_spell:
                     cure = _best(t, self.level, "heal", mb.mp)
                     if cure:
-                        self._begin(mb, cure, now, False, me)
+                        shown.append(self._begin(mb, cure, now, False, me))
                         continue
             if not mb.engaged:
                 continue
@@ -391,7 +392,7 @@ class Party:
             if now >= mb.next_spell and t["job"] in NUKERS:
                 nuke = _best(t, self.level, "damage", mb.mp)
                 if nuke:
-                    self._begin(mb, nuke, now, True, foe)
+                    shown.append(self._begin(mb, nuke, now, True, foe))
                     continue
                 mb.next_spell = now + 6.0
             # a blow, in reach and in its time
@@ -424,7 +425,7 @@ class Party:
                 shown.append(("strike", critical))
         return m_hp, p_hp, shown
 
-    def _begin(self, mb: Member, spell: str, now: float, on_foe: bool, at: str) -> None:
+    def _begin(self, mb: Member, spell: str, now: float, on_foe: bool, at: str) -> tuple:
         import ffxi_data as D
         sp = D.SPELLS[spell]
         mb.casting = (spell, now + max(1.0, sp["cast"]), on_foe)
@@ -433,6 +434,16 @@ class Party:
         if cast and mb.pm:
             mb.pm.request(cast + "0", cast + "1")
         self.say(f"{mb.trust['name']} starts casting {spell} on {('the ' + at) if on_foe else at}.", "magic")
+        return ("cast", spell, mb.slot)
+
+    def nameplates(self) -> tuple:
+        """Each Trust's name where the port places it above its head: ((name, x, y), ...)."""
+        out = []
+        for m in self.members:
+            at = self.mem.companion_name(m.slot) if m.ready and hasattr(self.mem, "companion_name") else None
+            if at:
+                out.append((m.trust["name"], round(at[0], 3), round(at[1], 3)))
+        return tuple(out)
 
     def party_rows(self) -> tuple:
         """The party list's rows: each Trust's name, HP (they're never hurt: the monsters see only you),

@@ -58,7 +58,8 @@ CHAT_AT = MAP_AT + 16
 CHAT = struct.Struct("<II128s128s")     # open, seq, line, sent
 MUTE_AT = CHAT_AT + CHAT.size          # the hunter's sounds silenced: 8 of kind << 16 | code (0xFFFF: all)
 COMPANIONS_AT = MUTE_AT + 8 * 4         # the Trusts: where each stands ([0] unused)
-COMPANION = struct.Struct("<I4fII2f3I")  # shown, x y z, yaw, battle, dead, shadow radius and darkness, spare
+COMPANION = struct.Struct("<I4fII2f2fI")  # shown, x y z, yaw, battle, dead, shadow radius and darkness (the
+COMPANION_SET = struct.Struct("<I4fII2f")  # layer's); where its name goes, x y, and whether it shows (the port's)
 SIZE = COMPANIONS_AT + 6 * COMPANION.size
 assert SIZE == 1592, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
@@ -230,9 +231,14 @@ class PortBackend:
         """A Trust (slot 1-5, its model sent through port_model.PortModel(slot)): drawn or not, its feet in
         the world, its turn from facing +Z (radians, as the hunter's), its weapon out, fallen, its round
         shadow (radius, darkness)."""
-        COMPANION.pack_into(self.mm, COMPANIONS_AT + slot * COMPANION.size, 1 if shown else 0, float(x), float(y),
-                            float(z), float(yaw), 1 if battle else 0, 1 if dead else 0, float(shadow),
-                            float(shadow_dark), 0, 0, 0)
+        COMPANION_SET.pack_into(self.mm, COMPANIONS_AT + slot * COMPANION.size, 1 if shown else 0, float(x),
+                                float(y), float(z), float(yaw), 1 if battle else 0, 1 if dead else 0, float(shadow),
+                                float(shadow_dark))
+
+    def companion_name(self, slot: int) -> tuple[float, float] | None:
+        """Where a Trust's name goes in the picture (-1..1, y up), as the port projects it; None: unseen."""
+        x, y, ok = struct.unpack_from("<2fI", self.mm, COMPANIONS_AT + slot * COMPANION.size + COMPANION_SET.size)
+        return (x, y) if ok else None
 
     def set_dpad_target(self, mode: int) -> None:
         """The d-pad changes the target: 0 never, 1 while engaged or locked on, 2 always (the game losing it)."""

@@ -131,7 +131,8 @@ struct Block {
         uint32_t battle;                // layer: 1 its weapon out (its battle set)
         uint32_t dead;                  // layer: 1 fallen
         float shadow_radius, shadow_dark;   // layer: its round shadow (0: none)
-        uint32_t spare[3];
+        float name_x, name_y;           // port: where its name goes, above its head (-1..1, y up)
+        uint32_t name_ok;               // port: 1 when that's in front of the camera
     } companions[6];
 };
 static_assert(sizeof(Block) == 1592, "ffxi/port_bridge.py mirrors this layout");
@@ -1505,6 +1506,7 @@ struct CompanionState {
     uint32_t shown = 0, act_seen = 0;
     bool loaded = false, placed = false;
     float x = 0, y = 0, z = 0, yaw = 0;
+    float head = 0;                     // where its name goes: above its highest joint standing (0: not yet)
 };
 CompanionState g_companions[kCompanions];
 
@@ -1539,6 +1541,7 @@ void companions_frame(float dt, uint32_t pl, uint32_t cam, bool scene) {
             c.shown = mb->serial;
             c.anim = Animator{};
             c.loaded = c.anim.load(mb);
+            c.head = 0.0f;
             c.act_seen = mb->act_seq;
             uint32_t n = std::min<uint32_t>(mb->n_verts, kModelMaxVerts);
             if (c.loaded && mb->tex_w == (uint32_t)kModelTex && mb->tex_h == (uint32_t)kModelTex)
@@ -1547,6 +1550,8 @@ void companions_frame(float dt, uint32_t pl, uint32_t cam, bool scene) {
             rt_log("ffxi: companion %d: %u corners, %d joints, %zu motions%s", s, n, c.anim.nj, c.anim.clips.size(),
                    c.loaded ? "" : " (not drawn: no joints or motions)");
         }
+        Block::Companion& out = b->companions[s];
+        out.name_ok = 0;
         if (!a.shown || !c.loaded || !ok) {
             c.placed = false;
             continue;
@@ -1570,6 +1575,19 @@ void companions_frame(float dt, uint32_t pl, uint32_t cam, bool scene) {
         c.anim.set_dead(a.dead != 0);
         c.anim.step(dt, true, c.x, c.z);
         mb->battle = c.anim.battle ? 1 : 0;
+        if (c.head <= 0.0f) {                                   // standing as it came: its highest joint
+            float top = 0.0f;
+            const float* P = c.anim.place;
+            for (int j = 0; j < c.anim.nj; ++j) {
+                const float* r = &c.anim.rows[(size_t)j * 12];
+                top = std::max(top, P[4] * r[3] + P[5] * r[7] + P[6] * r[11] + P[7]);
+            }
+            c.head = top + 30.0f;
+        }
+        {
+            float w[3] = {c.x, c.y + c.head, c.z}, sx, sy;
+            if (project(cam, w, sx, sy)) out.name_x = sx, out.name_y = sy, out.name_ok = 1;
+        }
         float cy = std::cos(c.yaw), sy = std::sin(c.yaw);
         const float w[12] = {cy, 0, sy, c.x, 0, 1, 0, c.y, -sy, 0, cy, c.z};
         float wp[12], view[12];
