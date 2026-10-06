@@ -80,6 +80,17 @@ What you need, in short:
  STEP 5 — Your own game files
 ------------------------------------------------------------------------------
 
+  The game (build\recomp-build\wiiboot.exe) can't be downloaded: it is
+  Monster Hunter Tri's own code, translated and compiled on your PC from
+  your own disc. The easy way, after 5a and installing Dolphin (5b):
+
+      double-click "Build the game.bat" in the project folder
+
+  It finds the disc image and Dolphin, checks the disc is the European
+  release, and does all of 5b and 5c, saying which step it is on; if it
+  stops, it says why and what to do, and run again it carries on from
+  there. The steps by hand, if you'd rather:
+
   5a. Copy your Monster Hunter Tri disc image into the "build" folder of
       the project. Below it is called "Monster Hunter Tri (Europe).rvz";
       use your file's real name in the commands.

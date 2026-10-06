@@ -44,17 +44,17 @@ def check(ffxi: str | None = None) -> list[Missing]:
     extract = ROOT / "build" / "extract"
     if not (extract / "sys" / "main.dol").exists() or not (extract / "files" / "01").is_dir():
         out.append(Missing("Monster Hunter Tri's files (build\\extract)", "the game itself, from your own disc image",
-                           "STEP 5a and the first command of 5c (wiikit.disc ... --extract build\\extract)"))
+                           'STEP 5: your disc image in the build folder, then double-click "Build the game.bat"'))
     fonts = [f for f in FONTS if not (ROOT / "build" / "fonts" / f).exists()]
     if fonts:
         out.append(Missing("the Wii's boot fonts (build\\fonts\\" + ", ".join(fonts) + ")", "the game's text",
-                           "STEP 5b: copy them from Dolphin's Sys\\GC folder"))
+                           'STEP 5: install Dolphin, then double-click "Build the game.bat" (it copies them)'))
     if not (ROOT / "build" / "recomp" / "symbols.tsv").exists():
         out.append(Missing("the recompiled game (build\\recomp)", "the game's code, made from your disc",
-                           "STEP 5c: the commands from tools\\sigmatch.py to wiikit.recomp"))
+                           'STEP 5: double-click "Build the game.bat" (made on your PC: it can\'t be downloaded)'))
     if not exe.exists():
         out.append(Missing("the built game (build\\recomp-build\\wiiboot.exe)", "the program that runs the game",
-                           "STEP 5c: the cmake and ninja commands at its end"))
+                           'STEP 5: double-click "Build the game.bat" (made on your PC: it can\'t be downloaded)'))
     root = Path(ffxi) if ffxi else None
     if not root or not (root / "ROM").is_dir():
         out.append(Missing("FINAL FANTASY XI (its folder holding ROM)", "FFXI's characters, music, menus and effects",
