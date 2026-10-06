@@ -411,6 +411,18 @@ class App:
         self._trust_t = now
         scene = self.fx.get("scene") if self.fx else None
         self.party.step(dt, scene["hunter"] if scene else None, scene.get("target") if scene else None)
+        for m in self.party.members:                             # one just come: the call's light where it stands
+            if m.ready and m.placed and not m.arrived:
+                actor = self._fx_trust_actor(m.slot)
+                if actor is None and self.fx:
+                    continue                                     # (its place for effects next step)
+                m.arrived = True
+                anim = m.trust.get("anim")
+                f = self.fx["lib"].spell(anim) if self.fx and anim is not None else None
+                if f is not None:
+                    self.fx["effects"].play(f, "main", actor, actor)
+                if self.sounds and anim is not None:
+                    self.sounds.play_spell(anim)
 
     def _trust_fight(self, now: float, m, p, writes: dict) -> None:
         """The Trusts' turn (ffxi_trust.Party.fight): engaged with you at your target, their blows and magic

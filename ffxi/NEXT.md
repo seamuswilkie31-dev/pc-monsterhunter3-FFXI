@@ -52,8 +52,8 @@
    by job thresholds), FFXI's words; the party list above the target window (`ffxi_ui._party`). Release:
    the menu's Party, or /refa all. Their names above their heads (the port projects each one's highest
    joint standing: Block companions' name_x/y), light blue; their casting aura about them and their spells
-   from them (an effect actor each). To do: Trust-specific skills (LSB's spell lists), buffs, a Trust's
-   summoning effect.
+   from them (an effect actor each). Coming: the call's own effect where it
+   appears (LSB's animation 939: ROM/318/100). To do: Trust-specific skills (LSB's spell lists), buffs.
 7. Attack camera: done with 2 (the lock's camera while engaged; config.toml `attack_lock_camera = false` to go back).
 8. Race voices: done (`ffxi_sound.voice_set`: se2NN by race and face; attack/hurt/faint, 0.4 s apart).
    The hunter's own voice muted (`hook_se_req`: its se_w kinds are 1 voice, 2 feet, 3 weapon; config.toml

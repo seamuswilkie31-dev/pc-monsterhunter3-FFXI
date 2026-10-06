@@ -70,10 +70,11 @@ def build_list(root: Path | None = None) -> list[dict]:
     dest = A.asset_dir()
     spells = {}
     for m in re.finditer(r"INSERT INTO `spell_list` VALUES \((\d+),'([^']+)',0x[0-9A-Fa-f]+,(\d+),(\d+),[^,]+,(\d+),"
-                         r"(\d+),[^,]+,(\d+),(\d+),(\d+),", _fetch(dest, "spell_list")):
+                         r"(\d+),[^,]+,(\d+),(\d+),(\d+),(-?\d+),(-?\d+),(\d+),", _fetch(dest, "spell_list")):
         sid = int(m.group(1))
         if FIRST_SPELL <= sid <= LAST_SPELL:
-            spells[sid] = {"key": m.group(2), "cast": int(m.group(8)) / 1000.0, "recast": int(m.group(9)) / 1000.0}
+            spells[sid] = {"key": m.group(2), "cast": int(m.group(8)) / 1000.0, "recast": int(m.group(9)) / 1000.0,
+                           "anim": int(m.group(12))}             # its effect: file 2800 + this (all 939: the call)
     out = []
     for m in re.finditer(r"INSERT INTO `mob_pools` VALUES \((\d+),'[^']*','([^']*)',\d+,0x([0-9A-Fa-f]{40}),(\d+),(\d+),"
                          r"(\d+),(\d+),(\d+)", _fetch(dest, "mob_pools")):
@@ -99,7 +100,7 @@ def load_list(root: Path | None = None) -> list[dict]:
     p = A.asset_dir() / "trusts.json"
     try:
         out = json.loads(p.read_text(encoding="utf-8"))
-        if out and "delay" in out[0] and (root is None or any(t.get("file") for t in out)):
+        if out and "delay" in out[0] and "anim" in out[0] and (root is None or any(t.get("file") for t in out)):
             return out
     except (OSError, ValueError):
         pass
@@ -190,6 +191,7 @@ class Member:
     mp: float = 0.0
     max_mp: float = 0.0
     casting: tuple | None = None         # (spell, when it goes off, on the target or on you)
+    arrived: bool = False                # its coming shown (the call's effect where it appears)
     swing_n: int = 0
 
 
