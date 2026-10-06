@@ -233,6 +233,9 @@ class App:
         self.chat_seen = None          # the chat line's lines handled so far (port_bridge.chat)
         self.show_hunter = False       # /hunter: Monster Hunter's own hunter shown instead of the character
         self.fx = None                 # FFXI's spell effects in the scene (_start_fx), in the game's window
+        self.party = None              # FFXI's Trusts called (ffxi_trust.Party), in the game's window
+        self.trusts = {}               # every Trust, by name, once their list is read (_start_trusts)
+        self._trust_list = None        # the list as read on its thread, for the main one to take
         self.chat_typing = None        # what's being typed, while the line is open
         self.mh_weapon = cfg.get("weapon", "sword_and_shield")   # Monster Hunter's weapon: FFXI's like is held
         self._rebuilding = False
@@ -280,6 +283,7 @@ class App:
             if a[0] in ("macro", "use") and name:
                 writes.update(self.e.use(name, now, writes.get("monster_hp", m), writes.get("player_hp", p)))
         self._attack_step(now, m, writes)
+        self._trust_fight(now, m, p, writes)
         for name, val in writes.items():
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
@@ -302,6 +306,73 @@ class App:
             return
         self.e.engage(on, time.monotonic())
         self._engage_port()
+
+    def _start_trusts(self) -> None:
+        """FFXI's Trusts (ffxi_trust.py): their list read on a thread of its own (from LandSandBoat's
+        database, fetched the first time), each then a spell every job knows (Magic, Trust), calling it to
+        follow you; config.toml's trusts = false for none."""
+        if not hasattr(self.mem, "set_companion") or self.cfg.get("trusts", True) is False:
+            return
+        import threading
+        import ffxi_model as FM
+        import ffxi_trust as T
+        scale = self.cfg.get("character_height", 175.0) / FM.HUME_MALE_HEIGHT
+        self.party = T.Party(self.mem, scale, lambda text, kind="system": self.e.say(text, kind))
+        self.party.clear()
+
+        def read():
+            try:
+                self._trust_list = T.load_list(FM.ffxi_root(self.cfg.get("ffxi_path")))
+            except Exception as ex:                                # noqa: BLE001
+                print(f"FFXI Trusts unavailable: {ex}")
+        threading.Thread(target=read, daemon=True).start()
+
+    def _trust_step(self, now: float) -> None:
+        """The Trusts called, placed each tick where they follow the hunter to; the list, once read, made
+        spells (here, on the main thread: the menu reads the spells)."""
+        if not self.party:
+            return
+        self.party.level = self.e.level                         # theirs: yours
+        if self._trust_list is not None:
+            for t in self._trust_list:
+                if t.get("file") and t["name"] not in D.SPELLS:
+                    D.SPELLS[t["name"]] = {"school": "trust", "mp": 0, "cast": t["cast"] or 2.0,
+                                           "recast": t["recast"], "fx": []}
+                    self.trusts[t["name"]] = t
+            self.e.trusts = list(self.trusts)
+            print(f"FFXI Trusts: {len(self.trusts)} to call (the menu's Magic, Trust; /refa all sends them away)")
+            self._trust_list = None
+        dt = min(0.1, now - getattr(self, "_trust_t", now))
+        self._trust_t = now
+        scene = self.fx.get("scene") if self.fx else None
+        self.party.step(dt, scene["hunter"] if scene else None, scene.get("target") if scene else None)
+
+    def _trust_fight(self, now: float, m, p, writes: dict) -> None:
+        """The Trusts' turn (ffxi_trust.Party.fight): engaged with you at your target, their blows and magic
+        on it, their cures on you; FFXI's sparks and spell effects for them in the scene."""
+        if not self.party or not self.party.members:
+            return
+        e = self.e
+        scene = self.fx.get("scene") if self.fx else None
+        target = scene.get("target") if scene else None
+        mh, ph = writes.get("monster_hp", m), writes.get("player_hp", p)
+        m2, p2, shown = self.party.fight(now, {
+            "engaged": e.engaged, "target": tuple(target) if target else None, "m": mh, "floor": e._floor(),
+            "p": ph, "p_max": e.player_max_hp, "level": e.level, "avg_hit": e.avg_hit, "me": e.me,
+            "foe": e.target})
+        if m2 is not None and m2 != mh:
+            writes["monster_hp"] = e.prev_monster = m2
+        if p2 is not None and p2 != ph:
+            writes["player_hp"] = e.prev_player = p2
+        for what in shown:
+            if what[0] == "strike" and self.fx:
+                self._fx_strike(scene, what[1])
+            elif what[0] == "spell":
+                if self.fx:
+                    self._fx_spell(what[1])
+                anim = D.SPELL_ANIMATION.get(what[1])
+                if self.sounds and anim is not None:
+                    self.sounds.play_spell(anim)
 
     def _engage_port(self) -> None:
         if hasattr(self.mem, "set_engage"):
@@ -357,6 +428,8 @@ class App:
         chant, release) and its sound as it goes off, a level gained or lost."""
         events, self.e.events[:] = list(self.e.events), []
         for kind, name in events:
+            if kind == "spell" and self.party and name in self.trusts:
+                self.party.summon(self.trusts[name])
             if kind == "kill" and self.gear:
                 self._drops(int(name))
             if kind == "kill" and self.e.engaged:
@@ -794,13 +867,18 @@ class App:
             for n in spells:
                 schools.setdefault(D.SPELLS[n]["school"], []).append(n)
             names = {"white": "White Magic", "black": "Black Magic", "song": "Songs", "ninjutsu": "Ninjutsu",
-                     "summoning": "Summoning Magic", "blue": "Blue Magic", "geomancy": "Geomancy"}
+                     "summoning": "Summoning Magic", "blue": "Blue Magic", "geomancy": "Geomancy", "trust": "Trust"}
             if len(schools) == 1:
                 root.append({"label": "Magic", "ok": True, "detail": "", "children": [action(n) for n in spells]})
             else:
                 root.append({"label": "Magic", "ok": True, "detail": "", "children": [
                     {"label": names.get(s, s.title()), "ok": True, "detail": "",
                      "children": [action(n) for n in ns]} for s, ns in schools.items()]})
+        if self.party and self.party.members:                     # the Trusts called: each to send away
+            called = [m.trust["name"] for m in self.party.members]
+            root.append({"label": "Party", "ok": True, "detail": f"{len(called)}", "children": [
+                {"label": "Release All", "ok": True, "detail": "", "act": ("release", None)}] + [
+                {"label": f"Release {n}", "ok": True, "detail": "", "act": ("release", n)} for n in called]})
         abilities = []
         if e.known_abilities():
             abilities.append({"label": "Job Abilities", "ok": True, "detail": "",
@@ -940,6 +1018,9 @@ class App:
             return                                     # the menu stays open: its detail shows the change
         elif act[0] == "item":
             self.mem.use_item()                    # Monster Hunter's own item use
+        elif act[0] == "release":
+            if self.party:
+                self.party.release(act[1])
         elif act[0] == "job":
             e.change_job(act[1], e.sub if e.sub != act[1] else None)
             self._gear_check()
@@ -1037,7 +1118,7 @@ class App:
             casting=e.casting, cast_frac=round(cast_frac, 2),
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now), menu_help=self.menu_help(now),
             nameplate=self._nameplate(), linkpearl=self._linkpearl(), **self._target_arrow(now),
-            chat_input=self.chat_typing,
+            chat_input=self.chat_typing, party=self.party.party_rows() if self.party else (),
             status="" if self.status == "connected" else self.status)
 
     def _target_arrow(self, now: float) -> dict:
@@ -1168,6 +1249,12 @@ class App:
                 self.character.request(code, hold if isinstance(hold, str) else (code if hold else None))
         elif word in ("attack", "a"):
             self.attack(rest.lower() != "off" and not (self.e.engaged and not rest))
+        elif word in ("refa", "release"):                          # FFXI's: /refa all sends the Trusts away
+            if not self.party:
+                e.say("No Trusts here.", "warn")
+            else:
+                name = next((m.trust["name"] for m in self.party.members if m.trust["name"].lower() == rest.lower()), None)
+                self.party.release(None if rest.lower() in ("", "all") else name or rest)
         elif word in ("s", "say"):
             e.say(f"{e.me} : {rest}", "say")
         elif word == "echo":
@@ -1311,6 +1398,7 @@ class App:
         model = self.character = self._send_character()
         self.sounds = self._start_sounds()
         self.fx = self._start_fx()
+        self._start_trusts()
         start, last_draw = time.monotonic(), 0.0
         print("FFXI interface: in the game's window. Ctrl+C to stop.")
         try:
@@ -1324,6 +1412,7 @@ class App:
                         out.show(img)
                 out.keep_alive()
                 self._fx_step(now)
+                self._trust_step(now)
                 if model:
                     model.keep_alive()
                 time.sleep(1 / 60)
@@ -1331,6 +1420,8 @@ class App:
             pass
         finally:
             out.show(None)
+            if self.party:
+                self.party.clear()
             self.save()
 
     def _drain_actions(self, only_pause=False):

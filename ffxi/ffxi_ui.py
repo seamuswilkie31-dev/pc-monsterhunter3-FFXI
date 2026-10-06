@@ -142,6 +142,7 @@ class UiState:
     target_locked: bool = False
     chat_input: str | None = None         # the chat line being typed (None: closed)
     menu_help: str = ""                   # the menu's highlighted entry, described (an item's stats)
+    party: tuple = ()                     # the Trusts with you: ((name, HP 0..1, MP 0..1 or None, TP), ...)
     status: str = ""
 
 
@@ -171,6 +172,8 @@ class FfxiUi:
             self._effects(img, d, s)
         if s.target_pct is not None:
             self._target(img, d, s)
+        if s.party:
+            self._party(img, d, s)
         if s.log or s.chat_input is not None:
             self._log(img, d, s)
         if s.casting:
@@ -272,6 +275,22 @@ class FfxiUi:
             self._text(d, (x1 - 12, y - 5), f"{s.exp}/{s.tnl}", self.f_small, DIM, anchor="ra")
         else:
             self._text(d, (x0 + 12, y - 4), "Level cap", self.f_small, DIM)
+
+    def _party(self, img, d, s: UiState) -> None:
+        """FFXI's party list: the others in your party (the Trusts), above your own window and the
+        target's, a row each: the name, HP and MP as bars, TP."""
+        rows = s.party
+        x0, x1 = W - 300, W - 12
+        y1 = (H - 158) if s.target_pct is not None else (H - 104)
+        y0 = y1 - 12 - 24 * len(rows)
+        self.window(img, (x0, y0, x1, y1))
+        for i, (name, hp, mp, tp) in enumerate(rows):
+            y = y0 + 7 + 24 * i
+            self._text(d, (x0 + 12, y), name, self.f_small, WHITE)
+            self._bar(d, x0 + 130, y + 4, 70, hp, HP_COL[0][1], h=4)
+            if mp is not None:
+                self._bar(d, x0 + 130, y + 11, 70, mp, MP_BAR, h=3)
+            self._text(d, (x1 - 12, y), f"TP {tp}", self.f_small, TP_READY if tp >= 1000 else TP_LOW, anchor="ra")
 
     def _effects(self, img, d, s: UiState) -> None:
         """Your effects, FFXI's buff icons as words: left of the status window."""

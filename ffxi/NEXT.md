@@ -16,8 +16,21 @@
    of rays finds, so it lies along slopes. config.toml `character_shadow = "mh"` goes back, "none" for
    neither. The linkpearl: done (launcher: the pearl and its colour; `FFXI_LINKPEARL`; drawn by the name).
 5. Nameplate: done, the current font in italics (FFXI's nameplate isn't a sprite font).
-6. Trusts: NOT STARTED. Needs more than one FFXI model in the port (the block holds one), trusts' looks
-   (LSB's trust table as data reference), following and fighting in the layer, a menu "Trust".
+6. Trusts: called and following, checked in play (2026-10-05); fighting built, NOT YET checked in play.
+   `ffxi_trust.py`: every Trust (LSB's spell_list and mob_pools, fetched once into the assets: names, jobs,
+   cast/recast, melee delay and damage; 118 of 121 with their model in this install: NPC model m is file
+   m + 96907, FTABLE's ROM/309/20 being Shantotto's 3000; Abenzio's 296, Monberaux's and Matsui-P's not
+   found). Each is a spell of school "trust" every job knows (Magic, Trust); cast, it joins (up to 5): its
+   model built as the player's (its own file's motions through character_clips, at the player's scale),
+   sent to its own model block (port_model.PortModel(slot): "mh3-ffxi-model-N"), placed through the main
+   block's companions (port_bridge.set_companion, block version 10). The bridge (`companions_frame`) eases
+   each to where the layer puts it, animates it as the hunter's character, and wiikit draws it (model slots
+   1-5), set on the ground its own grid of rays finds (planks too). Following: along the hunter's way,
+   further back each, sides in turn. Fighting (`Party.fight`): engaged with you, about the target (casters
+   back), melee on its delay with TP and a weapon skill, its job's spells at your level (nukes; cures on you
+   by job thresholds), FFXI's words; the party list above the target window (`ffxi_ui._party`). Release:
+   the menu's Party, or /refa all. To do: nameplates over Trusts, their casting aura, Trust-specific skills
+   (LSB's spell lists), buffs, a Trust's summoning effect.
 7. Attack camera: done with 2 (the lock's camera while engaged; config.toml `attack_lock_camera = false` to go back).
 8. Race voices: done (`ffxi_sound.voice_set`: se2NN by race and face; attack/hurt/faint, 0.4 s apart).
    The hunter's own voice muted (`hook_se_req`: its se_w kinds are 1 voice, 2 feet, 3 weapon; config.toml

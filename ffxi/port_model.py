@@ -43,8 +43,15 @@ def fourcc(name: str) -> int:
 
 
 class PortModel:
-    def __init__(self):
-        self.mm = mmap.mmap(-1, SIZE, tagname=TAG)
+    def __init__(self, slot: int = 0):
+        """slot 0: the player's character (the port makes its block); 1-5: a companion's (a Trust's), its
+        block "mh3-ffxi-model-N" made here, which the port opens once the layer shows it (port_bridge's
+        set_companion)."""
+        self.slot = slot
+        self.mm = mmap.mmap(-1, SIZE, tagname=TAG if slot == 0 else f"{TAG}-{slot}")
+        if slot:
+            self._set(1, VERSION)
+            self._set(0, MAGIC)
         self.clips: dict[str, int] = {}                 # a sent clip's name: its number, for request
 
     def _get(self, i: int) -> int:

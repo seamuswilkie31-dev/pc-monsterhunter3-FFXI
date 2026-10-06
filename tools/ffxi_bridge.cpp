@@ -41,7 +41,7 @@ extern uint32_t g_rso_base[];
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 9;
+constexpr uint32_t kVersion = 10;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -121,8 +121,20 @@ struct Block {
     // The hunter's own sounds the layer silences (hook_se_req): each kind << 16 | code, code 0xFFFF
     // every one of that kind (kind 1, the hunter's voice: its grunts); 0 an empty place.
     uint32_t mute_se[8];                // layer
+    // The layer's companions (FFXI's Trusts), each its own model block ("mh3-ffxi-model-1" to "-5", the
+    // layer making it when it calls one): where each stands, as the layer moves it (companions_frame).
+    // [0] unused: the player's is the hunter's place.
+    struct Companion {
+        uint32_t shown;                 // layer: 1 drawn
+        float x, y, z;                  // layer: its feet, in the world
+        float yaw;                      // layer: radians it is turned from facing +Z (as the hunter's own)
+        uint32_t battle;                // layer: 1 its weapon out (its battle set)
+        uint32_t dead;                  // layer: 1 fallen
+        float shadow_radius, shadow_dark;   // layer: its round shadow (0: none)
+        uint32_t spare[3];
+    } companions[6];
 };
-static_assert(sizeof(Block) == 1304, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 1592, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -1434,6 +1446,93 @@ void fx_frame(uint32_t pl, uint32_t cam) {
     if (n) video_fx_frame(view, proj, verts, counts);
 }
 
+// The layer's companions (FFXI's Trusts), each frame: its model block opened once the layer has made it
+// (looked for every half second while it's to be shown), its model handed to the renderer when it
+// changes (slot 1 to 5), then drawn where the layer has it standing: eased there (the layer moves it a
+// few times a frame or less: here it glides), its motions as the hunter's are chosen (standing, walking
+// or running by its speed over the ground; the layer's actions; its battle set; fallen).
+constexpr int kCompanions = 6;
+struct CompanionState {
+    ModelBlock* mb = nullptr;
+    Animator anim;
+    uint32_t shown = 0, act_seen = 0;
+    bool loaded = false, placed = false;
+    float x = 0, y = 0, z = 0, yaw = 0;
+};
+CompanionState g_companions[kCompanions];
+
+void companions_frame(float dt, uint32_t pl, uint32_t cam, bool scene) {
+    Block* b = g_block;
+    if (!b) return;
+    static int tick = 0;
+    ++tick;
+    float camera[12] = {}, proj[6] = {};
+    bool ok = scene && pl && cam && in_ram(cam, 0x70);
+    if (ok) {
+        for (int i = 0; i < 12; ++i) camera[i] = f32(cam + 4 * i);
+        const int pi[6] = {0, 2, 5, 6, 10, 11};                // GX's six: P00 P02 P11 P12 P22 P23
+        for (int i = 0; i < 6; ++i) proj[i] = f32(cam + 0x30 + 4 * pi[i]);
+    }
+    for (int s = 1; s < kCompanions; ++s) {
+        CompanionState& c = g_companions[s];
+        const Block::Companion& a = b->companions[s];
+        if (!c.mb) {
+            if (!a.shown || tick % 30) continue;
+            wchar_t tag[32];
+            std::swprintf(tag, 32, L"mh3-ffxi-model-%d", s);
+            HANDLE h = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, tag);
+            if (!h) continue;
+            c.mb = static_cast<ModelBlock*>(MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(ModelBlock)));
+            if (!c.mb) continue;
+        }
+        ModelBlock* mb = c.mb;
+        if (mb->magic != kModelMagic || mb->version != kModelVersion) continue;
+        if (mb->serial != c.shown) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            c.shown = mb->serial;
+            c.anim = Animator{};
+            c.loaded = c.anim.load(mb);
+            c.act_seen = mb->act_seq;
+            uint32_t n = std::min<uint32_t>(mb->n_verts, kModelMaxVerts);
+            if (c.loaded && mb->tex_w == (uint32_t)kModelTex && mb->tex_h == (uint32_t)kModelTex)
+                video_model_mesh(mb->verts, (int)n, mb->tex, (int)std::min<uint32_t>(mb->layers, kModelMaxLayers),
+                                 kModelTex, kModelTex, s);
+            rt_log("ffxi: companion %d: %u corners, %d joints, %zu motions%s", s, n, c.anim.nj, c.anim.clips.size(),
+                   c.loaded ? "" : " (not drawn: no joints or motions)");
+        }
+        if (!a.shown || !c.loaded || !ok) {
+            c.placed = false;
+            continue;
+        }
+        if (!c.placed) {                                       // where it appears: there at once
+            c.x = a.x, c.y = a.y, c.z = a.z, c.yaw = a.yaw;
+            c.placed = true;
+        } else {
+            float k = 1.0f - std::exp(-dt * 12.0f);
+            float dx = a.x - c.x, dz = a.z - c.z;
+            if (dx * dx + dz * dz > 600.0f * 600.0f) k = 1.0f;   // far off (it was sent there): at once
+            c.x += dx * k, c.y += (a.y - c.y) * k, c.z += dz * k;
+            float dyaw = std::remainder(a.yaw - c.yaw, 6.2831853f);
+            c.yaw += dyaw * std::min(1.0f, k * 1.5f);
+        }
+        if (mb->act_seq != c.act_seen) {
+            c.act_seen = mb->act_seq;
+            c.anim.request(mb->act_clip, mb->act_next);
+        }
+        c.anim.set_battle(a.battle != 0);
+        c.anim.set_dead(a.dead != 0);
+        c.anim.step(dt, true, c.x, c.z);
+        mb->battle = c.anim.battle ? 1 : 0;
+        float cy = std::cos(c.yaw), sy = std::sin(c.yaw);
+        const float w[12] = {cy, 0, sy, c.x, 0, 1, 0, c.y, -sy, 0, cy, c.z};
+        float wp[12], view[12];
+        mul34(w, c.anim.place, wp);                            // the model's space to its place, to the world's
+        mul34(camera, wp, view);                               // then the camera's
+        video_model_frame(view, proj, true, c.anim.rows.data(), c.anim.nj, camera, s);
+        video_model_shadow(a.shadow_radius, a.shadow_dark, c.anim.place[7], s);
+    }
+}
+
 void model_frame() {
     ModelBlock* mb = g_model_block;
     static uint32_t shown = 0, alive = 0, stamp = 0, act_seen = 0;
@@ -1467,6 +1566,14 @@ void model_frame() {
         uint32_t tp = object(kBasePlayer), tc = follow_camera(tp);
         target_frame(tp, tc, dt);                             // FFXI's target, and the lock-on
         fx_frame(tp, tc);                                     // FFXI's effects
+        static uint32_t comp_stamp = 0;                       // the hunter placed since: a scene, not a loading screen
+        bool placed;
+        {
+            std::lock_guard<std::mutex> lk(g_hunter_mx);
+            placed = g_hunter_stamp != comp_stamp;
+            comp_stamp = g_hunter_stamp;
+        }
+        companions_frame(dt, tp, tc, placed);                 // FFXI's Trusts
     }
     if (!loaded) return;
     float view[12] = {}, proj[6] = {}, h[12], camera[12] = {};

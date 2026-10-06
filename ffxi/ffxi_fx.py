@@ -57,7 +57,7 @@ RACE_FILES = {"hume_male": "ROM/10/0.DAT", "hume_female": "ROM/10/1.DAT", "elvaa
               "mithra": "ROM/10/6.DAT", "galka": "ROM/10/7.DAT"}
 # casting, by school: the race's routine while a spell is cast (its release is the spell's own `main`)
 CAST_ROUTINE = {"white": "cawh", "black": "cabk", "summoning": "casm", "ninjutsu": "canj", "song": "caso",
-                "blue": "cabk", "geomancy": "cawh"}
+                "blue": "cabk", "geomancy": "cawh", "trust": "cawh"}
 # a blow landing, by Monster Hunter's weapon: the shared file's spark for FFXI's like of it (its `atpr`
 # picks by weapon type: 3 a sword hit9, 4 a great sword hit8, 6 a great axe hi10, 8 a polearm hit7, 10 a
 # great katana hi16, 11 a club hi17; a dagger's hit5 for a bowgun's shot)

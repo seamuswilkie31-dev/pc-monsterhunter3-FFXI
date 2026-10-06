@@ -92,6 +92,7 @@ class Engine:
     gear: dict = field(default_factory=dict)         # the equipment's stats summed (set_gear): DEF, STR, HP...
     gear_effects: dict = field(default_factory=dict) # what they do, as effects (gear_effect)
     all_jobs: bool = False                           # every job's spells and abilities at your level (solo)
+    trusts: list = field(default_factory=list)       # FFXI's Trusts' spells (ffxi_trust): every job's, all unlocked
     engaged: bool = False                            # FFXI's Attack: swinging at the target on the weapon's delay
     next_swing: float = 0.0
     reach_said: float = -99.0
@@ -229,7 +230,7 @@ class Engine:
         return out
 
     def known_spells(self) -> list[str]:
-        return self._learnt("spells")
+        return self._learnt("spells") + self.trusts
 
     def known_abilities(self) -> list[str]:
         return self._learnt("abilities")

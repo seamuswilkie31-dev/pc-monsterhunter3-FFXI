@@ -604,7 +604,7 @@ DEFAULT_LOOK = {"face": 0, "head": 0, "body": 38, "hands": 38, "legs": 38, "feet
 HUME_MALE_HEIGHT = 1.80                # a male Hume, in FFXI's units: character_height is his height
 # magic's motions by school: start, chant (looped), release
 CAST_MOTIONS = {"white": "mw", "black": "mb", "ninjutsu": "mn", "summoning": "ms", "song": "mi",
-                "blue": "mb", "geomancy": "mw"}
+                "blue": "mb", "geomancy": "mw", "trust": "mw"}
 
 
 # FFXI's emotes: the chat line's command -> (the motion, what the log says, held until moving). The motions
