@@ -24,7 +24,7 @@ What you need, in short:
 
 
 ------------------------------------------------------------------------------
- STEP 1 — Git (to download this project)
+ STEP 1 — Git (to download this project; skip it if you were sent an archive)
 ------------------------------------------------------------------------------
 
     winget install --id Git.Git -e
@@ -59,6 +59,14 @@ What you need, in short:
 ------------------------------------------------------------------------------
  STEP 4 — This project
 ------------------------------------------------------------------------------
+
+  If you were sent the project as an archive (.rar): extract it into your user
+  folder (it holds one folder, pc-monsterhunter3), then in PowerShell:
+
+    cd $HOME\pc-monsterhunter3
+    mkdir build, build\fonts
+
+  Otherwise, download it with Git:
 
     cd $HOME
     git clone --recurse-submodules -b ffxi-layer https://github.com/seamuswilkie31-dev/pc-monsterhunter3-FFXI.git pc-monsterhunter3

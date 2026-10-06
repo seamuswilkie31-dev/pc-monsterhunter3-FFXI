@@ -32,10 +32,7 @@ class Missing:
 
 
 def check(ffxi: str | None = None) -> list[Missing]:
-    out: list[Missing] = []
-    if not shutil.which("git"):
-        out.append(Missing("Git", "to download and update the project",
-                           "STEP 1:  winget install --id Git.Git -e"))
+    out: list[Missing] = []                                    # (Git isn't needed to play: only to download)
     if not shutil.which("uv"):
         out.append(Missing("uv", "runs the launcher and installs its Python parts",
                            'STEP 2:  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'))
