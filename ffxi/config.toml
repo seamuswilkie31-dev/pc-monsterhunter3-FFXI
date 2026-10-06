@@ -33,6 +33,9 @@ log_fade = 10            # the combat log's lines go this many seconds after the
 nameplate = true         # your name above your head, as in FFXI
 nameplate_height = 200   # how high above your feet, in the game's units, with no FFXI character (with one: above its head)
 target_arrow = true      # FFXI's arrow above your target (the nearest monster); hold L (the pad's LB) to lock on
+allow_kills = true       # FFXI's blows, magic and Trusts can finish a monster (false: the game's own last blow)
+dpad_target = "engaged"  # the d-pad moves the target to the next monster that way: "engaged" (while attacking or
+                         # locked on), "always" (the game's own use of the d-pad given up), "off"
 ui = "game"              # game: the FFXI interface in the game's window (the port); window; console
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
 weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,

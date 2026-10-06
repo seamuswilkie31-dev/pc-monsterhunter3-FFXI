@@ -1,5 +1,26 @@
 # FFXI layer — next session
 
+**River's second list (2026-10-06)**: built, NOT YET checked in play unless said.
+1. Headgear clipping: done. FFXI's occlusion (ffxi_model `HIDDEN_BY`, `shown`): a mesh header's fourth byte
+   is what it hides of the other pieces, each triangle group's display type (the 0x8010 instruction's
+   fourteenth byte) what it is (1-3 hair, 4 face, 5 wrists, 6 trousers, 7 shins); a hat hides the outer
+   hair, a helmet all of it. Checked in renders (face 1A, 4A, Sallet).
+2. Shield clipping: NOT YET. The shield hangs off its mount (joint 87, a child of the forearm), keyed by
+   every motion as the client does; its info chunk's sixth byte is 1 for a shield (no grip joint, byte 7
+   0xFF) but what it changes isn't known. In renders the peace run swings it into the body. Asked for a
+   screenshot of where it clips.
+3. Lockstyle: done (/lockstyle on|off, Equipment's Lockstyle; saved with the progress).
+4/5. The creator's equipment by name, with stats: done (character.py: each slot's items the race wears, typed
+   to narrow; Save writes character_gear and a serial; the layer hands them over and wears them once).
+5b. GM: done (the launcher's GM: FFXI's GM icon, ROM/0/1.DAT's "ustats" third row second, cut at runtime; a
+   GM wears anything; !additem <name> [count]).
+6. Kraken Club: in the creator's main hand list (Rare, so never a drop); a GM's !additem Kraken Club.
+7. Damage over time: done (the fractions kept, a share of the monster's HP too, said each tick).
+8. FFXI damage finishing monsters: config allow_kills = true (was the game's last blow only: everything
+   stopped at 1 HP). Needs checking in play: does a monster at 0 HP die without the game's own hit?
+9. The d-pad changes the target (dpad_target: "engaged" while attacking or locked on, "always", "off"): the
+   nearest monster that way on the screen; the lock goes with it.
+
 **River's list (2026-10-05)**: where each stands (built and committed; "in play" once checked there).
 1. Tarutaru's run too fast: done, Taru only (`_send_character` slows the run clips' rate).
 2. FFXI's Attack: done. The menu's Attack (or /attack, /a) engages: locked on, the weapon drawn, a swing

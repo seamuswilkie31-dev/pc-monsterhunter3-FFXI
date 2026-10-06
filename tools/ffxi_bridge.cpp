@@ -87,7 +87,7 @@ struct Block {
     uint32_t item_seq, item_ack;        // the layer asks for one Y press to reach the game (its item)
     uint32_t ev_head;                   // port: events written so far
     uint32_t engage;                    // layer: FFXI's Attack: 1 the weapon out, 2 the camera locked on the target
-    uint32_t reserved;
+    uint32_t dpad_target;               // layer: the d-pad changes the target: 0 never, 1 engaged or locked on, 2 always
     uint32_t events[32];                // port: the buttons newly pressed, a ring
     // Your nameplate, FFXI's name above your head: the hunter's head projected through the game's
     // 3D camera, in the picture's normalised coordinates (-1..1, y up).
@@ -353,6 +353,11 @@ std::atomic<bool> g_layer_up{false};    // the layer bumped the overlay's alive 
 // weapon and uses items with it: a tap reaches the game (at its release), held it opens the menu.
 constexpr auto kHoldForMenu = std::chrono::milliseconds(350);
 
+// The d-pad's step to another target: 1 up, 2 down, 3 left, 4 right (the pad's thread asks, target_frame
+// acts); and whether the camera is locked on (target_frame's, for the pad's thread)
+std::atomic<int> g_target_step{0};
+std::atomic<bool> g_locked_on{false};
+
 void classic_filter(int chan, ClassicState& s) {
     s.buttons &= ~kClHome;                        // the Home Button menu crashes the port: never opened
     Block* b = g_block;
@@ -403,6 +408,16 @@ void classic_filter(int chan, ClassicState& s) {
     }
     if (now < y_until) s.buttons |= kClY;         // a tap, or the layer's Items: the game's own Y
     else s.buttons &= ~kClY;                      // otherwise the filter's, until it knows
+
+    // the d-pad, while the layer says (engaged, or locked on; or always): the target moved to the next
+    // monster that way on the screen (target_frame), and the game doesn't see it
+    if (!b->menu_open && b->dpad_target &&
+        (b->dpad_target == 2 || (b->engage & 1) || g_locked_on.load(std::memory_order_relaxed))) {
+        constexpr uint32_t kDpad = kClUp | kClDown | kClLeft | kClRight;
+        if (uint32_t d = pressed & kDpad)
+            g_target_step.store(d & kClUp ? 1 : d & kClDown ? 2 : d & kClLeft ? 3 : 4, std::memory_order_relaxed);
+        s.buttons &= ~kDpad;
+    }
 
     // L, the game's camera behind the hunter: a tap is the game's, as Y's is; held, FFXI's lock-on
     static bool l_held = false;
@@ -769,6 +784,8 @@ float g_target_place[4] = {};             // the target's feet and its height, f
 bool g_target_ok = false;
 PPCFunc orig_cam_position, orig_cam_posture;
 
+uint32_t g_chosen = 0;                              // the target the d-pad chose, kept while it's near
+
 void target_frame(uint32_t pl, uint32_t cam, float dt) {
     ++g_frame;
     Block* b = g_block;
@@ -784,10 +801,39 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
     bool toggle = g_lock_toggle.exchange(false, std::memory_order_relaxed);
     Enemy* t = g_lock.on ? live(g_target_obj) : nullptr;
     if (g_lock.on && (!t || !pl || dist(*t) > kLockReach)) g_lock.on = false, t = nullptr;   // gone: let go
+    if (!t && g_chosen) {                                    // the d-pad's choice, while it's near
+        t = live(g_chosen);
+        if (!t || !pl || dist(*t) > kLockReach) g_chosen = 0, t = nullptr;
+    }
     if (!t && pl) {
         float best = kTargetReach;
         for (Enemy& e : g_enemies)
             if (g_frame - e.frame <= 3 && dist(e) < best) best = dist(e), t = &e;
+    }
+    if (int step = g_target_step.exchange(0, std::memory_order_relaxed); step && cam && pl) {
+        // from where the target is on the screen (none: the middle), the nearest that way, straight ahead
+        // of the press counting more than off to its side
+        float cx = 0, cy = 0;
+        if (t) {
+            float w[3] = {t->x, t->y + 50.0f, t->z};
+            if (!project(cam, w, cx, cy)) cx = cy = 0;
+        }
+        Enemy* best = nullptr;
+        float score = 1e9f;
+        for (Enemy& e : g_enemies) {
+            if (g_frame - e.frame > 3 || (t && e.obj == t->obj) || dist(e) > kLockReach) continue;
+            float w[3] = {e.x, e.y + 50.0f, e.z}, ex, ey;
+            if (!project(cam, w, ex, ey)) continue;
+            float dx = ex - cx, dy = ey - cy;
+            float along = step == 1 ? dy : step == 2 ? -dy : step == 3 ? -dx : dx;
+            float aside = step <= 2 ? std::fabs(dx) : std::fabs(dy);
+            if (along <= 0.02f) continue;
+            if (along + 2.0f * aside < score) score = along + 2.0f * aside, best = &e;
+        }
+        if (best) {
+            t = best;
+            g_chosen = best->obj;                             // (locked on: the lock goes with it)
+        }
     }
     if (toggle) {
         if (g_lock.on) g_lock.on = false;
@@ -809,6 +855,7 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
     } else if (!attack_lock && locked_by_attack) {
         g_lock.on = locked_by_attack = false;
     }
+    g_locked_on.store(g_lock.on, std::memory_order_relaxed);
     g_target_em.store(t ? em_of_model(t->obj) : 0, std::memory_order_relaxed);
     static uint32_t told_target = 0;
     if (t && t->obj != told_target) {                        // each new target, for a report of a strange one

@@ -23,6 +23,12 @@ The formats, as the community's viewers read them (written here from that descri
     from flipped joints and axes. The instructions: 0x8000 a texture's 16-character name, 0x8010
     material properties, 0x5453/0x0054 textured strips/lists with UVs, 0x4353/0x0043 coloured ones,
     0xFFFF the end.
+    What a worn piece hides of the others: the mesh header's fourth byte is what it covers (its occlusion
+    type), and each group of triangles names what it is (its display type: the material instruction's
+    fourteenth byte): 1-3 hair, 4 the face, 5 the wrists, 6 the trousers, 7 the shins. A hat (2, 3) hides
+    the hair the face gives under it (1), a helmet (4-6) all of it, a full one (5) the face too; sleeves
+    (0x12) the wrists, boots the trousers (0x32) and shins (0x22). Without it a face's hair shows
+    through the headgear (occluded).
   textures: the file's image chunks, named by their 16-character category and name.
 """
 from __future__ import annotations
@@ -90,7 +96,7 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
     r.u8(); r.u8()
     flags3 = r.u8()
     cloth, use_table = bool(flags3 & 1), bool(flags3 & 0x80)
-    r.u8()
+    occlude = r.u8()                                            # what it hides of the other pieces worn
     symmetric = r.u8() == 1
     r.u8()
     instr = 2 * r.i32(); r.u8(); r.u8()
@@ -129,7 +135,7 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
     fa0 = np.array([a[2] for a, _ in refs])
     fa1 = np.array([bb[2] for _, bb in refs])
 
-    pieces, tex = [], ""
+    pieces, tex, display = [], "", 0
     r.pos = data + instr
     while True:
         op = r.u16()
@@ -137,8 +143,10 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
             break
         if op == 0x8000:
             tex = r.name16()
-        elif op == 0x8010:
-            r.pos += 4 + 8 + 4 + 4 + 8 + 2 + 4 + 2 + 4 + 4          # material properties
+        elif op == 0x8010:                                          # material properties: what it is
+            at = r.pos
+            display = b[at + 13]                                    # (a colour, two floats, a flag, then it)
+            r.pos = at + 4 + 8 + 4 + 4 + 8 + 2 + 4 + 2 + 4 + 4
         elif op in (0x5453, 0x4353):                                # strips
             nt = r.u16()
             idx = [r.u16(), r.u16(), r.u16()]
@@ -153,7 +161,7 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
             for k in range(nt):                                     # a strip: every other one flipped
                 a, bb, c = (k, k + 1, k + 2) if k % 2 == 0 else (k + 1, k, k + 2)
                 tris.append(((idx[a], uvs[a]), (idx[bb], uvs[bb]), (idx[c], uvs[c])))
-            pieces.append({"tex": tex, "tris": tris})
+            pieces.append({"tex": tex, "tris": tris, "display": display})
         elif op in (0x0054, 0x0043):                                # lists
             nt = r.u16()
             tris = []
@@ -165,12 +173,26 @@ def parse_mesh(b: bytes, data: int, name: str) -> dict:
                 else:
                     r.u32()
                     tris.append(((i0, (0, 0)), (i1, (0, 0)), (i2, (0, 0))))
-            pieces.append({"tex": tex, "tris": tris})
+            pieces.append({"tex": tex, "tris": tris, "display": display})
         else:
             raise ValueError(f"{name}: unknown mesh instruction {op:#06x} at {r.pos - 2 - data:#x}")
     return {"name": name, "p0": p0, "p1": p1, "w": w, "j0": j0, "j1": j1, "mj0": mj0, "mj1": mj1,
             "fa0": fa0, "fa1": fa1, "symmetric": symmetric, "pieces": pieces, "n0": q0, "n1": q1,
-            "cloth": cloth}
+            "cloth": cloth, "occlude": occlude}
+
+
+# a display type, and the occlusion types that hide it (the module's description)
+HIDDEN_BY = {1: {2, 3, 4, 5, 6}, 2: {4, 5, 6}, 3: {4, 5, 6}, 4: {5}, 5: {0x12}, 6: {0x32}, 7: {0x22}}
+
+
+def occluded(model: dict) -> set:
+    """What the model's pieces hide of each other: every mesh's occlusion type."""
+    return {m.get("occlude", 0) for m in model["meshes"]}
+
+
+def shown(piece: dict, occl: set) -> bool:
+    """A group of triangles drawn: not covered by any piece worn."""
+    return not (HIDDEN_BY.get(piece.get("display", 0), set()) & occl)
 
 
 def parse_motion(b: bytes, data: int, name: str) -> dict:
@@ -335,7 +357,7 @@ def _normal_inputs(mesh: dict, mirrored: bool, world: np.ndarray):
     p0, p1, j0, j1 = _skin_inputs(mesh, mirrored, len(world))
     v = skin(mesh, world, mirrored)
     acc = np.zeros_like(v)
-    for piece in mesh["pieces"]:
+    for piece in mesh["pieces"]:                                # (a hidden piece's normals don't matter)
         for tri in piece["tris"]:
             idx = [c[0] for c in tri]
             if max(idx) >= len(v):
@@ -371,10 +393,13 @@ def triangles(model: dict, skeleton: int = 0, world: np.ndarray | None = None):
     texture name)."""
     if world is None:
         world = joint_world(model["skeletons"][skeleton])
+    occl = occluded(model)
     for mesh in model["meshes"]:
         for mirrored in ((False, True) if mesh["symmetric"] else (False,)):
             v = skin(mesh, world, mirrored)
             for piece in mesh["pieces"]:
+                if not shown(piece, occl):
+                    continue
                 for tri in piece["tris"]:
                     idx = [c[0] for c in tri]
                     if max(idx) >= len(v):
@@ -789,13 +814,14 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
     joints = model["skeletons"][0]
     rest = joint_world(joints)
     rows, names, body = [], {}, []
+    occl = occluded(model)                                             # what the worn pieces hide
     for mesh in model["meshes"]:
         weapon = mesh.get("slot") in WEAPON_SLOTS
         for mirrored in ((False, True) if mesh["symmetric"] else (False,)):
             p0, p1, j0, j1 = _skin_inputs(mesh, mirrored, len(joints))
             n0, n1, sides = _normal_inputs(mesh, mirrored, rest)
             for piece in mesh["pieces"]:
-                if piece["tex"] not in model["textures"]:
+                if piece["tex"] not in model["textures"] or not shown(piece, occl):
                     continue
                 lay = names.setdefault(piece["tex"], len(names))
                 for tri in piece["tris"]:

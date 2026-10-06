@@ -55,8 +55,12 @@ class Gear:
                 names = [n for n in names if n not in (a, b)] + [a, b]
         return [s for s in SLOTS if s in names]
 
+    gm = False                                           # a GM wears anything (the launcher's GM)
+
     def why_not(self, it: dict, slot: str | None = None) -> str:
         """Why you can't wear it now ("" if you can)."""
+        if self.gm:
+            return ""
         e = self.e
         bit = I.RACE_BITS.get(self.race, 0)
         if bit and it["races"] and not it["races"] & bit:

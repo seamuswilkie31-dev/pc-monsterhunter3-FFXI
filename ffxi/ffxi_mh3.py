@@ -29,6 +29,7 @@ Personal use only. Single-player only.
 from __future__ import annotations
 
 import argparse
+import os
 import queue
 import re
 import random
@@ -233,6 +234,9 @@ class App:
         self.chat_seen = None          # the chat line's lines handled so far (port_bridge.chat)
         self.show_hunter = False       # /hunter: Monster Hunter's own hunter shown instead of the character
         self.fx = None                 # FFXI's spell effects in the scene (_start_fx), in the game's window
+        self.gm = os.environ.get("FFXI_GM") == "1" or self.cfg.get("gm", False) is True   # the launcher's GM
+        if self.gear:
+            self.gear.gm = self.gm
         self.party = None              # FFXI's Trusts called (ffxi_trust.Party), in the game's window
         self.trusts = {}               # every Trust, by name, once their list is read (_start_trusts)
         self._trust_list = None        # the list as read on its thread, for the main one to take
@@ -307,6 +311,67 @@ class App:
         self.e.engage(on, time.monotonic())
         self._engage_port()
 
+    def _creator_gear(self, gear) -> None:
+        """The pieces chosen by name in the character creator (character_gear), handed over and worn, once for
+        each time it saved (character_gear_serial): changed in the game after, they stay as you leave them."""
+        serial = int(self.cfg.get("character_gear_serial", 0) or 0)
+        if not serial or serial == self.e.gear_serial:
+            return
+        e, worn, not_yet = self.e, [], []
+        for slot, iid in (self.cfg.get("character_gear") or {}).items():
+            it = gear.item(int(iid))
+            if not it:
+                continue
+            if int(iid) not in e.inventory:
+                gear.give(int(iid))
+            why = gear.equip(slot, int(iid))
+            (not_yet.append(f"{it['name']} ({why})") if why else worn.append(it["name"]))
+        if worn:
+            e.say(f"{e.me} equips {', '.join(worn)}.", "skillchain")
+        if not_yet:
+            e.say(f"In your Items, not worn yet: {'; '.join(not_yet)}.", "warn")
+        e.gear_serial = serial
+        e.dirty = True
+
+    def lockstyle(self, on: bool) -> None:
+        """FFXI's /lockstyle: on, the look you have now is kept whatever you wear; off, your gear shows again."""
+        import ffxi_gear as G
+        import ffxi_model as FM
+        e = self.e
+        if on:
+            base = {**FM.DEFAULT_LOOK, **self.cfg.get("character_look", {})}
+            look = self.gear.look(base) if self.gear else base
+            e.lockstyle = {s: int(look[s]) for s in G.LOOK_SLOTS if look.get(s) is not None}
+            e.say("Style lock mode enabled.", "info")
+        else:
+            e.lockstyle = {}
+            e.say("Style lock mode disabled.", "info")
+        e.dirty = True
+        self.save()
+        self._redress()
+
+    def _gm_command(self, text: str) -> None:
+        """A GM's command: !additem <name> [count] (any item, by its name), as LandSandBoat's GMs type it."""
+        e = self.e
+        word, _, rest = text.partition(" ")
+        if word.lower() == "additem" and self.gear:
+            rest = rest.strip().strip('"')
+            count = 1
+            if rest.rsplit(" ", 1)[-1].isdigit() and " " in rest:
+                rest, n = rest.rsplit(" ", 1)
+                count = max(1, min(12, int(n)))
+            it = self.gear.by_name.get(rest.lower()) or (self.gear.item(int(rest)) if rest.isdigit() else None)
+            if not it:
+                e.say(f"No item called {rest}.", "warn")
+                return
+            for _ in range(count):
+                self.gear.give(it["id"])
+            e.say(f"{e.me} obtains {it['name']}" + (f" x{count}." if count > 1 else "."), "heal")
+            e.dirty = True
+            self.save()
+        else:
+            e.say("GM commands: !additem <name> [count]", "info")
+
     def _start_trusts(self) -> None:
         """FFXI's Trusts (ffxi_trust.py): their list read on a thread of its own (from LandSandBoat's
         database, fetched the first time), each then a spell every job knows (Magic, Trust), calling it to
@@ -375,6 +440,9 @@ class App:
                     self.sounds.play_spell(anim)
 
     def _engage_port(self) -> None:
+        if hasattr(self.mem, "set_dpad_target"):                   # the d-pad's targeting (dpad_target)
+            mode = str(self.cfg.get("dpad_target", "engaged")).lower()
+            self.mem.set_dpad_target({"off": 0, "never": 0, "always": 2}.get(mode, 1))
         if hasattr(self.mem, "set_engage"):
             self.mem.set_engage(self.e.engaged, self.e.engaged and self.cfg.get("attack_lock_camera", True) is not False)
 
@@ -929,6 +997,9 @@ class App:
             slots.append({"label": G.SLOT_LABEL[slot], "ok": bool(choices), "detail": worn["name"] if worn else "",
                           "help": g.describe(worn) if worn else "", "children": choices or
                           [{"label": "(Nothing to wear here)", "ok": False, "detail": ""}]})
+        slots.append({"label": "Lockstyle", "ok": True, "detail": "On" if e.lockstyle else "Off", "act": ("lockstyle",),
+                      "help": "On: the look you have now stays, whatever you wear (FFXI's /lockstyle).\n"
+                              "Off: your equipment shows."})
         stats = g.stats()
         shown = " ".join(f"{k}{'' if k == 'DEF' else '+'}{v}" if k == 'DEF' else f"{k}+{v}"
                          for k, v in stats.items() if k not in ("Delay",))
@@ -1021,6 +1092,9 @@ class App:
         elif act[0] == "release":
             if self.party:
                 self.party.release(act[1])
+        elif act[0] == "lockstyle":
+            self.lockstyle(not e.lockstyle)
+            return                                     # the menu stays open: its detail shows the change
         elif act[0] == "job":
             e.change_job(act[1], e.sub if e.sub != act[1] else None)
             self._gear_check()
@@ -1118,7 +1192,7 @@ class App:
             casting=e.casting, cast_frac=round(cast_frac, 2),
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now), menu_help=self.menu_help(now),
             nameplate=self._nameplate(), linkpearl=self._linkpearl(), **self._target_arrow(now),
-            chat_input=self.chat_typing, party=self.party.party_rows() if self.party else (),
+            chat_input=self.chat_typing, party=self.party.party_rows() if self.party else (), gm=self.gm,
             status="" if self.status == "connected" else self.status)
 
     def _target_arrow(self, now: float) -> dict:
@@ -1154,11 +1228,13 @@ class App:
             gear = G.Gear(self.e, self.cfg.get("character_race") or "hume_male")
             if not gear.ready():
                 return None
+            gear.gm = os.environ.get("FFXI_GM") == "1" or self.cfg.get("gm", False) is True   # a GM wears anything
             if not self.e.inventory:
                 kit = gear.starter_kit()
                 if kit:
                     self.e.say(f"{self.e.me} receives a starter kit: {', '.join(kit)}.", "skillchain")
                     self.e.dirty = True
+            self._creator_gear(gear)
             off = gear.check_worn()
             if off:
                 self.e.say(f"{self.e.me} can't wear what was in: {', '.join(off)}.", "warn")
@@ -1236,6 +1312,9 @@ class App:
         e, text = self.e, text.strip()
         if not text:
             return
+        if text.startswith("!") and self.gm:                         # a GM's command (LandSandBoat's words)
+            self._gm_command(text[1:])
+            return
         if not text.startswith("/"):
             e.say(f"{e.me} : {text}", "say")
             return
@@ -1249,6 +1328,8 @@ class App:
                 self.character.request(code, hold if isinstance(hold, str) else (code if hold else None))
         elif word in ("attack", "a"):
             self.attack(rest.lower() != "off" and not (self.e.engaged and not rest))
+        elif word == "lockstyle":                                  # FFXI's: the look kept, whatever is worn
+            self.lockstyle(rest.lower() != "off" if rest else not e.lockstyle)
         elif word in ("refa", "release"):                          # FFXI's: /refa all sends the Trusts away
             if not self.party:
                 e.say("No Trusts here.", "warn")
@@ -1338,7 +1419,9 @@ class App:
             mirror = self.cfg.get("character_mirror", True)
             if race:
                 look = {**FM.DEFAULT_LOOK, **self.cfg.get("character_look", {})}
-                if self.gear:                                       # what you wear shows; the creator's elsewhere
+                if self.e.lockstyle:                                # /lockstyle on: the look kept
+                    look = {**look, **self.e.lockstyle}
+                elif self.gear:                                     # what you wear shows; the creator's elsewhere
                     look = self.gear.look(look)
                 look, style = FM.look_for_weapon(root, race, look, self.mh_weapon)
                 model = FM.load_character(root, race, look, style)
@@ -1563,7 +1646,7 @@ def main() -> int:
     if weapon not in D.WEAPONS:
         sys.exit(f"unknown weapon {weapon}; pick one of {', '.join(D.WEAPONS)}")
 
-    engine = Engine(job, weapon, cfg.get("player_max_hp", 150), allow_kills=a.allow_kills,
+    engine = Engine(job, weapon, cfg.get("player_max_hp", 150), allow_kills=a.allow_kills or cfg.get("allow_kills", True) is not False,
                     me=cfg.get("name", "Adventurer"), exp_rate=cfg.get("exp_rate", D.EXP_RATE))
     engine.load_progress(saved)
     engine.set_jobs(job, sub)

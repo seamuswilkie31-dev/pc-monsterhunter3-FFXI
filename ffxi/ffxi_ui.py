@@ -143,6 +143,7 @@ class UiState:
     chat_input: str | None = None         # the chat line being typed (None: closed)
     menu_help: str = ""                   # the menu's highlighted entry, described (an item's stats)
     party: tuple = ()                     # the Trusts with you: ((name, HP 0..1, MP 0..1 or None, TP), ...)
+    gm: bool = False                      # a GM: FFXI's GM icon by your name
     status: str = ""
 
 
@@ -164,7 +165,7 @@ class FfxiUi:
         img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         if s.nameplate:
-            self._nameplate(d, s)
+            self._nameplate(img, d, s)
         if s.target_arrow:
             self._arrow(d, s)
         self._status(img, d, s)
@@ -220,15 +221,20 @@ class FfxiUi:
             d.rectangle([x + 1, y + 1, fx, y + h - 1], fill=(*col, 255))
             d.line([(x + 1, y + 1), (fx, y + 1)], fill=(*[min(255, c + 50) for c in col], 255))
 
-    def _nameplate(self, d, s: UiState) -> None:
-        """Your name above your head, as FFXI shows it: white, slanted, outlined, centred."""
+    def _nameplate(self, img, d, s: UiState) -> None:
+        """Your name above your head, as FFXI shows it: white, slanted, outlined, centred; a GM's icon
+        before it, a linkpearl before that."""
         x = (s.nameplate[0] + 1) / 2 * W
         y = (1 - s.nameplate[1]) / 2 * H
         if 0 <= x < W and 0 <= y < H:
             self._text(d, (int(x), int(y)), s.name, self.f_tag, WHITE, anchor="ms")
-            if s.linkpearl:                          # the linkpearl, left of the name
-                half = d.textlength(s.name, font=self.f_tag) / 2
-                _pearl(d, int(x - half - 12), int(y - 7), s.linkpearl)
+            left = x - d.textlength(s.name, font=self.f_tag) / 2
+            icon = gm_icon() if s.gm else None
+            if icon:                                 # FFXI's GM icon, left of the name
+                left -= icon.width + 3
+                img.alpha_composite(icon, (int(left), int(y - 7 - icon.height / 2)))
+            if s.linkpearl:                          # the linkpearl, left of those
+                _pearl(d, int(left - 12), int(y - 7), s.linkpearl)
 
     def _arrow(self, d, s: UiState) -> None:
         """FFXI's target arrow: pointing down at the target's head, bobbing; ringed while locked on."""
@@ -406,6 +412,34 @@ class FfxiUi:
             self._text(d, (x0 + 40, y), name, self.f_small, WHITE if ok else DIM)
             if detail:
                 self._text(d, (x1 - 10, y), detail, self.f_small, DIM, anchor="ra")
+
+
+_GM_ICON: list = []
+
+
+def gm_icon():
+    """FFXI's GM icon (its name-status icons, ROM/0/1.DAT's "ustats": the third row's second), cut from your
+    installation the first time and kept with the interface's pieces; None without it."""
+    if _GM_ICON:
+        return _GM_ICON[0]
+    p = ui_assets() / "gm_icon.png"
+    img = None
+    try:
+        if not p.exists():
+            import ffxi_assets as A
+            import ffxi_model as M
+            b = (M.ffxi_root(None) / "ROM" / "0" / "1.DAT").read_bytes()
+            for at, _nm, typ, size in A.chunks(b):
+                info = A.image_info(b, at, size) if typ == 0x20 else None
+                if info and info["name"] == "ustats":
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    Image.fromarray(A.decode(b, info)).crop((16, 32, 32, 48)).save(p)
+                    break
+        img = Image.open(p).convert("RGBA").resize((19, 19), Image.LANCZOS)
+    except Exception:                                    # noqa: BLE001  no FFXI here: no icon
+        img = None
+    _GM_ICON.append(img)
+    return img
 
 
 def _pearl(d: ImageDraw.ImageDraw, cx: int, cy: int, rgb: tuple, r: int = 6) -> None:

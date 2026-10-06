@@ -95,6 +95,9 @@ class Launcher:
         self.pearl_swatch = tk.Canvas(pearl, width=22, height=22, bg="#0b1030", highlightthickness=0)
         self.pearl_swatch.pack(side="left")
         self.draw_pearl()
+        self.gm = tk.BooleanVar(value=bool(self.s.get("gm")))         # a GM: the icon by your name, GM commands
+        ttk.Checkbutton(pearl, text="GM (FFXI's GM icon; !additem in the chat line)",
+                        variable=self.gm).pack(side="left", padx=(18, 0))
         self.play_btn = ttk.Button(f, text="Play", command=self.play)
         self.play_btn.grid(row=9, column=0, sticky="w", pady=8)
         self.status = tk.StringVar(value="")
@@ -184,6 +187,7 @@ class Launcher:
         self.s["hide_hud"] = self.hide_hud.get()
         self.s["linkpearl"] = self.pearl_colour if self.pearl_on.get() else ""
         self.s["linkpearl_last"] = self.pearl_colour
+        self.s["gm"] = self.gm.get()
         save_settings(self.s)
         run.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, MH3_FFXI="1")
@@ -195,6 +199,8 @@ class Launcher:
                                 stdout=open(run / "wiiboot.log", "w"), stderr=subprocess.STDOUT)
         if self.s["linkpearl"]:
             env["FFXI_LINKPEARL"] = self.s["linkpearl"]
+        if self.s.get("gm"):
+            env["FFXI_GM"] = "1"
         layer = subprocess.Popen([sys.executable, str(HERE / "ffxi_mh3.py")], cwd=HERE, env=env,
                                  stdout=open(run / "ffxi.log", "w"), stderr=subprocess.STDOUT)
         self.play_btn.state(["disabled"])

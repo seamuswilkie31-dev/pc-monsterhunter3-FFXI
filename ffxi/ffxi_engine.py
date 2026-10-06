@@ -77,6 +77,7 @@ class Engine:
     next_tick: float = 0.0
     monster_id: int | None = None
     monster_max: int = 0
+    dot_carry: float = 0.0                           # damage over time not yet whole, to the next tick
     checked: bool = False                            # this monster's /check said
     chain: int = -1
     last_kill: float = -999.0
@@ -93,6 +94,8 @@ class Engine:
     gear_effects: dict = field(default_factory=dict) # what they do, as effects (gear_effect)
     all_jobs: bool = False                           # every job's spells and abilities at your level (solo)
     trusts: list = field(default_factory=list)       # FFXI's Trusts' spells (ffxi_trust): every job's, all unlocked
+    lockstyle: dict = field(default_factory=dict)    # /lockstyle on: the look kept (slot -> model), whatever is worn
+    gear_serial: int = 0                             # the character creator's equipment last handed over (its save)
     engaged: bool = False                            # FFXI's Attack: swinging at the target on the weapon's delay
     next_swing: float = 0.0
     reach_said: float = -99.0
@@ -430,11 +433,21 @@ class Engine:
         if self.effect("regain"):
             self.tp = min(D.TP_MAX, self.tp + self.effect("regain"))
         if m is not None and m > self._floor():
-            dot = self.avg_hit * self.mob("dot") * D.level_factor(self.level)
-            if self.pet:
-                dot += self.avg_hit * self.pet["power"] * D.level_factor(self.level)
-            if dot >= 1:
-                m = max(self._floor(), m - int(dot))
+            # Poison, Dia, Bio, Burn...: each tick a share of your usual blow, and a share of the monster's
+            # HP (so a big one feels it too), the fractions kept to the next tick; said, with what did it
+            power = self.mob("dot")
+            dot = (self.avg_hit * power * D.level_factor(self.level) + self.monster_max * power * 0.04) if power else 0.0
+            pet = self.avg_hit * self.pet["power"] * D.level_factor(self.level) if self.pet else 0.0
+            self.dot_carry += dot + pet
+            whole = int(self.dot_carry)
+            if whole >= 1:
+                self.dot_carry -= whole
+                m = max(self._floor(), m - whole)
+                if dot:
+                    srcs = sorted({src for (src, eff) in self.debuffs if eff == "dot"})
+                    self.say(f"The {self.target} takes {whole} point{'s' if whole != 1 else ''} of damage ({', '.join(srcs)}).", "damage")
+        else:
+            self.dot_carry = 0.0
         if self.pet and self.pet["upkeep"]:
             if self.mp < self.pet["upkeep"]:
                 self.say(f"{self.pet['name']} disappears: {self.me} is out of MP.", "warn")
@@ -789,7 +802,8 @@ class Engine:
     # ================================================================================================
     def progress(self) -> dict:
         return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp),
-                "inventory": list(self.inventory), "equipment": dict(self.equipment), "all_jobs": self.all_jobs}
+                "inventory": list(self.inventory), "equipment": dict(self.equipment), "all_jobs": self.all_jobs,
+                "lockstyle": dict(self.lockstyle), "gear_serial": self.gear_serial}
 
     def load_progress(self, d: dict) -> None:
         self.levels = {k: int(v) for k, v in d.get("levels", {}).items() if k in D.JOBS}
@@ -797,6 +811,8 @@ class Engine:
         self.inventory = [int(i) for i in d.get("inventory", [])]
         self.all_jobs = bool(d.get("all_jobs", False))
         self.equipment = {k: int(v) for k, v in d.get("equipment", {}).items()}
+        self.lockstyle = {k: int(v) for k, v in d.get("lockstyle", {}).items()}
+        self.gear_serial = int(d.get("gear_serial", 0))
         job, sub = d.get("job", self.job), d.get("sub", self.sub)
         if job in D.JOBS and (sub is None or (sub in D.JOBS and sub != job)):
             self.set_jobs(job, sub)

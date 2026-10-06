@@ -6,9 +6,11 @@
 
     uv run character.py          (or the launcher's Character... button)
 
-Every race of FFXI, and each slot's look by its model number, read from your own installation and shown
-as you choose them (front and side, standing, in battle, casting or swinging). Save writes them into
-config.toml (character_race, character_look); the layer uses them the next time it starts.
+Every race of FFXI, and each slot's equipment by name (FFXI's items your race can wear there, with their
+stats; or a look by its model number), read from your own installation and shown as you choose them
+(front and side, standing, in battle, casting or swinging). Save writes them into config.toml
+(character_race, character_look, character_gear); the layer uses them the next time it starts, the
+pieces chosen by name given to you and worn.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import random
 import re
 import sys
 import threading
+import time
 import tkinter as tk
 from functools import lru_cache
 from pathlib import Path
@@ -25,6 +28,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import ffxi_items as I  # noqa: E402
 import ffxi_model as M  # noqa: E402
 
 CONFIG = HERE / "config.toml"
@@ -68,6 +72,42 @@ def write_config(values: dict) -> None:
     CONFIG.write_text(text, encoding="utf-8")
 
 
+@lru_cache(maxsize=1)
+def items() -> dict[int, dict]:
+    """FFXI's items (ffxi_items.py: the launcher's extraction), {} until they're extracted."""
+    return I.load_items()
+
+
+def item_label(it: dict) -> str:
+    return f"{it['name']} (Lv{it['level']})"
+
+
+def item_stats(it: dict) -> str:
+    """An item's stats in a line, as FFXI's description gives them."""
+    parts = []
+    if it.get("flags", 0) & 0x8000:
+        parts.append("Rare")
+    if it.get("flags", 0) & 0x4000:
+        parts.append("Ex")
+    if it.get("damage"):
+        parts.append(f"DMG:{it['damage']} Delay:{it['delay']}")
+    for k, v in (it.get("stats") or {}).items():
+        if k in ("DMG", "Delay"):
+            continue
+        parts.append(f"{k}:{v}" if k == "DEF" else f"{k}{'+' if v >= 0 else ''}{v}")
+    jobs = I.job_list(it["jobs"])
+    parts.append(f"Lv{it['level']} " + ("All Jobs" if len(jobs) >= 20 else " ".join(jobs)))
+    return "  ".join(parts)
+
+
+def slot_items(slot: str, race: str) -> list[dict]:
+    """The items your race can wear in that slot that have a look, by level then name."""
+    bit, sb = I.RACE_BITS.get(race, 0), I.SLOT_BITS[slot]
+    out = [it for it in items().values()
+           if it.get("model") is not None and it.get("slots", 0) & sb and (not bit or not it["races"] or it["races"] & bit)]
+    return sorted(out, key=lambda it: (it["level"], it["name"]))
+
+
 @lru_cache(maxsize=512)
 def _load(path: str) -> dict:
     return M.load(Path(path))
@@ -103,21 +143,43 @@ class Creator:
         ttk.Label(f, text="Race").grid(row=1, column=0, sticky="w", pady=(10, 2))
         box = ttk.Combobox(f, textvariable=self.race, values=list(self.labels), state="readonly", width=20)
         box.grid(row=1, column=1, columnspan=2, sticky="w", pady=(10, 2))
-        box.bind("<<ComboboxSelected>>", lambda _e: self.changed())
+        box.bind("<<ComboboxSelected>>", lambda _e: (self.fill_options(), self.changed()))
 
+        style.configure("Small.TLabel", background="#0b1030", foreground="#9aa6c8", font=("Segoe UI", 8))
         self.vars: dict[str, tk.IntVar] = {}
+        self.pick: dict[str, tk.StringVar] = {}           # each slot's item, by its label
+        self.boxes: dict[str, ttk.Combobox] = {}
+        self.stats: dict[str, ttk.Label] = {}
+        self.options: dict[str, dict[str, dict]] = {}     # each slot's choices: label -> item
+        self.chosen: dict[str, int | None] = {k: int(v) for k, v in cfg.get("character_gear", {}).items()}
         row = 2
         for slot in M.SLOTS:
             ttk.Label(f, text=slot.capitalize()).grid(row=row, column=0, sticky="w", pady=2)
             v = self.vars[slot] = tk.IntVar(value=int(look.get(slot, 0)))
-            sp = ttk.Spinbox(f, from_=0, to=SLOT_RANGE[slot], textvariable=v, width=6, command=self.changed)
+            sp = ttk.Spinbox(f, from_=0, to=SLOT_RANGE[slot], textvariable=v, width=5,
+                             command=lambda s=slot: self.model_typed(s))
             sp.grid(row=row, column=1, sticky="w")
-            sp.bind("<Return>", lambda _e: self.changed())
-            sp.bind("<FocusOut>", lambda _e: self.changed())
+            sp.bind("<Return>", lambda _e, s=slot: self.model_typed(s))
+            sp.bind("<FocusOut>", lambda _e, s=slot: self.model_typed(s))
             if slot == "face":
                 self.face_label = ttk.Label(f, text="")
                 self.face_label.grid(row=row, column=2, sticky="w")
+                row += 1
+                continue
+            pv = self.pick[slot] = tk.StringVar()
+            cb = self.boxes[slot] = ttk.Combobox(f, textvariable=pv, width=34)
+            cb.grid(row=row, column=2, sticky="w", padx=(6, 0))
+            cb.bind("<<ComboboxSelected>>", lambda _e, s=slot: self.item_chosen(s))
+            cb.bind("<KeyRelease>", lambda e, s=slot: self.filter(s, e))
+            cb.bind("<Return>", lambda _e, s=slot: self.item_chosen(s))
+            lab = self.stats[slot] = ttk.Label(f, text="", style="Small.TLabel", wraplength=330)
+            lab.grid(row=row + 1, column=1, columnspan=2, sticky="w", padx=(0, 0))
+            row += 2
+        if not items():
+            ttk.Label(f, text="(Item names: extract the FFXI assets in the launcher first.)",
+                      style="Small.TLabel").grid(row=row, column=0, columnspan=3, sticky="w")
             row += 1
+        self.fill_options(look)
         ttk.Label(f, text="Outfit").grid(row=row, column=0, sticky="w", pady=(8, 2))
         self.outfit = tk.IntVar(value=int(look.get("body", 0)))
         sp = ttk.Spinbox(f, from_=0, to=255, textvariable=self.outfit, width=6, command=self.outfit_changed)
@@ -163,6 +225,57 @@ class Creator:
     def race_key(self) -> str:
         return self.labels.get(self.race.get(), "hume_male")
 
+    # --- the equipment by name ---
+    def fill_options(self, look: dict | None = None) -> None:
+        """Each slot's choices for the race: its items by name (none: the look by number alone)."""
+        race = self.race_key()
+        look = look or self.look()
+        for slot, cb in self.boxes.items():
+            opts = {"(none)": None}
+            for it in slot_items(slot, race):
+                opts.setdefault(item_label(it), it)
+            self.options[slot] = opts
+            cb["values"] = list(opts)
+            it = items().get(self.chosen.get(slot) or -1)
+            if it and item_label(it) in opts and it["model"] == look.get(slot):
+                self.pick[slot].set(item_label(it))
+                self.stats[slot].config(text=item_stats(it))
+            else:
+                self.show_model(slot, int(look.get(slot, 0)))
+
+    def show_model(self, slot: str, n: int) -> None:
+        """A look by number: the first item of the race's with it, else the number alone."""
+        it = next((x for x in self.options.get(slot, {}).values() if x and x["model"] == n), None)
+        self.chosen[slot] = it["id"] if it else None
+        self.pick[slot].set(item_label(it) if it else ("(none)" if n == 0 else f"(look {n}: no item)"))
+        self.stats[slot].config(text=item_stats(it) if it else "")
+
+    def item_chosen(self, slot: str) -> None:
+        it = self.options.get(slot, {}).get(self.pick[slot].get())
+        if it is None and self.pick[slot].get() not in ("(none)",):
+            return                                      # typed, not a choice: left as it is
+        self.chosen[slot] = it["id"] if it else None
+        self.vars[slot].set(int(it["model"]) if it else 0)
+        self.stats[slot].config(text=item_stats(it) if it else "")
+        self.boxes[slot]["values"] = list(self.options[slot])
+        self.changed()
+
+    def filter(self, slot: str, e) -> None:
+        """Typing in a slot's list narrows it to the names holding what's typed."""
+        if e.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+            return
+        text = self.pick[slot].get().lower()
+        names = list(self.options.get(slot, {}))
+        self.boxes[slot]["values"] = [n for n in names if text in n.lower()] or names
+
+    def model_typed(self, slot: str) -> None:
+        if slot in self.boxes:
+            try:
+                self.show_model(slot, int(self.vars[slot].get()))
+            except (tk.TclError, ValueError):
+                pass
+        self.changed()
+
     def outfit_changed(self):
         try:
             n = int(self.outfit.get())
@@ -170,6 +283,7 @@ class Creator:
             return
         for slot in ("body", "hands", "legs", "feet"):
             self.vars[slot].set(n)
+            self.show_model(slot, n)
         self.changed()
 
     def randomise(self):
@@ -178,6 +292,8 @@ class Creator:
             self.vars[slot].set(n if slot != "head" else random.choice([0, n]))
         self.vars["face"].set(random.randint(0, 15))
         self.outfit.set(n)
+        for slot in self.boxes:
+            self.show_model(slot, int(self.vars[slot].get()))
         self.changed()
 
     def changed(self):
@@ -226,8 +342,11 @@ class Creator:
 
     def save(self):
         look = self.look()
-        write_config({"character_race": self.race_key(), "character_look": look})
-        self.status.set("Saved to config.toml: it shows the next time you press Play (or the layer restarts).")
+        gear = {s: int(i) for s, i in self.chosen.items() if i and s in self.boxes and items().get(i, {}).get("model") == look.get(s)}
+        write_config({"character_race": self.race_key(), "character_look": look, "character_gear": gear,
+                      "character_gear_serial": int(time.time())})
+        self.status.set("Saved to config.toml: the next time you press Play (or the layer restarts) it shows, "
+                        "and the pieces chosen by name are given to you and worn.")
 
     def run(self):
         self.win.mainloop()

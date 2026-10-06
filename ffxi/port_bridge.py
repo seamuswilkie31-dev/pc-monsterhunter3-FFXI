@@ -45,7 +45,7 @@ SNAP_PATH_LEN = 260
 OBJ_AT = SNAP_AT + 12 + SNAP_PATH_LEN
 OBJ = struct.Struct("<3Ii")
 MENU_AT = OBJ_AT + OBJ.size
-MENU = struct.Struct("<8I")              # menu_open, close_seq, close_ack, item_seq, item_ack, ev_head, engage, reserved
+MENU = struct.Struct("<8I")              # menu_open, close_seq, close_ack, item_seq, item_ack, ev_head, engage, dpad_target
 EVENTS_AT = MENU_AT + MENU.size
 NAME_AT = EVENTS_AT + 32 * 4
 NAME = struct.Struct("<ffIfII")         # name_x, name_y, name_ok, name_height, camera, reserved
@@ -233,6 +233,10 @@ class PortBackend:
         COMPANION.pack_into(self.mm, COMPANIONS_AT + slot * COMPANION.size, 1 if shown else 0, float(x), float(y),
                             float(z), float(yaw), 1 if battle else 0, 1 if dead else 0, float(shadow),
                             float(shadow_dark), 0, 0, 0)
+
+    def set_dpad_target(self, mode: int) -> None:
+        """The d-pad changes the target: 0 never, 1 while engaged or locked on, 2 always (the game losing it)."""
+        put_u32(self.mm, MENU_AT + 28, mode)
 
     def close_menu(self) -> None:
         put_u32(self.mm, MENU_AT + 4, u32(self.mm, MENU_AT + 4) + 1)
