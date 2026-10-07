@@ -1,5 +1,22 @@
 # FFXI layer — next session
 
+**River's third round (2026-10-06)**: built, NOT YET checked in play.
+- FFXI's damage dealt as the game's own: added to the monster's pending damage (ENEMY_WORK +0x928, s16),
+  which its damage routine (fn_8011F6B8, each frame) takes off its HP, running its death when none is
+  left (the HP written directly never died, nor flinched). The layer counts what it has dealt
+  (Block damage_total), the port hands the new part over each frame (game_damage), and neither counts
+  the game taking it off as the hunter's blow (engine ffxi_owed, the bridge's g_ffxi_owed). To check:
+  that fn_8011F6B8 runs each frame (wiiboot.log: "FFXI's damage ... handed"), the monster flinching, its
+  fall, its carving. config.toml damage_through_game = false goes back to writing the HP.
+- /mhcombat (and Equipment's Button Combat): the game's own swings on the pad's Y and B (the Classic's X
+  and A) dropped while FFXI's Attack fights (Block no_mh_swings), the buttons the game's elsewhere.
+- Dual wield, and any weapon: the worn main hand's own style of battle motions (look_for_weapon no longer
+  swaps a club for a sword); each weapon's grip (its info chunk's sixth byte, a skeleton reference) put in
+  its hand in the battle motions (ffxi_model.grip_pose: 113 joint 4 to 127's joint 68, 121's to 126's),
+  sheathed at rest as the motions put it; a shield, no grip, stays on its mount.
+- Trusts stood by their origin, as FFXI stands an actor (pack origin_ground): the rest pose's soles lifted
+  every one 5-25 units, AATT 75; those that hover in FFXI (AATT, a Moogle) hover by their own motions.
+
 **River's second list (2026-10-06)**: built, NOT YET checked in play unless said.
 1. Headgear clipping: done. FFXI's occlusion (ffxi_model `HIDDEN_BY`, `shown`): a mesh header's fourth byte
    is what it hides of the other pieces, each triangle group's display type (the 0x8010 instruction's

@@ -95,7 +95,7 @@ struct Block {
     uint32_t name_ok;                   // port: 1 when the head is in front of the camera
     float name_height;                  // layer: the head's height above the hunter's feet (world units)
     uint32_t camera;                    // port: the 3D camera's CameraData, 0 until the game sets one
-    uint32_t reserved2;
+    uint32_t damage_total;              // layer: all FFXI's damage to monsters dealt so far (game_damage)
     // FFXI's target (target_frame): the monster nearest the hunter, or the one the camera is locked on
     // (the Classic's L held: lock_filter), its arrow's place above its head through the camera.
     float target_x, target_y;           // port: -1..1, y up
@@ -110,7 +110,7 @@ struct Block {
     uint32_t bgm_stream;                // port: the stream's number
     uint32_t bgm_seq;                   // port: bumped with each
     uint32_t bgm_mute;                  // layer: 1 while FFXI's music plays
-    uint32_t reserved3;
+    uint32_t no_mh_swings;              // layer: 1: while engaged (FFXI's Attack), the game's attack buttons are dropped
     char map[16];                       // port: the map's code module linked now ("map_village", "map01"; "": none)
     // FFXI's chat line (chat_key): "/" opens it, the keyboard typing into it (wiikit's text capture), Enter
     // sends it, Esc closes it.
@@ -309,10 +309,19 @@ void hook_item_name(PPCContext& c) {
 }
 
 // fn_8011E6BC(em*, delta, cap): the One Hit Kill code's function (NEXT.md).
+std::atomic<uint32_t> g_ffxi_em{0};                  // the monster FFXI's damage was last handed to,
+std::atomic<int32_t> g_ffxi_owed{0};                  // and how much of it the game hasn't taken off yet
 void hook_em_hp(PPCContext& c) {
     uint32_t obj = c.r[3];
     int32_t delta = (int32_t)c.r[4];
     orig_em_hp(c);
+    if (delta < 0 && obj == g_ffxi_em.load(std::memory_order_relaxed)) {   // FFXI's, the game taking it off
+        int32_t owed = g_ffxi_owed.load(std::memory_order_relaxed);
+        if (owed > 0 && -delta <= owed) {
+            g_ffxi_owed.store(owed + delta, std::memory_order_relaxed);
+            return;                                           // (not one of the hunter's blows)
+        }
+    }
     g_monster.store(obj, std::memory_order_relaxed);
     g_delta.store(delta, std::memory_order_relaxed);
     g_hits.fetch_add(1, std::memory_order_relaxed);
@@ -419,6 +428,10 @@ void classic_filter(int chan, ClassicState& s) {
             g_target_step.store(d & kClUp ? 1 : d & kClDown ? 2 : d & kClLeft ? 3 : 4, std::memory_order_relaxed);
         s.buttons &= ~kDpad;
     }
+
+    // the game's own swings (the Classic's X and A: the pad's Y and B), dropped while FFXI's Attack fights
+    // for you, if button combat is off (the layer's /mhcombat)
+    if (!b->menu_open && b->no_mh_swings && (b->engage & 1)) s.buttons &= ~(kClX | kClA);
 
     // L, the game's camera behind the hunter: a tap is the game's, as Y's is; held, FFXI's lock-on
     static bool l_held = false;
@@ -785,11 +798,38 @@ float g_target_place[4] = {};             // the target's feet and its height, f
 bool g_target_ok = false;
 PPCFunc orig_cam_position, orig_cam_posture;
 
+// FFXI's damage to a monster, dealt as the game deals its own: added to the monster's pending damage
+// (ENEMY_WORK +0x928, s16), which its damage routine (fn_8011F6B8, each frame) takes off its HP, ending
+// it as the game ends a monster (its fall, its carving) when nothing's left. The layer counts all it has
+// dealt (Block::damage_total); each frame the new part goes to the monster its HP is read from.
+void game_damage(Block* b) {
+    static uint32_t seen = 0;
+    static bool started = false;
+    uint32_t total = b->damage_total;
+    if (!started) seen = total, started = true;               // (dealt before the port came: not again)
+    uint32_t add = total - seen;
+    seen = total;
+    if (!add || add > 1000000) return;
+    uint32_t em = object(kBaseMonster);
+    if (!em || !in_ram(em + 0x928, 2)) return;
+    int32_t pending = (int16_t)ld16(em + 0x928) + (int32_t)add;
+    st16(em + 0x928, (uint16_t)(int16_t)std::min(pending, 32767));
+    if (g_ffxi_em.exchange(em, std::memory_order_relaxed) != em) g_ffxi_owed.store(0, std::memory_order_relaxed);
+    g_ffxi_owed.fetch_add((int32_t)add, std::memory_order_relaxed);
+    static int told = 0;
+    if (told < 5) {
+        ++told;
+        rt_log("ffxi: FFXI's damage %u handed to monster %08X (pending now %d, HP %d)", add, em, pending,
+               (int32_t)ld32(em + 0x7A0));
+    }
+}
+
 uint32_t g_chosen = 0;                              // the target the d-pad chose, kept while it's near
 
 void target_frame(uint32_t pl, uint32_t cam, float dt) {
     ++g_frame;
     Block* b = g_block;
+    if (b) game_damage(b);
     g_enemies.erase(std::remove_if(g_enemies.begin(), g_enemies.end(),
                                    [](const Enemy& e) { return g_frame - e.frame > 30; }), g_enemies.end());
     auto live = [&](uint32_t obj) -> Enemy* {

@@ -113,7 +113,7 @@ def build_model(trust: dict, scale: float) -> dict:
     import ffxi_model as FM
     model = FM.load(Path(trust["file"]))
     model["clips"] = FM.character_clips([model["motions"]], [])
-    packed = FM.pack(model, scale=scale)
+    packed = FM.pack(model, scale=scale, origin_ground=True)       # stood as FFXI stands it: by its origin
     for c in packed["clips"]:                                 # a Tarutaru's run kept to a Hume's pace: counted as
         if c["name"] in ("run", "brun") and 0 < c["speed"] < 250:   # covering more (as the player's own)
             c["speed"] *= 1.8

@@ -288,6 +288,15 @@ class App:
                 writes.update(self.e.use(name, now, writes.get("monster_hp", m), writes.get("player_hp", p)))
         self._attack_step(now, m, writes)
         self._trust_fight(now, m, p, writes)
+        if "monster_hp" in writes and m is not None and hasattr(self.mem, "deal_damage") \
+                and self.cfg.get("damage_through_game", True) is not False:
+            # FFXI's damage dealt as the game deals its own (the monster flinching, falling, carved): handed
+            # to it, the HP left as read until the game takes it off (not counted again as your blow)
+            dealt = m - writes.pop("monster_hp")
+            if dealt > 0:
+                self.mem.deal_damage(dealt)
+                self.e.ffxi_owed += dealt
+            self.e.prev_monster = m
         for name, val in writes.items():
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
@@ -457,6 +466,8 @@ class App:
                     self.sounds.play_spell(anim)
 
     def _engage_port(self) -> None:
+        if hasattr(self.mem, "set_mh_swings"):                     # the game's own swings (/mhcombat)
+            self.mem.set_mh_swings(self.cfg.get("mh_swings", True) is not False)
         if hasattr(self.mem, "set_dpad_target"):                   # the d-pad's targeting (dpad_target)
             mode = str(self.cfg.get("dpad_target", "engaged")).lower()
             self.mem.set_dpad_target({"off": 0, "never": 0, "always": 2}.get(mode, 1))
@@ -1039,6 +1050,10 @@ class App:
             slots.append({"label": G.SLOT_LABEL[slot], "ok": bool(choices), "detail": worn["name"] if worn else "",
                           "help": g.describe(worn) if worn else "", "children": choices or
                           [{"label": "(Nothing to wear here)", "ok": False, "detail": ""}]})
+        slots.append({"label": "Button Combat", "ok": True,
+                      "detail": "On" if self.cfg.get("mh_swings", True) is not False else "Off", "act": ("mhcombat",),
+                      "help": "On: the pad's Y and B swing as in Monster Hunter, beside FFXI's Attack.\n"
+                              "Off: while you attack, FFXI's auto-attack fights for you (/mhcombat)."})
         slots.append({"label": "Lockstyle", "ok": True, "detail": "On" if e.lockstyle else "Off", "act": ("lockstyle",),
                       "help": "On: the look you have now stays, whatever you wear (FFXI's /lockstyle).\n"
                               "Off: your equipment shows."})
@@ -1134,6 +1149,9 @@ class App:
         elif act[0] == "release":
             if self.party:
                 self.party.release(act[1])
+        elif act[0] == "mhcombat":
+            self.chat_command("/mhcombat " + ("off" if self.cfg.get("mh_swings", True) is not False else "on"))
+            return                                     # the menu stays open: its detail shows the change
         elif act[0] == "lockstyle":
             self.lockstyle(not e.lockstyle)
             return                                     # the menu stays open: its detail shows the change
@@ -1371,6 +1389,12 @@ class App:
                 self.character.request(code, hold if isinstance(hold, str) else (code if hold else None))
         elif word in ("attack", "a"):
             self.attack(rest.lower() != "off" and not (self.e.engaged and not rest))
+        elif word in ("mhcombat", "buttons"):                      # the game's own swings on the pad's Y and B
+            on = rest.lower() not in ("off", "0") if rest else self.cfg.get("mh_swings", True) is False
+            self.cfg["mh_swings"] = on
+            e.say("Button combat on: the pad's Y and B swing as in Monster Hunter, beside FFXI's Attack." if on else
+                  "Button combat off: while you attack, FFXI's auto-attack fights for you (Y and B do nothing).",
+                  "info")
         elif word == "lockstyle":                                  # FFXI's: the look kept, whatever is worn
             self.lockstyle(rest.lower() != "off" if rest else not e.lockstyle)
         elif word in ("refa", "release"):                          # FFXI's: /refa all sends the Trusts away

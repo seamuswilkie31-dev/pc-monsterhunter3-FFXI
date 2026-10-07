@@ -48,11 +48,11 @@ MENU_AT = OBJ_AT + OBJ.size
 MENU = struct.Struct("<8I")              # menu_open, close_seq, close_ack, item_seq, item_ack, ev_head, engage, dpad_target
 EVENTS_AT = MENU_AT + MENU.size
 NAME_AT = EVENTS_AT + 32 * 4
-NAME = struct.Struct("<ffIfII")         # name_x, name_y, name_ok, name_height, camera, reserved
+NAME = struct.Struct("<ffIfII")         # name_x, name_y, name_ok, name_height, camera, damage_total
 TARGET_AT = NAME_AT + NAME.size
 TARGET = struct.Struct("<ffIII16sf")    # x, y, ok, locked, model, name, dist
 BGM_AT = TARGET_AT + TARGET.size
-BGM = struct.Struct("<4I")              # stream, seq, mute, reserved
+BGM = struct.Struct("<4I")              # stream, seq, mute, no_mh_swings
 MAP_AT = BGM_AT + BGM.size              # the map's code module linked now: "map_village", "map01"; "": none
 CHAT_AT = MAP_AT + 16
 CHAT = struct.Struct("<II128s128s")     # open, seq, line, sent
@@ -239,6 +239,21 @@ class PortBackend:
         """Where a Trust's name goes in the picture (-1..1, y up), as the port projects it; None: unseen."""
         x, y, ok = struct.unpack_from("<2fI", self.mm, COMPANIONS_AT + slot * COMPANION.size + COMPANION_SET.size)
         return (x, y) if ok else None
+
+    # --- FFXI's damage to monsters, dealt through the game (its pending damage: their falls, their carving) ---
+    def deals_damage(self) -> bool:
+        return True
+
+    def deal_damage(self, amount: int) -> None:
+        """FFXI's damage to the monster the HP is read from: the port hands it to the game, which takes it
+        off as its own (the layer counts all it has dealt; the port the new part each frame)."""
+        if amount > 0:
+            total = (u32(self.mm, NAME_AT + 20) + int(amount)) & 0xFFFFFFFF
+            put_u32(self.mm, NAME_AT + 20, total)
+
+    def set_mh_swings(self, on: bool) -> None:
+        """The game's own attack buttons while FFXI's Attack fights (off: dropped while engaged)."""
+        put_u32(self.mm, BGM_AT + 12, 0 if on else 1)
 
     def set_dpad_target(self, mode: int) -> None:
         """The d-pad changes the target: 0 never, 1 while engaged or locked on, 2 always (the game losing it)."""

@@ -78,6 +78,7 @@ class Engine:
     monster_id: int | None = None
     monster_max: int = 0
     dot_carry: float = 0.0                           # damage over time not yet whole, to the next tick
+    ffxi_owed: int = 0                               # FFXI's damage handed to the game, not yet off the monster's HP
     checked: bool = False                            # this monster's /check said
     chain: int = -1
     last_kill: float = -999.0
@@ -341,6 +342,10 @@ class Engine:
         # your hits on the monster (the game's)
         if m is not None and self.prev_monster is not None:
             delta = self.prev_monster - m
+            if delta > 0 and self.ffxi_owed:                 # the game taking off FFXI's own: not your blow
+                mine = min(delta, self.ffxi_owed)
+                self.ffxi_owed -= mine
+                delta -= mine
             if delta > 0:
                 m, p = self._on_hit(now, delta, m, p)
             if m == 0 and self.prev_monster > 0:

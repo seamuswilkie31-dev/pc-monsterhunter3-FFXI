@@ -324,7 +324,13 @@ class Creator:
         model = M.load_character(self.root_dir, race, look, loader=cached_load)
         sk = model["skeletons"][0]
         clip = next((c for c in model["clips"] if c["name"] == pose[0]), None)
-        world = M.pose_world(sk, *M.local_pose(sk, clip["parts"], pose[1])) if clip else M.joint_world(sk)
+        if clip:
+            q, t, s = M.local_pose(sk, clip["parts"], pose[1])
+            if clip["set"] == M.BATTLE and clip["name"] not in ("draw", "sheathe"):
+                M.grip_pose(sk, q, t, s, model.get("grips"))           # fighting: the weapons in hand
+            world = M.pose_world(sk, q, t, s)
+        else:
+            world = M.joint_world(sk)
         front = M.render(model, VIEW, yaw=90, world=world)
         side = M.render(model, VIEW, yaw=40, world=world)
         return np.concatenate([front, side], 1)

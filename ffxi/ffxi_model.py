@@ -29,6 +29,11 @@ The formats, as the community's viewers read them (written here from that descri
     the hair the face gives under it (1), a helmet (4-6) all of it, a full one (5) the face too; sleeves
     (0x12) the wrists, boots the trousers (0x32) and shins (0x22). Without it a face's hair shows
     through the headgear (occluded).
+  skeleton's references: after its joints, a table of named points on it (u16 count, u16, then each a u16
+    joint, 12 bytes, an offset): 126 the left hand, 127 the right. A weapon's info chunk names the
+    reference of its grip (the sixth byte after the header; 0xFF for none: a shield, worn on its own
+    mount): while the character fights, the grip goes to the hand (main: the right, sub: the left), the
+    weapon in it; at rest it is where the motions put it (sheathed).
   textures: the file's image chunks, named by their 16-character category and name.
 """
 from __future__ import annotations
@@ -85,6 +90,74 @@ def parse_skeleton(b: bytes, data: int) -> list[dict]:
         trans = r.vec3()
         joints.append({"parent": -1 if parent == i else parent, "rot": rot, "trans": trans})
     return joints
+
+
+def skeleton_refs(b: bytes, data: int) -> list[int]:
+    """The skeleton's references (its named points: the hands, the weapons' grips): each one's joint."""
+    n = b[data + 2]
+    at = data + 4 + 30 * n
+    if at + 4 > len(b):
+        return []
+    count = struct.unpack_from("<H", b, at)[0]
+    return [struct.unpack_from("<H", b, at + 4 + 26 * i)[0] for i in range(count) if at + 4 + 26 * i + 26 <= len(b)]
+
+
+def weapon_grip(path: Path) -> int | None:
+    """A weapon's grip: the skeleton reference that goes to the hand while fighting (None: none, a shield)."""
+    try:
+        b = Path(path).read_bytes()
+    except OSError:
+        return None
+    for at, _nm, typ, size in A.chunks(b):
+        if typ == 0x45 and size >= 23:
+            return None if b[at + 22] == 0xFF else b[at + 22]
+    return None
+
+
+LEFT_HAND, RIGHT_HAND = 126, 127                 # the skeleton's references for the hands
+
+
+def grip_pose(joints: list[dict], q: np.ndarray, t: np.ndarray, s: np.ndarray, grips: list) -> None:
+    """Each grip (its joint, its hand's) put in the hand, in place: its own rotation, offset and scale
+    made such that it stands as its hand stands (its scale 1), whatever its parent does."""
+    if not grips:
+        return
+    world = pose_world(joints, q, t, s)
+    scl = np.ones((len(joints), 3))
+    for i, j in enumerate(joints):                                     # the scales pose_world chains
+        scl[i] = s[i] * (scl[j["parent"]] if j["parent"] >= 0 else 1.0)
+    for grip, hand in grips:
+        p = joints[grip]["parent"]
+        hw = world[hand]
+        hand_rot = hw[:3, :3] / np.maximum(np.linalg.norm(hw[:3, :3], axis=0), 1e-9)
+        if p < 0:
+            pr, pp, ps = np.eye(3), np.zeros(3), np.ones(3)
+        else:
+            pw = world[p]
+            pr = pw[:3, :3] / np.maximum(np.linalg.norm(pw[:3, :3], axis=0), 1e-9)
+            pp, ps = pw[:3, 3], scl[p]
+        q[grip] = mat_quat(pr.T @ hand_rot)
+        t[grip] = (pr.T @ (hw[:3, 3] - pp)) / np.maximum(ps, 1e-9)
+        s[grip] = 1.0 / np.maximum(ps, 1e-9)
+
+
+def mat_quat(m: np.ndarray) -> np.ndarray:
+    """A rotation matrix's quaternion (x, y, z, w)."""
+    tr = m[0, 0] + m[1, 1] + m[2, 2]
+    if tr > 0:
+        k = np.sqrt(tr + 1.0) * 2
+        q = [(m[2, 1] - m[1, 2]) / k, (m[0, 2] - m[2, 0]) / k, (m[1, 0] - m[0, 1]) / k, 0.25 * k]
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        k = np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2
+        q = [0.25 * k, (m[0, 1] + m[1, 0]) / k, (m[0, 2] + m[2, 0]) / k, (m[2, 1] - m[1, 2]) / k]
+    elif m[1, 1] > m[2, 2]:
+        k = np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2
+        q = [(m[0, 1] + m[1, 0]) / k, 0.25 * k, (m[1, 2] + m[2, 1]) / k, (m[0, 2] - m[2, 0]) / k]
+    else:
+        k = np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2
+        q = [(m[0, 2] + m[2, 0]) / k, (m[1, 2] + m[2, 1]) / k, 0.25 * k, (m[1, 0] - m[0, 1]) / k]
+    q = np.array(q)
+    return q / (np.linalg.norm(q) or 1.0)
 
 
 def _ref(v: int) -> tuple[int, int, int]:
@@ -232,6 +305,7 @@ def load(path: Path) -> dict:
         try:
             if typ == SKELETON:
                 out["skeletons"].append(parse_skeleton(b, at + 16))
+                out.setdefault("refs", skeleton_refs(b, at + 16))
             elif typ == MESH:
                 out["meshes"].append(parse_mesh(b, at + 16, name))
             elif typ == IMAGE:
@@ -614,8 +688,13 @@ def weapon_style(root: Path, race: str, main: int | None, file_path=None) -> int
 
 
 def look_for_weapon(root: Path, race: str, look: dict, weapon: str) -> tuple[dict, int]:
-    """The look with a weapon held as FFXI would hold Monster Hunter's: its own main hand if that's of the
-    weapon's style, else the style's own (and a shield for a sword or a lance); and that style."""
+    """The weapons held, and the style of the battle motions they're held with: FFXI's own worn (the main
+    hand's style, the off hand as it is: a club in each), when the race has motions for that style; else
+    one held as FFXI would hold Monster Hunter's weapon (its style's own, and a shield for a sword or a
+    lance)."""
+    own = weapon_style(root, race, look.get("main")) if look.get("main") else None
+    if own is not None and battle_files(race, own, root) is not None:
+        return dict(look), own
     style = WEAPON_STYLE.get(weapon, 1)
     out = dict(look)
     if battle_files(race, style, root) is None:                       # the race has no motions for it: a sword
@@ -712,7 +791,9 @@ def load_character(root: Path, race: str, look: dict, style: int | None = None, 
     load_ = loader or load
     r = RACES[race]
     base = load_(root / r["skeleton"])
-    model = {"skeletons": base["skeletons"], "meshes": [], "textures": {}, "motions": [], "errors": []}
+    model = {"skeletons": base["skeletons"], "meshes": [], "textures": {}, "motions": [], "errors": [],
+             "grips": []}
+    refs = base.get("refs") or []
     for slot in SLOTS:
         if slot not in look or look[slot] is None:
             continue
@@ -722,6 +803,10 @@ def load_character(root: Path, race: str, look: dict, style: int | None = None, 
             continue
         part = load_(p)
         model["meshes"] += [{**m, "slot": slot} for m in part["meshes"]]     # pack keeps the weapons off the ground
+        if slot in ("main", "sub"):                                   # a weapon's grip, to its hand when fighting
+            g, hand = weapon_grip(p), RIGHT_HAND if slot == "main" else LEFT_HAND
+            if g is not None and g < len(refs) and hand < len(refs):
+                model["grips"].append((refs[g], refs[hand]))
         model["textures"].update(part["textures"])
         model["errors"] += part["errors"]
     if not motions:
@@ -790,7 +875,7 @@ def character_clips(own: list[list[dict]], arms: list[list[dict]], letter: str =
 
 
 def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = True, size: int = 256,
-         motions: tuple[str, ...] = MOTIONS, scale: float | None = None) -> dict:
+         motions: tuple[str, ...] = MOTIONS, scale: float | None = None, origin_ground: bool = False) -> dict:
     """The model for the port to skin and animate (port_model.py):
       verts   N x 20 float32, each triangle corner: p0 xyz, p1 xyz (in its joints' spaces, weighted),
               joint 0, joint 1 (-1: one joint), weight 0, weight 1, u, v, texture layer, its normal
@@ -808,7 +893,9 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
               those as standing or moving has them)
     The motions: a character's own (load_character's clips), else the first of `motions` standing
     and the others moving. scale: the hunter's units per the model's, else the model made `height`
-    tall (a race's size against another's is kept by giving them the same scale).
+    tall (a race's size against another's is kept by giving them the same scale). origin_ground: its
+    origin on the ground, as FFXI stands an actor (an NPC's motions carry its feet there, or keep it
+    floating, a Moogle), rather than its rest pose's soles.
     """
     from PIL import Image
     joints = model["skeletons"][0]
@@ -844,7 +931,7 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
     turn = np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
     place = np.zeros((3, 4))
     place[:, :3] = turn @ (k * axes)
-    place[1, 3] = -lo * k                                              # the feet on the ground
+    place[1, 3] = 0.0 if origin_ground else -lo * k                    # the feet on the ground
 
     clips = []
     specs = model.get("clips") or [{"name": n, "parts": clip(model, n), "kind": STAND if i == 0 else MOVE,
@@ -859,8 +946,15 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
             rate = then[0]["rate"] or 1.0
         frames = max(frames, int(round(spec.get("hold", 0.0) * 30 * rate)) + 1)
 
+        grips = model.get("grips") if spec["set"] == BATTLE and name not in ("draw", "sheathe") else None
+
         def sampled(ps, n):
-            return np.stack([np.concatenate(local_pose(joints, ps, f / max(n - 1, 1)), 1) for f in range(n)])
+            out = []
+            for f in range(n):
+                q, t, s = local_pose(joints, ps, f / max(n - 1, 1))
+                grip_pose(joints, q, t, s, grips)                      # fighting: the weapons in hand
+                out.append(np.concatenate([q, t, s], 1))
+            return np.stack(out)
         data = sampled(parts, frames)
         if then:
             more = max(m["frames"] for m in then)
@@ -869,6 +963,7 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
         data = data.astype(np.float32)
         if spec["kind"] == ACTION:                                     # an action moves only its own joints:
             driven = {j for m in parts + then for j in m["tracks"]}    # the others stay as the hunter moves
+            driven |= {g for g, _ in (grips or [])}
             data[:, [j for j in range(len(joints)) if j not in driven]] = np.nan
         for f in range(1, frames):                                     # q and -q turn alike: keep each on
             flip = (data[f, :, :4] * data[f - 1, :, :4]).sum(1) < 0    # the previous frame's side, so
