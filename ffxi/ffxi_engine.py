@@ -95,6 +95,7 @@ class Engine:
     gear_effects: dict = field(default_factory=dict) # what they do, as effects (gear_effect)
     all_jobs: bool = False                           # every job's spells and abilities at your level (solo)
     trusts: list = field(default_factory=list)       # FFXI's Trusts' spells (ffxi_trust): every job's, all unlocked
+    all_magic: bool = False                          # every spell known from the start, whatever the job and level (the layer: on)
     lockstyle: dict = field(default_factory=dict)    # /lockstyle on: the look kept (slot -> model), whatever is worn
     gear_serial: int = 0                             # the character creator's equipment last handed over (its save)
     engaged: bool = False                            # FFXI's Attack: swinging at the target on the weapon's delay
@@ -234,7 +235,18 @@ class Engine:
         return out
 
     def known_spells(self) -> list[str]:
+        if self.all_magic:                                   # all unlocked: every job's, at any level
+            learnt = self._learnt("spells")
+            rest = [n for j in D.JOBS.values() for _, n in sorted(j["spells"], key=lambda t: t[0]) if n in D.SPELLS]
+            return list(dict.fromkeys(learnt + rest)) + self.trusts
         return self._learnt("spells") + self.trusts
+
+    def set_all_magic(self, on: bool) -> None:
+        """Every spell known (all unlocked), or those your jobs have learnt by their levels."""
+        self.all_magic = bool(on)
+        self.dirty = True
+        self.say(f"{self.me} now knows {'every spell' if on else 'the spells of the jobs chosen, by their levels'}.",
+                 "info")
 
     def known_abilities(self) -> list[str]:
         return self._learnt("abilities")
@@ -808,7 +820,7 @@ class Engine:
     def progress(self) -> dict:
         return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp),
                 "inventory": list(self.inventory), "equipment": dict(self.equipment), "all_jobs": self.all_jobs,
-                "lockstyle": dict(self.lockstyle), "gear_serial": self.gear_serial}
+                "lockstyle": dict(self.lockstyle), "gear_serial": self.gear_serial, "all_magic": self.all_magic}
 
     def load_progress(self, d: dict) -> None:
         self.levels = {k: int(v) for k, v in d.get("levels", {}).items() if k in D.JOBS}
@@ -818,6 +830,7 @@ class Engine:
         self.equipment = {k: int(v) for k, v in d.get("equipment", {}).items()}
         self.lockstyle = {k: int(v) for k, v in d.get("lockstyle", {}).items()}
         self.gear_serial = int(d.get("gear_serial", 0))
+        self.all_magic = bool(d.get("all_magic", self.all_magic))
         job, sub = d.get("job", self.job), d.get("sub", self.sub)
         if job in D.JOBS and (sub is None or (sub in D.JOBS and sub != job)):
             self.set_jobs(job, sub)

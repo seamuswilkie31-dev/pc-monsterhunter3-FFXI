@@ -1025,7 +1025,10 @@ class App:
             {"label": "Support Job", "ok": not e.all_jobs, "detail": e.sub or "", "children": subs},
             {"label": "All Jobs", "ok": True, "detail": "On" if e.all_jobs else "Off", "act": ("all_jobs",),
              "help": "On: every job's magic and abilities at your level on one character (solo play). "
-                     "Off: your main job's, and your support job's at half its level."}]})
+                     "Off: your main job's, and your support job's at half its level."},
+            {"label": "All Magic", "ok": True, "detail": "On" if e.all_magic else "Off", "act": ("all_magic",),
+             "help": "On: every spell unlocked from the start, whatever your job and level. "
+                     "Off: the spells your jobs have learnt by their levels."}]})
         return root
 
     def _gear_menu(self) -> list[dict]:
@@ -1139,6 +1142,10 @@ class App:
             self.actions.put(("use", act[1]))
         elif act[0] == "attack":
             self.attack(not e.engaged)
+        elif act[0] == "all_magic":
+            e.set_all_magic(not e.all_magic)
+            self.save()
+            return                                     # the menu stays open: its detail shows the change
         elif act[0] == "all_jobs":
             e.set_all_jobs(not e.all_jobs)
             self._gear_check()
@@ -1715,6 +1722,7 @@ def main() -> int:
 
     engine = Engine(job, weapon, cfg.get("player_max_hp", 150), allow_kills=a.allow_kills or cfg.get("allow_kills", True) is not False,
                     me=cfg.get("name", "Adventurer"), exp_rate=cfg.get("exp_rate", D.EXP_RATE))
+    engine.all_magic = cfg.get("all_magic", True) is not False      # a saved choice, below, wins
     engine.load_progress(saved)
     engine.set_jobs(job, sub)
     if a.level:

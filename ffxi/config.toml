@@ -33,6 +33,7 @@ log_fade = 10            # the combat log's lines go this many seconds after the
 nameplate = true         # your name above your head, as in FFXI
 nameplate_height = 200   # how high above your feet, in the game's units, with no FFXI character (with one: above its head)
 target_arrow = true      # FFXI's arrow above your target (the nearest monster); hold L (the pad's LB) to lock on
+all_magic = true         # every spell unlocked from the start (the Job menu's All Magic switches it in the game)
 allow_kills = true       # FFXI's blows, magic and Trusts can finish a monster (false: the game's own last blow)
 damage_through_game = true   # FFXI's damage dealt as the game's own (the monster flinches, falls, is carved)
 mh_swings = true         # the pad's Y and B swing as in Monster Hunter beside FFXI's Attack (/mhcombat off: not
