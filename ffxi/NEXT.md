@@ -19,6 +19,9 @@ name, the linkpearl's sprite in the game, the launcher's name, a large monster's
   FFXI's: Y and B dropped while Attack fights, the d-pad always the target's (dpad_target "auto"), a fallen
   target carved (auto_carve). Monster Hunter's: the game's buttons and d-pad. The d-pad: when nothing lies
   that way on screen it cycles by distance (up/left nearer, down/right further).
+- The d-pad given back to the game's menus (checked in play): while a menu of its draws its cursor
+  (put_menu_cursor, hooked: 57 callers; the HUD's own, inside hook_cockpit, not counted) in the last 250 ms,
+  and while no monster is near enough to target (the village). The carving waits out a menu too.
 - Fallen monsters aren't targets (kept 1.5 s first, so the layer sees the fall: EXP, drops, disengage); the
   lock lets go.
 - Auto-carve (carve_frame, Block auto_carve/carve_seq): the last frame's target's HP to none; after 2 s the

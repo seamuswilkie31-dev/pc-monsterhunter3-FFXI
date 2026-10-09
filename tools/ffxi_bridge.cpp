@@ -293,8 +293,24 @@ void hook_add_resource(PPCContext& c) {
 // MH3_HIDE_HUD=1: Monster Hunter's hunt HUD (mh3_CockpitDraw) is not drawn while the FFXI interface replaces
 // it; drawn when the layer asks for it (its F9: Block::mh_hud) or isn't running.
 bool hud_wanted();
+bool g_hide_hud = false;                     // MH3_HIDE_HUD=1
+std::atomic<bool> g_in_cockpit{false};       // the HUD drawing (a cursor it draws is no menu's)
 void hook_cockpit(PPCContext& c) {
-    if (hud_wanted()) orig_cockpit(c);
+    if (g_hide_hud && !hud_wanted()) return;
+    g_in_cockpit.store(true, std::memory_order_relaxed);
+    orig_cockpit(c);
+    g_in_cockpit.store(false, std::memory_order_relaxed);
+}
+
+// put_menu_cursor(u16*, u16, const _mh_ivec2_*): a game menu's cursor drawn (its pause menu, item box, shops,
+// the quest counter...: 57 callers). While one is drawn, a menu of the game's is up and the d-pad is its,
+// not FFXI's targeting (classic_filter).
+PPCFunc orig_menu_cursor;
+std::atomic<int64_t> g_menu_cursor_at{0};    // when (steady_clock, ns) a menu's cursor was last drawn
+void hook_menu_cursor(PPCContext& c) {
+    if (!g_in_cockpit.load(std::memory_order_relaxed))
+        g_menu_cursor_at.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_relaxed);
+    orig_menu_cursor(c);
 }
 
 void trace(const char* fn, PPCContext& c, const char* text) {
@@ -385,6 +401,7 @@ std::atomic<bool> g_locked_on{false};
 // a fallen target being carved (carve_frame): the stick toward it, its carving button; the pad's own ends it
 std::atomic<float> g_carve_lx{0.0f}, g_carve_ly{0.0f};
 std::atomic<bool> g_carve_on{false}, g_carve_a{false}, g_carve_stop{false};
+std::atomic<bool> g_targets_near{false};    // a monster near enough to target (target_frame): the d-pad's then
 
 void classic_filter(int chan, ClassicState& s) {
     s.buttons &= ~kClHome;                        // the Home Button menu crashes the port: never opened
@@ -437,9 +454,14 @@ void classic_filter(int chan, ClassicState& s) {
     if (now < y_until) s.buttons |= kClY;         // a tap, or the layer's Items: the game's own Y
     else s.buttons &= ~kClY;                      // otherwise the filter's, until it knows
 
-    // the d-pad, while the layer says (engaged, or locked on; or always): the target moved to the next
+    // a menu of the game's up (its cursor drawn in the last quarter second): the d-pad and the stick are its
+    bool game_menu = now.time_since_epoch().count() - g_menu_cursor_at.load(std::memory_order_relaxed)
+                     < std::chrono::duration_cast<clock::duration>(std::chrono::milliseconds(250)).count();
+
+    // the d-pad, while the layer says (engaged, or locked on; or always) and there's a monster to target
+    // (none: the village's menus, the game's camera), no menu of the game's up: the target moved to the next
     // monster that way on the screen (target_frame), and the game doesn't see it
-    if (!b->menu_open && b->dpad_target &&
+    if (!b->menu_open && !game_menu && b->dpad_target && g_targets_near.load(std::memory_order_relaxed) &&
         (b->dpad_target == 2 || (b->engage & 1) || g_locked_on.load(std::memory_order_relaxed))) {
         constexpr uint32_t kDpad = kClUp | kClDown | kClLeft | kClRight;
         if (uint32_t d = pressed & kDpad)
@@ -452,7 +474,7 @@ void classic_filter(int chan, ClassicState& s) {
     if (!b->menu_open && b->no_mh_swings && (b->engage & 1)) s.buttons &= ~(kClX | kClA);
 
     // a fallen target carved (carve_frame): its stick and A, until the pad's own stick or a button
-    if (g_carve_on.load(std::memory_order_relaxed) && !b->menu_open) {
+    if (g_carve_on.load(std::memory_order_relaxed) && !b->menu_open && !game_menu) {
         constexpr uint32_t kOwn = kClA | kClB | kClX | kClY | kClL | kClUp | kClDown | kClLeft | kClRight;
         if (std::fabs(s.lx) > 0.35f || std::fabs(s.ly) > 0.35f || (pressed & kOwn)) {
             g_carve_stop.store(true, std::memory_order_relaxed);
@@ -1006,6 +1028,10 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
         for (Enemy& e : g_enemies)
             if (g_frame - e.frame <= 3 && dist(e) < best && !fallen(e)) best = dist(e), t = &e;
     }
+    bool any_near = t != nullptr;
+    for (const Enemy& e : g_enemies)
+        if (!any_near && pl && g_frame - e.frame <= 3 && dist(e) <= kLockReach && !fallen(e)) any_near = true;
+    g_targets_near.store(any_near, std::memory_order_relaxed);
     if (int step = g_target_step.exchange(0, std::memory_order_relaxed); step && cam && pl) {
         // from where the target is on the screen (none: the middle), the nearest that way, straight ahead
         // of the press counting more than off to its side
@@ -1971,9 +1997,11 @@ void install() {
     orig_master = ppc_hook("Pl_master_ck__FP4_PLW", hook_master);
     orig_set_perspective = ppc_hook("SetPerspective__Q34nw4r3g3d6CameraFffff", hook_set_perspective);
     if (const char* h = std::getenv("MH3_HIDE_HUD"); h && !std::strcmp(h, "1")) {
-        orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
+        g_hide_hud = true;
         rt_log("ffxi: Monster Hunter's HUD hidden (MH3_HIDE_HUD=1) while the FFXI interface shows");
     }
+    orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
+    orig_menu_cursor = ppc_hook("put_menu_cursor__FPUsUsPC10_mh_ivec2_", hook_menu_cursor);
     if (const char* t = std::getenv("MH3_RES_TRACE"); t && !std::strcmp(t, "1"))
         orig_add_resource = ppc_hook("nwAddResource__FPcPv", hook_add_resource);
     if (const char* t = std::getenv("MH3_HUD_TRACE"); t && !std::strcmp(t, "1")) {

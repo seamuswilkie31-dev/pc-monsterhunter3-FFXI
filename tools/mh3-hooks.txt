@@ -19,3 +19,4 @@ PlayStream__FUlUl        # the game's music started: FFXI's in its place
 set_str_bgm_main_vol__Ff # the game's music volume: held at 0 while FFXI's plays
 fn_800D9D2C              # a sound effect requested for an actor: the hunter's voice, FFXI's in its place
 fn_8011F6B8              # a monster's damage this frame taken off its HP: FFXI's dealt as a hunter's blow
+put_menu_cursor__FPUsUsPC10_mh_ivec2_   # a game menu's cursor drawn: its menu is up, the d-pad the game's
