@@ -1,6 +1,9 @@
 # FFXI layer — next session
 
-**River's fourth round (2026-10-08)**: built, NOT YET checked in play.
+**River's fourth round (2026-10-08)**: checked in play (Moga Woods, Kelbi): FFXI's blows took its HP to 0
+(wiiboot.log: "took FFXI's 17 as a blow: HP 35 -> 18"...), it fell, the hunter walked over and carved it (Raw
+Meat), "defeats the Kelbi" and EXP; the d-pad's targets and F9 work. NOT YET seen: the GM's aura and red
+name, the linkpearl's sprite in the game, the launcher's name, a large monster's flinches and carves.
 - FFXI's damage reaching monsters, for real this time. The third round's +0x928 is the monster's POISON
   slot: its ailments (fn_801327CC) clear it each frame just before the damage routine reads it, so what the
   port wrote between frames never landed (auto-attack, magic, Trusts: all "doing nothing"). Now FFXI's
