@@ -22,6 +22,11 @@ name, the linkpearl's sprite in the game, the launcher's name, a large monster's
 - The d-pad given back to the game's menus (checked in play): while a menu of its draws its cursor
   (put_menu_cursor, hooked: 57 callers; the HUD's own, inside hook_cockpit, not counted) in the last 250 ms,
   and while no monster is near enough to target (the village). The carving waits out a menu too.
+- Talking to someone (checked in play): the game draws through another camera of its scene root's (closer, its
+  own field of view) while the one following the hunter stays put; the character, drawn through that one, came
+  out shrunk. SetCurrentCamera hooked: the roots remembered; render_camera is the current one of the root
+  holding follow_camera's (+0xF4 its index, cameras from +0xF8, 0x10C apart), for the character, the Trusts,
+  the effects and the nameplate; the lock-on keeps the following one.
 - Fallen monsters aren't targets (kept 1.5 s first, so the layer sees the fall: EXP, drops, disengage); the
   lock lets go.
 - Auto-carve (carve_frame, Block auto_carve/carve_seq): the last frame's target's HP to none; after 2 s the

@@ -735,9 +735,51 @@ uint32_t follow_camera(uint32_t pl) {
     return chosen;
 }
 
+// nw4r::g3d::ScnRoot::SetCurrentCamera(int): r3 the scene's root, its cameras' CameraData from +0xF8, 0x10C
+// apart (32: the array follow_camera looks through), +0xF4 the one drawing the scene (a u8). Talking to someone,
+// the game draws through another of them, closer in (its own place and field of view), while the one that
+// follows the hunter stays where it was: FFXI's character, drawn through that one, came out smaller than the
+// scene around it. The roots are remembered, to find the camera drawing the scene (render_camera).
+PPCFunc orig_set_current_camera;
+std::mutex g_roots_mx;
+uint32_t g_roots[8];
+int g_n_roots = 0;
+void hook_set_current_camera(PPCContext& c) {
+    uint32_t root = c.r[3];
+    int idx = (int)c.r[4];
+    orig_set_current_camera(c);
+    std::lock_guard<std::mutex> lk(g_roots_mx);
+    if (std::find(g_roots, g_roots + g_n_roots, root) == g_roots + g_n_roots && g_n_roots < 8) {
+        g_roots[g_n_roots++] = root;
+        rt_log("ffxi: a scene root %08X, drawing through its camera %d (from %s)", root, idx, rt_name(c.lr).c_str());
+    }
+}
+
+// The camera drawing the scene the hunter is in: the current one of the root holding the camera that follows
+// it (follow_camera), when that's another (a talk's); else the following one.
+uint32_t render_camera(uint32_t pl) {
+    uint32_t follow = follow_camera(pl);
+    if (!follow) return 0;
+    std::lock_guard<std::mutex> lk(g_roots_mx);
+    for (int i = 0; i < g_n_roots; ++i) {
+        uint32_t base = g_roots[i] + 0xF8;
+        if (follow < base || follow >= base + 32 * 0x10C || (follow - base) % 0x10C || !in_ram(g_roots[i] + 0xF4, 1))
+            continue;
+        uint32_t cur = base + ld8(g_roots[i] + 0xF4) * 0x10C;
+        static uint32_t told = 0;
+        if (cur != told) {
+            told = cur;
+            rt_log("ffxi: the scene drawn through camera %u of root %08X (%s the one following the hunter)",
+                   (cur - base) / 0x10C, g_roots[i], cur == follow ? "" : "not");
+        }
+        return cur != follow && camera_block(cur) ? cur : follow;
+    }
+    return follow;
+}
+
 // The hunter's head (its position, +0x3C of its _PLW, raised) through the camera: view, then projection.
 void project_name(Block* b) {
-    uint32_t pl = object(kBasePlayer), cam = follow_camera(pl);
+    uint32_t pl = object(kBasePlayer), cam = render_camera(pl);
     b->camera = cam;
     if (!cam || !pl || !in_ram(cam, 0x70) || !in_ram(pl + 0x3C, 12)) { b->name_ok = 0; return; }
     float h = b->name_height > 0 && b->name_height < 10000 ? b->name_height : 200.0f;
@@ -1866,9 +1908,9 @@ void model_frame() {
     g_shadow.store(up && loaded && (mb->flags & 1) ? mb->shadow : 0, std::memory_order_relaxed);
     g_shadow_radius.store(mb->shadow_radius, std::memory_order_relaxed);
     {
-        uint32_t tp = object(kBasePlayer), tc = follow_camera(tp);
+        uint32_t tp = object(kBasePlayer), tc = follow_camera(tp), rc = render_camera(tp);
         target_frame(tp, tc, dt);                             // FFXI's target, and the lock-on
-        fx_frame(tp, tc);                                     // FFXI's effects
+        fx_frame(tp, rc);                                     // FFXI's effects
         static uint32_t comp_stamp = 0;                       // the hunter placed since: a scene, not a loading screen
         bool placed;
         {
@@ -1876,7 +1918,7 @@ void model_frame() {
             placed = g_hunter_stamp != comp_stamp;
             comp_stamp = g_hunter_stamp;
         }
-        companions_frame(dt, tp, tc, placed);                 // FFXI's Trusts
+        companions_frame(dt, tp, rc, placed);                 // FFXI's Trusts
     }
     if (!loaded) return;
     float view[12] = {}, proj[6] = {}, h[12], camera[12] = {};
@@ -1887,7 +1929,7 @@ void model_frame() {
         stamp = g_hunter_stamp;
         std::memcpy(h, g_hunter_mtx, sizeof h);
     }
-    uint32_t pl = object(kBasePlayer), cam = follow_camera(pl);
+    uint32_t pl = object(kBasePlayer), cam = render_camera(pl);
     bool visible = up && (mb->flags & 1) && fresh && cam && pl;
     if (mb->act_seq != act_seen) {                            // the layer's request: a spell's casting
         act_seen = mb->act_seq;
@@ -2002,6 +2044,7 @@ void install() {
     }
     orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
     orig_menu_cursor = ppc_hook("put_menu_cursor__FPUsUsPC10_mh_ivec2_", hook_menu_cursor);
+    orig_set_current_camera = ppc_hook("SetCurrentCamera__Q34nw4r3g3d7ScnRootFi", hook_set_current_camera);
     if (const char* t = std::getenv("MH3_RES_TRACE"); t && !std::strcmp(t, "1"))
         orig_add_resource = ppc_hook("nwAddResource__FPcPv", hook_add_resource);
     if (const char* t = std::getenv("MH3_HUD_TRACE"); t && !std::strcmp(t, "1")) {
