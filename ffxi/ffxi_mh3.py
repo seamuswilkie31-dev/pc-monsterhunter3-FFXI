@@ -253,6 +253,7 @@ class App:
         self._hits_seen = None
         self._hp_seen = None
         self.mh_hud = False            # F9 (or /ui): Monster Hunter's own HUD shown, FFXI's interface hidden
+        self.resting = None            # /heal: {"since", "next", "ticks", "at": where the hunter knelt}
         self._carvings = None          # the port's count of carvings begun, as last seen
         import mh3_text
         self.monster_names = mh3_text.monster_names(cfg.get("mh3_extract"))   # em027: "Aptonoth"
@@ -304,11 +305,13 @@ class App:
                 self.mem.deal_damage(dealt)
                 self.e.owe(dealt, now)
             self.e.prev_monster = m
+        self._rest_step(now, writes, p)
         for name, val in writes.items():
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
         self.player_hp = writes.get("player_hp", p)
         self._play_events()
+        self._motion_step(now)
         self._carve_said()
         self._music(now, p)
         self._weapon_watch()
@@ -453,7 +456,7 @@ class App:
         m2, p2, shown = self.party.fight(now, {
             "engaged": e.engaged, "target": tuple(target) if target else None, "m": mh, "floor": e._floor(),
             "p": ph, "p_max": e.player_max_hp, "level": e.level, "avg_hit": e.avg_hit, "me": e.me,
-            "foe": e.target})
+            "foe": e.target, "e": e})
         if m2 is not None and m2 != mh:
             writes["monster_hp"] = e.prev_monster = m2
         if p2 is not None and p2 != ph:
@@ -461,6 +464,10 @@ class App:
         for what in shown:
             if what[0] == "strike" and self.fx:
                 self._fx_strike(scene, what[1])
+            elif what[0] == "ws" and self.fx:                       # its weapon skill's look, from it
+                actor = self._fx_trust_actor(what[2])
+                if actor is not None:
+                    self._fx_weapon_skill(what[1], actor)
             elif what[0] == "cast" and self.fx:
                 self._fx_trust_cast(what[2], what[1])
             elif what[0] == "spell":
@@ -487,6 +494,56 @@ class App:
         if hasattr(self.mem, "set_engage"):
             self.mem.set_engage(self.e.engaged, self.e.engaged and self.cfg.get("attack_lock_camera", True) is not False)
 
+    REST_FIRST, REST_EVERY = 20.0, 10.0          # FFXI's resting: the first recovery after 20 s, then each 10 s
+
+    def rest(self, on: bool) -> None:
+        """FFXI's /heal: kneeling, your HP and MP come back every 10 s (the first after 20 s), more each time;
+        moving, being hurt, attacking or casting stands you up. /heal again stands you up."""
+        e, now = self.e, time.monotonic()
+        if on and (e.engaged or e.casting):
+            e.say(f"{e.me} cannot rest while fighting.", "warn")
+            return
+        if on:
+            scene = self.fx.get("scene") if self.fx else None
+            at = tuple(float(v) for v in scene["hunter"][:, 3]) if scene else None
+            self.resting = {"since": now, "next": now + self.REST_FIRST, "ticks": 0, "at": at, "hp": None}
+            e.say(f"{e.me} starts resting.", "emote")
+            if self.character:
+                self.character.request("rx0", "rx1")
+        elif self.resting:
+            self.resting = None
+            e.say(f"{e.me} stops resting.", "emote")
+            if self.character:
+                self.character.request(None)
+
+    def _rest_step(self, now: float, writes: dict, p) -> None:
+        """Resting: HP and MP back on FFXI's ticks; stood up by moving, being hurt, fighting or casting."""
+        r, e = self.resting, self.e
+        if not r:
+            return
+        p = writes.get("player_hp", p)
+        scene = self.fx.get("scene") if self.fx else None
+        moved = False
+        if scene and r["at"] is not None:
+            h = scene["hunter"][:, 3]
+            moved = ((float(h[0]) - r["at"][0]) ** 2 + (float(h[2]) - r["at"][2]) ** 2) ** 0.5 > 25.0
+        hurt = p is not None and r["hp"] is not None and p < r["hp"]
+        if moved or hurt or e.engaged or e.casting:
+            self.rest(False)
+            return
+        if now >= r["next"] and p is not None:
+            r["ticks"] += 1
+            r["next"] = now + self.REST_EVERY
+            n = r["ticks"]
+            hp = max(3, round(e.player_max_hp * 0.06)) + 2 * (n - 1)
+            mp = (max(2, round(e.max_mp * 0.06)) + (n - 1)) if e.max_mp else 0
+            if p < e.player_max_hp:
+                p = min(e.player_max_hp, p + hp)
+                writes["player_hp"] = e.prev_player = p
+            if mp:
+                e.mp = min(e.max_mp, e.mp + mp)
+        r["hp"] = p
+
     def set_combat(self, ffxi: bool) -> None:
         """FFXI's combat (Attack fights for you: the pad's Y and B don't swing while it does, the d-pad picks
         the target, a fallen target is carved) or Monster Hunter's (its buttons and d-pad as they were)."""
@@ -503,6 +560,12 @@ class App:
         self._engage_port()
         self.e.say("Monster Hunter's interface (F9: FFXI's)." if self.mh_hud else "FFXI's interface (F9: Monster Hunter's).",
                    "info")
+
+    def _motion_step(self, now: float) -> None:
+        """The character's motions asked for in turn (a weapon skill's: _play_events)."""
+        queue_ = getattr(self, "_motions", None)
+        while queue_ and self.character and now >= queue_[0][0]:
+            self.character.request(queue_.pop(0)[1])
 
     def _carve_said(self) -> None:
         """The port began carving a fallen target: said, as FFXI says what you do."""
@@ -569,6 +632,11 @@ class App:
                 self._drops(int(name))
             if kind == "kill" and self.e.engaged:
                 self.attack(False)
+            if kind == "ws" and self.character:        # the skill's own motions, as its file plays them
+                plan = getattr(self, "_ws_plans", {}).get(name)
+                if plan:
+                    now = time.monotonic()
+                    self._motions = [(now + t, clip) for t, clip in plan["steps"]]
             if kind == "swing":
                 if self.character:                     # FFXI's attack motions in turn
                     self._swing_n = getattr(self, "_swing_n", 0) + 1
@@ -675,14 +743,14 @@ class App:
         target = fx["them"] if hostile and fx["has_target"] else fx["me"]
         fx["effects"].play(f, "main", source or fx["me"], target)
 
-    def _fx_weapon_skill(self, name: str) -> None:
-        """A weapon skill: the race's own file for it (its flash about the character, its strikes on the
-        monster)."""
+    def _fx_weapon_skill(self, name: str, source=None) -> None:
+        """A weapon skill: the race's own file for it (its flash about the one using it, you or a Trust, its
+        strikes on the monster)."""
         fx = self.fx
         anim = D.WS_ANIMATION.get(name)
         f = fx["lib"].weapon_skill(anim) if anim is not None else None
         if f is not None and fx["has_target"]:
-            fx["effects"].play(f, "main", fx["me"], fx["them"])
+            fx["effects"].play(f, "main", source or fx["me"], fx["them"])
 
     def _fx_skillchain(self, name: str) -> None:
         """A skillchain closed: a burst of its element on the monster, the target's part of a spell of it,
@@ -1095,9 +1163,10 @@ class App:
                 if not it or slot not in g.slots_of(it):
                     continue
                 why = g.why_not(it, slot)
-                choices.append({"label": it["name"], "ok": not why, "detail": f"Lv{it['level']}",
+                choices.append({"label": it["name"], "ok": not why, "detail": f"Lv{it['level']}", "icon": iid,
                                 "help": g.describe(it) + (f"\n({why})" if why else ""), "act": ("equip", slot, iid)})
             slots.append({"label": G.SLOT_LABEL[slot], "ok": bool(choices), "detail": worn["name"] if worn else "",
+                          "icon": e.equipment.get(slot, 0),
                           "help": g.describe(worn) if worn else "", "children": choices or
                           [{"label": "(Nothing to wear here)", "ok": False, "detail": ""}]})
         slots.append({"label": "Lockstyle", "ok": True, "detail": "On" if e.lockstyle else "Off", "act": ("lockstyle",),
@@ -1115,7 +1184,7 @@ class App:
             worn = [s for s, i in e.equipment.items() if i == iid]
             first = next((s for s in g.slots_of(it) if s not in e.equipment), (g.slots_of(it) or [None])[0])
             why = g.why_not(it, first) if first else "It can't be worn."
-            items.append({"label": it["name"] + (f" x{n}" if n > 1 else ""), "ok": True,
+            items.append({"label": it["name"] + (f" x{n}" if n > 1 else ""), "ok": True, "icon": iid,
                           "detail": "worn" if worn else f"Lv{it['level']}", "help": g.describe(it), "children": [
                               {"label": "Equip", "ok": bool(first) and not why and not worn, "detail": "",
                                "help": why, "act": ("equip", first, iid)},
@@ -1252,7 +1321,7 @@ class App:
             return ()
         out = []
         for title, nodes, cur, scroll in self._menu_levels(now):
-            rows = tuple((nd["label"], nd["ok"], nd["detail"]) for nd in nodes[scroll:scroll + MENU_ROWS])
+            rows = tuple((nd["label"], nd["ok"], nd["detail"], nd.get("icon", 0)) for nd in nodes[scroll:scroll + MENU_ROWS])
             out.append((title, rows, cur - scroll, scroll > 0, scroll + MENU_ROWS < len(nodes)))
         return tuple(out)
 
@@ -1311,8 +1380,22 @@ class App:
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now), menu_help=self.menu_help(now),
             nameplate=self._nameplate(), linkpearl=self._linkpearl(), **self._target_arrow(now),
             chat_input=self.chat_typing, party=self.party.party_rows() if self.party else (), gm=self.gm,
+            **self._equip_grid(now),
             party_names=self.party.nameplates() if self.party and self.cfg.get("nameplate", True) is not False else (),
             status="" if self.status == "connected" else self.status)
+
+    def _equip_grid(self, now: float) -> dict:
+        """FFXI's Equipment window while the menu's Equipment is open: what's worn in each slot, and the slot
+        the menu points at."""
+        if self.menu is None or not self.gear:
+            return {}
+        import ffxi_gear as G
+        levels = self._menu_levels(now)
+        for i, (title, nodes, cur, _scroll) in enumerate(levels):
+            if title == "Equipment":
+                grid = tuple(int(self.e.equipment.get(s) or 0) for s in G.SLOTS)
+                return {"equip_grid": grid, "equip_cursor": cur if cur < len(G.SLOTS) else -1}
+        return {}
 
     def _target_arrow(self, now: float) -> dict:
         """FFXI's arrow above the port's target (the nearest monster, or the one locked on), bobbing."""
@@ -1440,7 +1523,9 @@ class App:
         word, _, rest = text[1:].partition(" ")
         word, rest = word.lower(), rest.strip().strip('"')
         rest = re.sub(r"\s*<\w+>$", "", rest).strip().strip('"')   # a target in brackets (<t>, <me>): the one there is
-        if word in FM.EMOTES:
+        if word == "heal":                                         # FFXI's resting, HP and MP coming back
+            self.rest(not self.resting if rest.lower() not in ("on", "off") else rest.lower() == "on")
+        elif word in FM.EMOTES:
             code, msg, hold = FM.EMOTES[word]
             e.say(msg.format(me=e.me, their="their"), "emote")
             if self.character:
@@ -1553,6 +1638,12 @@ class App:
                     look = self.gear.look(look)
                 look, style = FM.look_for_weapon(root, race, look, self.mh_weapon)
                 model = FM.load_character(root, race, look, style)
+                # the weapon's skills, each the race's own motions from its file, played as its look plays them
+                skills = {n: D.WS_ANIMATION[n] for _, n in D.WEAPONS.get(self.mh_weapon, {}).get("ws", [])
+                          if n in D.WS_ANIMATION}
+                ws_clips, self._ws_plans = FM.ws_clips(root, race, skills)
+                model["clips"] = model.get("clips", []) + ws_clips
+                self.e.ws_land = {n: p["lands"] for n, p in self._ws_plans.items() if p["lands"]}
                 packed = FM.pack(model, yaw=yaw, mirror=mirror, scale=height / FM.HUME_MALE_HEIGHT)
                 if race.startswith("tarutaru"):
                     # a Tarutaru's run covers 195 units a second to a Hume's 450: kept to the hunter's

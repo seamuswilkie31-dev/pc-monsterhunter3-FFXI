@@ -147,6 +147,8 @@ class UiState:
     party: tuple = ()                     # the Trusts with you: ((name, HP 0..1, MP 0..1 or None, TP), ...)
     gm: bool = False                      # a GM: FFXI's GM icon by your name
     party_names: tuple = ()               # the Trusts' names above their heads: ((name, x, y), ...), -1..1, y up
+    equip_grid: tuple = ()                # the Equipment window, FFXI's 4 x 4: each slot's item id (0: none), in
+    equip_cursor: int = -1                # ffxi_gear.SLOTS' order; the slot the menu points at (-1: none)
     status: str = ""
 
 
@@ -190,6 +192,8 @@ class FfxiUi:
             self._palette(img, d, s)
         if s.menu:
             self._menu(img, d, s)
+        if s.equip_grid:
+            self._equipment(img, d, s)
         if s.menu and s.menu_help:
             self._help(img, d, s)
         if s.status:
@@ -374,9 +378,11 @@ class FfxiUi:
         top = self._log_top(s)
         x0, y1 = 12, (top - 6) if top is not None else H - 12
         for title, rows, cursor, up, down in s.menu:
-            label_w = max([int(d.textlength(t, font=self.f_val)) for t, _, _ in rows]
+            rows = [r if len(r) > 3 else (*r, 0) for r in rows]          # (label, usable, detail, item icon)
+            iconed = 24 if any(r[3] for r in rows) else 0
+            label_w = max([int(d.textlength(r[0], font=self.f_val)) + iconed for r in rows]
                           + [int(d.textlength(title, font=self.f_small))])
-            detail_w = max([int(d.textlength(x, font=self.f_small)) for _, _, x in rows if x] + [0])
+            detail_w = max([int(d.textlength(r[2], font=self.f_small)) for r in rows if r[2]] + [0])
             width = (50 if self.skin else 44) + label_w + (detail_w + 16 if detail_w else 0) + (12 if up or down else 0)
             x1 = x0 + width
             y0 = max(40, y1 - (34 + 22 * max(1, len(rows))))
@@ -386,9 +392,14 @@ class FfxiUi:
                 self._text(d, (x1 - 10, y0 + 8), UP, self.f_small, DIM, anchor="ra")
             if down:
                 self._text(d, (x1 - 10, y1 - 20), DOWN, self.f_small, DIM, anchor="ra")
-            for i, (label, ok, detail) in enumerate(rows):
+            for i, (label, ok, detail, item) in enumerate(rows):
                 y = y0 + 28 + 22 * i
                 indent = 34 if self.skin else 28
+                if iconed:
+                    pic = item_icon(item, 20) if item else None
+                    if pic is not None:                  # FFXI's own icon for the item, before its name
+                        img.alpha_composite(pic if ok else _dimmed(pic), (x0 + indent, y - 1))
+                    indent += iconed
                 if i == cursor:
                     if self.skin:                       # FFXI's glove, and nothing else
                         img.alpha_composite(self.skin.pointer, (x0 + 6, y - 3))
@@ -400,6 +411,29 @@ class FfxiUi:
                     self._text(d, (x1 - (24 if up or down else 12), y + 2), detail, self.f_small,
                                KIND["magic"] if ok else DIM, anchor="ra")
             x0 = x1 + 6
+
+    def _equipment(self, img, d, s: UiState) -> None:
+        """FFXI's Equipment window: the sixteen slots four by four (Main Sub Range Ammo, Head Neck Ear Ear, Body
+        Hands Ring Ring, Back Waist Legs Feet), each worn piece's icon in its box, the menu's slot ringed."""
+        cell, gap = 34, 3
+        x1, y0 = W - 12, 200                              # under the macro bar, over the party
+        x0 = x1 - (2 * 10 + 4 * cell + 3 * gap)
+        y1 = y0 + 30 + 4 * cell + 3 * gap + 10
+        self.window(img, (x0, y0, x1, y1))
+        self._text(d, (x0 + 10, y0 + 7), "Equipment", self.f_small, DIM)
+        names = ("Main", "Sub", "Rng", "Ammo", "Head", "Neck", "Ear", "Ear", "Body", "Hand", "Ring", "Ring",
+                 "Back", "Wst", "Legs", "Feet")
+        for i, iid in enumerate(s.equip_grid[:16]):
+            cx = x0 + 10 + (i % 4) * (cell + gap)
+            cy = y0 + 28 + (i // 4) * (cell + gap)
+            d.rectangle([cx, cy, cx + cell - 1, cy + cell - 1], fill=(6, 10, 26, 200), outline=(70, 82, 120, 255))
+            pic = item_icon(iid, 32) if iid else None
+            if pic is not None:
+                img.alpha_composite(pic, (cx + 1, cy + 1))
+            else:
+                self._text(d, (cx + cell // 2, cy + cell // 2 + 5), names[i], font(10), (90, 100, 130), anchor="ms")
+            if i == s.equip_cursor:
+                d.rectangle([cx - 1, cy - 1, cx + cell, cy + cell], outline=(255, 226, 120, 255), width=2)
 
     def _help(self, img, d, s: UiState) -> None:
         """An item's description, as FFXI shows it: its name first, then its slots, stats and jobs."""
@@ -477,6 +511,31 @@ def pearl_icon(rgb: tuple):
         img = Image.fromarray(a.astype(np.uint8), "RGBA")
     _ICONS[key] = img
     return img
+
+
+def item_icon(iid: int, size: int = 32):
+    """An item's icon from your FFXI (ffxi_items.icon), at size pixels; None without it."""
+    key = ("item", int(iid), size)
+    if key in _ICONS:
+        return _ICONS[key]
+    img = None
+    try:
+        import ffxi_items as I
+        img = I.icon(int(iid))
+        if img is not None and size != 32:
+            img = img.resize((size, size), Image.LANCZOS)
+    except Exception:                                    # noqa: BLE001  no FFXI here: no icon
+        img = None
+    if len(_ICONS) > 600:
+        _ICONS.clear()
+    _ICONS[key] = img
+    return img
+
+
+def _dimmed(pic):
+    out = pic.copy()
+    out.putalpha(out.getchannel("A").point(lambda v: v // 2))
+    return out
 
 
 def _pearl(d: ImageDraw.ImageDraw, cx: int, cy: int, rgb: tuple, r: int = 6) -> None:

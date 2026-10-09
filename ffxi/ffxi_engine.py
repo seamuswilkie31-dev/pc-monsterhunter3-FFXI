@@ -40,6 +40,16 @@ def resolve_skillchain(opener: list[str], closer: list[str]) -> str | None:
     return best
 
 
+def spell_family(name: str) -> str:
+    """A spell's family, one of which is on at a time: its name without its grade, the -ra (party) forms as
+    their own (Protect for Protect III and Protectra II; Dia for Dia II)."""
+    words = name.split()
+    while len(words) > 1 and words[-1] in ("II", "III", "IV", "V", "VI"):
+        words.pop()
+    base = " ".join(words)
+    return {"Protectra": "Protect", "Shellra": "Shell", "Curaga": "Cure"}.get(base, base)
+
+
 @dataclass
 class Engine:
     job: str
@@ -101,9 +111,13 @@ class Engine:
     all_magic: bool = False                          # every spell known from the start, whatever the job and level (the layer: on)
     lockstyle: dict = field(default_factory=dict)    # /lockstyle on: the look kept (slot -> model), whatever is worn
     gear_serial: int = 0                             # the character creator's equipment last handed over (its save)
+    ws_land: dict = field(default_factory=dict)      # a weapon skill -> seconds until its blow lands (its look's;
+                                                     # the layer's: none, at once)
+    landing: list = field(default_factory=list)      # weapon skills under way: (when, name, damage)
     engaged: bool = False                            # FFXI's Attack: swinging at the target on the weapon's delay
     next_swing: float = 0.0
     reach_said: float = -99.0
+    _now: float = 0.0                                # the last tick's time
 
     def __post_init__(self):
         self.set_jobs(self.job, self.sub)
@@ -244,6 +258,44 @@ class Engine:
             return list(dict.fromkeys(learnt + rest)) + self.trusts
         return self._learnt("spells") + self.trusts
 
+    # --- others' actions (the Trusts'): their buffs yours, their debuffs your target's, their weapon skills in
+    #     your skillchains, as in FFXI ---
+    def family_active(self, family: str, on_foe: bool, margin: float = 15.0) -> bool:
+        """Whether a spell of that family (spell_family: Protect for Protect II, Protectra) is on you (on_foe:
+        on your target) with more than margin seconds left."""
+        table = self.debuffs if on_foe else self.buffs
+        return any(spell_family(src) == family and b["until"] - self._now > margin for (src, _e), b in table.items())
+
+    def cast_by(self, who: str, name: str, now: float, m, on_foe: bool) -> None:
+        """Another's spell gone off (a Trust's): its buffs on you, its debuffs on your target, a weaker one of
+        its family replaced (a stronger Protect overwrites, as FFXI's does)."""
+        sp = D.SPELLS.get(name, {})
+        kind = "debuff" if on_foe else "buff"
+        fx = [f for f in sp.get("fx", []) if f[0] == kind]
+        if not fx or (on_foe and (m is None or m <= 0)):
+            return
+        table = self.debuffs if on_foe else self.buffs
+        family = spell_family(name)
+        for key in [k for k in table if spell_family(k[0]) == family]:
+            del table[key]
+        for _, eff, power, secs in fx:
+            table[(name, eff)] = {"power": power, "until": now + secs}
+        if on_foe:
+            self.say(f"{who} casts {name}. The {self.target} receives the effect of {name}.", "magic")
+        else:
+            self.say(f"{who} casts {name}. {self.me} gains the effect of {name}.", "heal")
+
+    def ws_by(self, who: str, name: str, dmg: int, now: float, m):
+        """Another's weapon skill (a Trust's): its damage, and the skillchain it opens or closes with yours."""
+        if m is None or m <= 0:
+            return m
+        self.say(f"{who} uses {name}. The {self.target} takes {dmg} points of damage.", "ws")
+        ws = D.WEAPON_SKILLS.get(name)
+        if ws:
+            dmg += self._skillchain(ws["props"], now, dmg)
+        self._wake()
+        return max(self._floor(), m - dmg)
+
     def owe(self, dealt: int, now: float) -> None:
         """FFXI's damage handed to the game: when it comes off the monster's HP, it isn't one of your blows."""
         self.ffxi_owed += int(dealt)
@@ -348,6 +400,7 @@ class Engine:
     # ================================================================================================
     def tick(self, now: float, monster_hp, player_hp, max_hp=None, monster_id=None, monster_max=None) -> dict:
         writes: dict = {}
+        self._now = now
         if max_hp:
             self.player_max_hp = int(max_hp)
         if monster_id != self.monster_id:                 # another monster: its own debuffs, its own check
@@ -394,6 +447,9 @@ class Engine:
 
         if self.casting and now >= self.cast_done:
             m, p = self._finish_cast(now, m, p)
+        while self.landing and now >= self.landing[0][0]:        # a weapon skill's blow landing
+            _, name, dmg = self.landing.pop(0)
+            m, p = self._ws_lands(name, now, dmg, m, p)
 
         if m is not None and m != monster_hp:
             writes["monster_hp"] = self.prev_monster = m
@@ -652,6 +708,19 @@ class Engine:
         dmg = int(dmg)
         self.say(f"{self.me} uses {name}.", "ws")
         self._event("ws", name)                                          # its look (the layer's effects)
+        delay = float(self.ws_land.get(name) or 0.0)
+        if delay > 0:                                                    # the blow lands as its look shows it
+            self.landing.append((now + delay, name, dmg))
+            self.landing.sort(key=lambda t: t[0])
+            self.next_swing = max(self.next_swing, now + delay + 1.0)    # no swing over it
+            return m, p
+        return self._ws_lands(name, now, dmg, m, p)
+
+    def _ws_lands(self, name: str, now: float, dmg: int, m, p):
+        """A weapon skill's blow landing: its damage, the skillchain it closes, its added effects."""
+        if m is None or m <= 0:
+            return m, p
+        ws = D.WEAPON_SKILLS[name]
         if dmg > 0:
             self.say(f"The {self.target} takes {dmg} points of damage.", "damage")
         dmg += self._skillchain(ws["props"], now, dmg)

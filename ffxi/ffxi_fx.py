@@ -394,6 +394,32 @@ def routine_entries(b: bytes, at: int, size: int) -> list[Entry]:
     return root
 
 
+MOTION, LANDS = 0x05, "mdam"             # a motion on the caster (its name's three letters and ?: every
+                                         # part); the routine that shows the target hurt: the blow landing
+
+
+def motion_schedule(b: bytes) -> tuple[list[tuple[int, str, int]], int | None]:
+    """A weapon skill's file (the race's): what its `main` routine plays on the caster, in order, (tick from
+    its start, the motion's three letters, its ticks), and the tick its blow lands (its call of mdam)."""
+    for at, nm, typ, size in A.chunks(b):
+        if typ == ROUTINE and nm == b"main":
+            out, lands, clock = [], None, 0
+
+            def walk(entries):
+                nonlocal clock, lands
+                for e in entries:
+                    if e.op == MOTION and e.ref and len(e.ref) >= 3:
+                        out.append((clock, e.ref[:3], e.dur))
+                    elif e.op in CALLS and e.ref == LANDS and lands is None:
+                        lands = clock
+                    clock += e.delay
+                    if e.body and e.op == BLOCK_OPEN:
+                        walk(e.body)
+            walk(routine_entries(b, at, size))
+            return out, lands
+    return [], None
+
+
 @dataclass
 class Spawn:
     tick: float

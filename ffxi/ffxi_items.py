@@ -18,6 +18,9 @@ a text's bytes 0x1C past its offset): the name, then the description, whose pros
 ("DEF:10 HP+15 AGI+2"). Armor: ROM/118/109.DAT and ROM/286/73.DAT; weapons: ROM/118/108.DAT.
 The look each piece shows (its model number in its slot's gear table) isn't in those files: LandSandBoat's
 item_equipment table has it (MId), fetched once into the asset folder too.
+Each block holds the item's icon too (icon): at 0x280 its size (u32), then an image as the DATs' are (a flag
+0x91, 16 letters naming it, a BITMAPINFOHEADER: 32 x 32, 8 bits), a palette of 256 BGRA (FFXI's alpha, 128
+opaque), the 32 x 32 indices, rows from the bottom; cut out the first time one is shown, kept as a PNG.
 """
 from __future__ import annotations
 
@@ -120,6 +123,55 @@ def parse_stats(desc: str) -> dict:
         if key and key not in stats:
             stats[key] = sign * int(m.group(4)) * (1 if not m.group(5) else 1)
     return stats
+
+
+_ICON_FILES: list = []                  # (first id, count, stride, path) of each item file, once read
+
+
+def icon(iid: int, root: Path | None = None):
+    """The item's icon (a 32 x 32 RGBA PIL image) from your installation, kept in the asset folder's icons;
+    None if it can't be found."""
+    from PIL import Image
+    p = A.asset_dir() / "icons" / f"{int(iid)}.png"
+    if p.exists():
+        try:
+            return Image.open(p).convert("RGBA")
+        except OSError:
+            pass
+    try:
+        if not _ICON_FILES:
+            import ffxi_model as M
+            base = M.ffxi_root(None) if root is None else Path(root)
+            for rel in WEAPON_FILES + ARMOR_FILES:
+                f = base / rel
+                if f.exists():
+                    with open(f, "rb") as fh:
+                        head = fh.read(0x1400 * 8)
+                    s = stride_of(head)
+                    first = struct.unpack_from("<I", rotate(head[:4]))[0]
+                    _ICON_FILES.append((first, f.stat().st_size // s, s, f))
+        for first, count, s, f in _ICON_FILES:
+            if first <= iid < first + count:
+                with open(f, "rb") as fh:
+                    fh.seek((iid - first) * s)
+                    blk = rotate(fh.read(s))
+                if struct.unpack_from("<I", blk, 0)[0] != iid:
+                    return None
+                at = blk.find(b"\x91", 0x280, 0x2A0)
+                hdr = at + 17
+                if at < 0 or struct.unpack_from("<IiiHH", blk, hdr) != (40, 32, 32, 1, 8):
+                    return None
+                pal = np.frombuffer(blk, np.uint8, 1024, hdr + 40).reshape(256, 4)
+                px = np.frombuffer(blk, np.uint8, 32 * 32, hdr + 40 + 1024).reshape(32, 32)
+                rgba = pal[px][::-1][..., [2, 1, 0, 3]].copy()
+                rgba[..., 3] = np.minimum(255, rgba[..., 3].astype(np.int32) * 2).astype(np.uint8)
+                img = Image.fromarray(rgba, "RGBA")
+                p.parent.mkdir(parents=True, exist_ok=True)
+                img.save(p)
+                return img
+    except (OSError, ValueError, struct.error):
+        return None
+    return None
 
 
 def read_items(root: Path, files: tuple[str, ...], weapons: bool) -> dict[int, dict]:

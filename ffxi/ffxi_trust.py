@@ -2,7 +2,9 @@
 
 What each Trust is: FFXI's trust spells (896 on) and the NPC each calls, as LandSandBoat's database
 records them (github.com/LandSandBoat/server, sql/spell_list.sql and mob_pools.sql: a reference, fetched
-once and kept with the extracted assets, as ffxi_items.py does the equipment's looks). Each one's look
+once and kept with the extracted assets, as ffxi_items.py does the equipment's looks); and what each
+casts and uses, its own (mob_spell_lists.sql: each spell from a level; mob_skill_lists.sql and
+mob_skills.sql: its weapon skills). Each one's look
 is an NPC model of its own (the pool's model number); the client's file for model m is file m + 96907
 (FTABLE's ROM/309/20 is model 3000, Shantotto's, and the numbers run on together from there): the
 skeleton, the meshes, the textures and the motions in one file, the motions named as a player's
@@ -75,18 +77,22 @@ def build_list(root: Path | None = None) -> list[dict]:
         if FIRST_SPELL <= sid <= LAST_SPELL:
             spells[sid] = {"key": m.group(2), "cast": int(m.group(8)) / 1000.0, "recast": int(m.group(9)) / 1000.0,
                            "anim": int(m.group(12))}             # its effect: file 2800 + this (all 939: the call)
+    spell_lists, skill_lists = _own_lists(dest)
     out = []
-    for m in re.finditer(r"INSERT INTO `mob_pools` VALUES \((\d+),'[^']*','([^']*)',\d+,0x([0-9A-Fa-f]{40}),(\d+),(\d+),"
-                         r"(\d+),(\d+),(\d+)", _fetch(dest, "mob_pools")):
+    for m in re.finditer(r"INSERT INTO `mob_pools` VALUES \((\d+),'[^']*','([^']*)',\d+,0x([0-9A-Fa-f]{40}),([-\d,]+)\)",
+                         _fetch(dest, "mob_pools")):
         sid = int(m.group(1)) - POOL_BASE
         if sid not in spells:
             continue
         look = bytes.fromhex(m.group(3))
         model = int.from_bytes(look[2:4], "little")
-        t = {**spells[sid], "spell": sid, "name": display_name(spells[sid]["key"]), "model": model,
-             "job": JOBS[int(m.group(4))] if int(m.group(4)) < len(JOBS) else "",
-             "sub": JOBS[int(m.group(5))] if 0 < int(m.group(5)) < len(JOBS) else "",
-             "delay": int(m.group(7)) / 60.0, "damage": int(m.group(8)) / 100.0}
+        v = [int(x) for x in m.group(4).split(",")]           # mJob, sJob, cmbSkill, cmbDelay, cmbDmgMult, ...,
+        t = {**spells[sid], "spell": sid, "name": display_name(spells[sid]["key"]), "model": model,   # [16] spellList,
+             "job": JOBS[v[0]] if v[0] < len(JOBS) else "",                                          # [19] skill_list_id
+             "sub": JOBS[v[1]] if 0 < v[1] < len(JOBS) else "",
+             "delay": v[3] / 60.0, "damage": v[4] / 100.0,
+             "spells": spell_lists.get(v[16], []) if len(v) > 16 else [],
+             "skills": skill_lists.get(v[19], []) if len(v) > 19 else []}
         p = S.file_path(root, model + MODEL_FILE) if root and model >= 3000 else None
         t["file"] = str(p) if p and p.exists() else None
         out.append(t)
@@ -95,12 +101,42 @@ def build_list(root: Path | None = None) -> list[dict]:
     return out
 
 
+def _norm(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _own_lists(dest: Path) -> tuple[dict, dict]:
+    """Each Trust's own spells (its list's number -> [[the layer's name for it, the level it casts it from],
+    ...]: those the layer knows, the -ra forms as their single ones') and weapon skills (number -> names)."""
+    import ffxi_data as D
+    keys = {int(m.group(1)): m.group(2) for m in
+            re.finditer(r"INSERT INTO `spell_list` VALUES \((\d+),'([^']+)'", _fetch(dest, "spell_list"))}
+    known = {_norm(n): n for n in D.SPELLS}
+    spells: dict = {}
+    for m in re.finditer(r"INSERT INTO `mob_spell_lists` VALUES \('[^']*',(\d+),(\d+),(\d+),(\d+)\)",
+                         _fetch(dest, "mob_spell_lists")):
+        key = keys.get(int(m.group(2)), "")
+        name = known.get(_norm(key)) or known.get(_norm(key.replace("protectra", "protect").replace("shellra", "shell")))
+        if name:
+            spells.setdefault(int(m.group(1)), []).append([name, int(m.group(3))])
+    names = {int(m.group(1)): m.group(2) for m in
+             re.finditer(r"INSERT INTO `mob_skills` VALUES \((\d+),\d+,'([^']+)'", _fetch(dest, "mob_skills"))}
+    skills: dict = {}
+    for m in re.finditer(r"INSERT INTO `mob_skill_lists` VALUES \('[^']*',(\d+),(\d+)\);[ \t]*(?:--[ \t]*([^\r\n]*))?",
+                         _fetch(dest, "mob_skill_lists")):
+        label = (m.group(3) or "").strip() or display_name(names.get(int(m.group(2)), ""))
+        if label:
+            skills.setdefault(int(m.group(1)), []).append(label)
+    return spells, skills
+
+
 def load_list(root: Path | None = None) -> list[dict]:
     """The Trusts (build_list's), read from trusts.json, made first if it isn't there."""
     p = A.asset_dir() / "trusts.json"
     try:
         out = json.loads(p.read_text(encoding="utf-8"))
-        if out and "delay" in out[0] and "anim" in out[0] and (root is None or any(t.get("file") for t in out)):
+        if out and "delay" in out[0] and "anim" in out[0] and "skills" in out[0] and \
+                (root is None or any(t.get("file") for t in out)):
             return out
     except (OSError, ValueError):
         pass
@@ -156,19 +192,63 @@ def _cast_motion(school: str) -> str:
     return FM.CAST_MOTIONS.get(school, "")
 
 
+def _known(trust: dict, level: int) -> list[str]:
+    """The spells it casts at that level: its own list's (LandSandBoat's), else its jobs' (the subjob's at
+    half the level)."""
+    import ffxi_data as D
+    if trust.get("spells"):
+        return [n for n, lv in trust["spells"] if lv <= level]
+    out = []
+    for job, lv_scale in ((trust["job"], 1), (trust["sub"], 2)):
+        out += [n for lv, n in D.JOBS.get(job, {}).get("spells", []) if lv * lv_scale <= level]
+    return out
+
+
 def _best(trust: dict, level: int, kind: str, mp: float) -> str | None:
-    """The strongest of its jobs' spells of that kind (heal, damage) it knows at that level and has MP for."""
+    """The strongest of the spells of that kind (heal, damage) it knows at that level and has MP for."""
     import ffxi_data as D
     best, power = None, 0.0
-    for job, lv_scale in ((trust["job"], 1), (trust["sub"], 2)):
-        for lv, n in D.JOBS.get(job, {}).get("spells", []):
-            sp = D.SPELLS.get(n)
-            if not sp or lv * lv_scale > level or sp["mp"] > mp:
-                continue
-            for fx in sp["fx"]:
-                if fx[0] == kind and fx[1] > power:
-                    best, power = n, fx[1]
+    for n in _known(trust, level):
+        sp = D.SPELLS.get(n)
+        if not sp or sp["mp"] > mp:
+            continue
+        for fx in sp["fx"]:
+            if fx[0] == kind and fx[1] > power:
+                best, power = n, fx[1]
     return best
+
+
+# what a Trust casts on you (a party's: the self-only ones, Blink, Stoneskin, an Enspell, kept for itself), and
+# on the foe (not those that stop the fight: sleep, bind, stun)
+ON_YOU = ("Protect", "Shell", "Haste", "Refresh", "Regen", "Auspice", "Valor Minuet", "Sword Madrigal",
+          "Blade Madrigal", "Advancing March", "Victory March", "Mage's Ballad", "Army's Paeon", "Knight's Minne",
+          "Indi-")
+ON_FOE = ("Dia", "Bio", "Slow", "Paralyze", "Blind", "Poison", "Gravity", "Battlefield Elegy", "Carnage Elegy",
+          "Foe Requiem", "Burn", "Frost", "Shock", "Drown", "Pyrohelix", "Cryohelix", "Ionohelix", "Noctohelix",
+          "Luminohelix", "Kurayami", "Hojo", "Dokumori", "Indi-Frailty", "Indi-Poison", "Indi-Slow")
+
+
+def _enhance(trust: dict, level: int, mp: float, on_foe: bool, engine) -> str | None:
+    """A buff for you (on_foe: a debuff for the foe) it knows, has MP for, and whose kind isn't on already:
+    the strongest of each kind, in its list's order."""
+    import ffxi_data as D
+    from ffxi_engine import spell_family
+    kind, allowed = ("debuff", ON_FOE) if on_foe else ("buff", ON_YOU)
+    best: dict = {}
+    for n in _known(trust, level):
+        sp = D.SPELLS.get(n)
+        if not sp or sp["mp"] > mp or not n.startswith(allowed):
+            continue
+        power = max((abs(f[2]) for f in sp["fx"] if f[0] == kind), default=None)
+        if power is None:
+            continue
+        fam = spell_family(n)
+        if fam not in best or power > best[fam][1]:
+            best[fam] = (n, power)
+    for fam, (n, _p) in best.items():
+        if not engine.family_active(fam, on_foe):
+            return n
+    return None
 
 
 @dataclass
@@ -336,6 +416,7 @@ class Party:
         self._fought = now
         m_hp, p_hp, shown = f["m"], f["p"], []
         target, foe, me = f["target"], f["foe"], f["me"]
+        engine = f.get("e")                                   # the layer's: buffs, debuffs, skillchains
         lf = D.level_factor(self.level)
         for mb in self.members:
             if not mb.ready:
@@ -376,6 +457,9 @@ class Party:
                                   * random.uniform(0.9, 1.1))
                         self.say(f"{name} casts {spell}. The {foe} takes {dmg} points of damage.", "magic")
                         m_hp = max(f["floor"], m_hp - dmg)
+                if engine is not None and any(fx[0] in ("buff", "debuff") for fx in sp.get("fx", [])) and \
+                        not any(fx[0] in ("damage", "drain", "heal") for fx in sp.get("fx", [])):
+                    engine.cast_by(name, spell, now, m_hp, on_foe)      # yours, or the foe's
                 shown.append(("spell", spell, mb.slot))
                 continue
             if mb.casting:
@@ -388,8 +472,20 @@ class Party:
                     if cure:
                         shown.append(self._begin(mb, cure, now, False, me))
                         continue
+            # a buff for you (Protect, Shell, Haste, Refresh, a song...), fighting or not, again once it wears off
+            if engine is not None and now >= mb.next_spell:
+                buff = _enhance(t, self.level, mb.mp, False, engine)
+                if buff:
+                    shown.append(self._begin(mb, buff, now, False, me))
+                    continue
             if not mb.engaged:
                 continue
+            # a debuff on the foe (Dia, Slow, Paralyze, Poison...), again once it wears off
+            if engine is not None and now >= mb.next_spell:
+                debuff = _enhance(t, self.level, mb.mp, True, engine)
+                if debuff:
+                    shown.append(self._begin(mb, debuff, now, True, foe))
+                    continue
             # magic at the foe
             if now >= mb.next_spell and t["job"] in NUKERS:
                 nuke = _best(t, self.level, "damage", mb.mp)
@@ -401,13 +497,19 @@ class Party:
             if now >= mb.next_swing and self.in_reach(mb, target):
                 mb.next_swing = now + max(2.0, t.get("delay", 4.0)) * random.uniform(0.95, 1.1)
                 if mb.tp >= 1000:
-                    ws = WEAPON_SKILL.get(t["job"], "Savage Blade")
+                    # its own weapon skills (those that chain first), else its job's usual one
+                    own = [s for s in t.get("skills", []) if s in D.WEAPON_SKILLS] or t.get("skills", [])
+                    ws = random.choice(own) if own else WEAPON_SKILL.get(t["job"], "Savage Blade")
                     dmg = int(f["avg_hit"] * 2.6 * max(0.4, t.get("damage", 1.0)) * random.uniform(0.85, 1.15))
-                    self.say(f"{name} uses {ws}. The {foe} takes {dmg} points of damage.", "ws")
                     mb.tp = 0.0
-                    m_hp = max(f["floor"], m_hp - dmg)
+                    if engine is not None:
+                        m_hp = engine.ws_by(name, ws, dmg, now, m_hp)        # its skillchains with yours
+                    else:
+                        self.say(f"{name} uses {ws}. The {foe} takes {dmg} points of damage.", "ws")
+                        m_hp = max(f["floor"], m_hp - dmg)
                     if mb.pm:
                         mb.pm.request(f"at{mb.swing_n % 3}")
+                    shown.append(("ws", ws, mb.slot))
                     shown.append(("strike", True))
                     continue
                 mb.swing_n += 1

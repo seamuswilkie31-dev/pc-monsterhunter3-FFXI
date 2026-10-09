@@ -780,6 +780,47 @@ def emote_clips(own: list[list[dict]], emote_sources: list[list[dict]]) -> list[
     return clips
 
 
+def ws_clips(root: Path, race: str, animations: dict, file_path=None) -> tuple[list[dict], dict]:
+    """The race's own motions for weapon skills (animations: a skill's name -> its animation number): each
+    skill's file (ffxi_fx.WS_BASE + the number - 1) holds them, its `main` routine playing them on the
+    character. Clips named ws<n><motion> (battle actions), and each skill's plan: (the seconds after it
+    begins each is asked for, the clip) and when its blow lands."""
+    import hashlib
+    import pickle
+    import ffxi_fx as FX
+    import ffxi_sound as S
+    file_path = file_path or S.file_path
+    base = FX.WS_BASE.get(race)
+    clips, plans, same = [], {}, {}
+    if base is None:
+        return clips, plans
+    for i, (name, anim) in enumerate(sorted(animations.items())):
+        p = file_path(root, base + int(anim) - 1)
+        if not p or not p.exists():
+            continue
+        try:
+            b = p.read_bytes()
+            motions = load(p)["motions"]
+        except (OSError, ValueError):
+            continue
+        order, lands = FX.motion_schedule(b)
+        steps = []
+        for tick, m3, _dur in order:
+            parts = [m for m in motions if m["name"][:3] == m3 and len(m["name"]) == 4]
+            if not parts:
+                continue
+            # many skills share a motion (a sword's b00, b02): one clip for all of them (the port holds 96)
+            key = hashlib.sha1(pickle.dumps([(m["name"], m["frames"], m["rate"], m["tracks"]) for m in parts])).digest()
+            label = same.get(key)
+            if label is None:
+                label = same[key] = f"ws{i:02d}{m3}"
+                clips.append({"name": label, "parts": parts, "kind": ACTION, "set": BATTLE})
+            steps.append((tick / 60.0, label))
+        if steps:
+            plans[name] = {"steps": steps, "lands": (lands / 60.0) if lands is not None else None}
+    return clips, plans
+
+
 def load_character(root: Path, race: str, look: dict, style: int | None = None, file_path=None,
                    loader=None, motions: bool = True) -> dict:
     """A player character: the race's skeleton, its equipment's meshes and textures (look: slot ->
