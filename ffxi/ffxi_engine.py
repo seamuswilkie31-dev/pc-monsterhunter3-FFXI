@@ -79,6 +79,9 @@ class Engine:
     monster_max: int = 0
     dot_carry: float = 0.0                           # damage over time not yet whole, to the next tick
     ffxi_owed: int = 0                               # FFXI's damage handed to the game, not yet off the monster's HP
+    owed_at: float = 0.0                             # when it was last handed over (not taken in 3 s: let go)
+    ffxi_combat: bool = True                         # FFXI's combat (auto-attack, the d-pad's targets, carving), or
+                                                     # Monster Hunter's (its buttons, its d-pad)
     checked: bool = False                            # this monster's /check said
     chain: int = -1
     last_kill: float = -999.0
@@ -183,7 +186,7 @@ class Engine:
     def swing(self, now: float, m, in_reach: bool):
         """A swing when its time has come (none while casting): a hit, a critical one or a miss, TP for a
         hit; the monster's HP after it."""
-        if not self.engaged or m is None or self.casting or now < self.next_swing:
+        if not self.engaged or m is None or m <= 0 or self.casting or now < self.next_swing:
             return m
         self.next_swing = now + self.swing_delay
         if not in_reach:
@@ -240,6 +243,11 @@ class Engine:
             rest = [n for j in D.JOBS.values() for _, n in sorted(j["spells"], key=lambda t: t[0]) if n in D.SPELLS]
             return list(dict.fromkeys(learnt + rest)) + self.trusts
         return self._learnt("spells") + self.trusts
+
+    def owe(self, dealt: int, now: float) -> None:
+        """FFXI's damage handed to the game: when it comes off the monster's HP, it isn't one of your blows."""
+        self.ffxi_owed += int(dealt)
+        self.owed_at = now
 
     def set_all_magic(self, on: bool) -> None:
         """Every spell known (all unlocked), or those your jobs have learnt by their levels."""
@@ -352,6 +360,8 @@ class Engine:
         m, p = monster_hp, player_hp
 
         # your hits on the monster (the game's)
+        if self.ffxi_owed and now - self.owed_at > 3.0:      # FFXI's the game never took (it couldn't be hurt)
+            self.ffxi_owed = 0
         if m is not None and self.prev_monster is not None:
             delta = self.prev_monster - m
             if delta > 0 and self.ffxi_owed:                 # the game taking off FFXI's own: not your blow
@@ -820,7 +830,8 @@ class Engine:
     def progress(self) -> dict:
         return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp),
                 "inventory": list(self.inventory), "equipment": dict(self.equipment), "all_jobs": self.all_jobs,
-                "lockstyle": dict(self.lockstyle), "gear_serial": self.gear_serial, "all_magic": self.all_magic}
+                "lockstyle": dict(self.lockstyle), "gear_serial": self.gear_serial, "all_magic": self.all_magic,
+                "ffxi_combat": self.ffxi_combat}
 
     def load_progress(self, d: dict) -> None:
         self.levels = {k: int(v) for k, v in d.get("levels", {}).items() if k in D.JOBS}
@@ -831,6 +842,7 @@ class Engine:
         self.lockstyle = {k: int(v) for k, v in d.get("lockstyle", {}).items()}
         self.gear_serial = int(d.get("gear_serial", 0))
         self.all_magic = bool(d.get("all_magic", self.all_magic))
+        self.ffxi_combat = bool(d.get("ffxi_combat", self.ffxi_combat))
         job, sub = d.get("job", self.job), d.get("sub", self.sub)
         if job in D.JOBS and (sub is None or (sub in D.JOBS and sub != job)):
             self.set_jobs(job, sub)

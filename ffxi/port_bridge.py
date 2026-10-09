@@ -20,6 +20,9 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     map[16]: the map's code module linked now
     chat_open, chat_seq, chat_line[128], chat_sent[128]: FFXI's chat line ("/" opens it in the game's
         window; the port captures the typing): open, lines sent so far, what's typed, the last sent
+    mute_se[8], companions[6]: the hunter's sounds silenced; the Trusts, where each stands
+    auto_carve, mh_hud, carve_seq, reserved[5]: FFXI's combat (a fallen target carved: the layer's word,
+        the port's count of carvings begun); Monster Hunter's HUD shown in place of FFXI's (F9)
 
 A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
 local hunter's object, or in the monster whose HP the game last changed).
@@ -32,7 +35,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 10
+VERSION = 11
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -60,8 +63,10 @@ MUTE_AT = CHAT_AT + CHAT.size          # the hunter's sounds silenced: 8 of kind
 COMPANIONS_AT = MUTE_AT + 8 * 4         # the Trusts: where each stands ([0] unused)
 COMPANION = struct.Struct("<I4fII2f2fI")  # shown, x y z, yaw, battle, dead, shadow radius and darkness (the
 COMPANION_SET = struct.Struct("<I4fII2f")  # layer's); where its name goes, x y, and whether it shows (the port's)
-SIZE = COMPANIONS_AT + 6 * COMPANION.size
-assert SIZE == 1592, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+COMBAT_AT = COMPANIONS_AT + 6 * COMPANION.size
+COMBAT = struct.Struct("<3I5I")         # auto_carve, mh_hud, carve_seq, reserved
+SIZE = COMBAT_AT + COMBAT.size
+assert SIZE == 1624, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
 # the Classic's buttons, as the port's filter reports them (the pad's: by position)
 CL_UP, CL_LEFT, CL_X, CL_A, CL_Y, CL_B, CL_DOWN, CL_RIGHT = 0x0001, 0x0002, 0x0008, 0x0010, 0x0020, 0x0040, 0x4000, 0x8000
@@ -240,7 +245,7 @@ class PortBackend:
         x, y, ok = struct.unpack_from("<2fI", self.mm, COMPANIONS_AT + slot * COMPANION.size + COMPANION_SET.size)
         return (x, y) if ok else None
 
-    # --- FFXI's damage to monsters, dealt through the game (its pending damage: their falls, their carving) ---
+    # --- FFXI's damage to monsters, dealt through the game (as a hunter's blow: their flinches, falls, carving) ---
     def deals_damage(self) -> bool:
         return True
 
@@ -254,6 +259,19 @@ class PortBackend:
     def set_mh_swings(self, on: bool) -> None:
         """The game's own attack buttons while FFXI's Attack fights (off: dropped while engaged)."""
         put_u32(self.mm, BGM_AT + 12, 0 if on else 1)
+
+    def set_auto_carve(self, on: bool) -> None:
+        """FFXI's combat: the target, once it falls, walked up to and carved (the pad's own stick or a
+        button stops it)."""
+        put_u32(self.mm, COMBAT_AT, 1 if on else 0)
+
+    def carvings(self) -> int:
+        """How many carvings the port has begun (a fallen target walked up to and carved)."""
+        return u32(self.mm, COMBAT_AT + 8)
+
+    def set_mh_hud(self, on: bool) -> None:
+        """Monster Hunter's own HUD drawn (the FFXI interface hidden by the layer), or FFXI's in its place."""
+        put_u32(self.mm, COMBAT_AT + 4, 1 if on else 0)
 
     def set_dpad_target(self, mode: int) -> None:
         """The d-pad changes the target: 0 never, 1 while engaged or locked on, 2 always (the game losing it)."""

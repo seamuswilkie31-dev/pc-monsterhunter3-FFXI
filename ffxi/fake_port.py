@@ -264,7 +264,7 @@ def test() -> int:
     app.step()
     check(app.menu == {"stack": [[0, 0]]}, "the pad's X opens the command menu")
     titles = [r[0] for r in app.menu_view(0)[0][1]]
-    check(titles == ["Attack", "Magic", "Abilities", "Pouch Item", "Job"], f"its first level, FFXI's order ({titles})")
+    check(titles == ["Attack", "Magic", "Abilities", "Pouch Item", "Job", "Config"], f"its first level, FFXI's order ({titles})")
     press(mm, P.CL_DOWN); press(mm, P.CL_B)               # Magic
     app.step()
     view = app.menu_view(0)

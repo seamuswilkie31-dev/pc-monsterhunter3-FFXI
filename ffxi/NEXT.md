@@ -1,6 +1,36 @@
 # FFXI layer — next session
 
-**River's third round (2026-10-06)**: built, NOT YET checked in play.
+**River's fourth round (2026-10-08)**: built, NOT YET checked in play.
+- FFXI's damage reaching monsters, for real this time. The third round's +0x928 is the monster's POISON
+  slot: its ailments (fn_801327CC) clear it each frame just before the damage routine reads it, so what the
+  port wrote between frames never landed (auto-attack, magic, Trusts: all "doing nothing"). Now FFXI's
+  damage waits in the bridge (game_damage) for that monster's damage routine, fn_8011F6B8, newly hooked
+  (tools/mh3-hooks.txt: the code translated again), and goes in as a blow on its first part (ENEMY_WORK
+  +0x7CA, the s16 per part the hunter's blows add to through fn_8011EF88, cleared at each frame's start by
+  fn_8029A200): the routine takes it off the HP with the hunter's, the part's flinch counter (+0x83A) runs
+  down (flinches), and at none left its fall. hook_em_hp keeps FFXI's part out of the hunter's blows;
+  HP not moving (a state it can't be hurt in) puts it back to wait, dropped after 2 s; the engine lets its
+  own count of it go after 3 s. To check: wiiboot.log "took FFXI's ... as a blow: HP a -> b", the monster
+  flinching, falling, carved.
+- Combat modes (the menu's new Config, /combat ffxi|mh, /mhcombat; saved; config combat_mode = "ffxi"):
+  FFXI's: Y and B dropped while Attack fights, the d-pad always the target's (dpad_target "auto"), a fallen
+  target carved (auto_carve). Monster Hunter's: the game's buttons and d-pad. The d-pad: when nothing lies
+  that way on screen it cycles by distance (up/left nearer, down/right further).
+- Fallen monsters aren't targets (kept 1.5 s first, so the layer sees the fall: EXP, drops, disengage); the
+  lock lets go.
+- Auto-carve (carve_frame, Block auto_carve/carve_seq): the last frame's target's HP to none; after 2 s the
+  hunter is walked to it (the left stick, by the camera's view matrix rows) until within 110 + 0.35 x its
+  height or no nearer for 40 frames, then the Classic's A every half second, up to 14 s or the carcass
+  gone; the pad's own stick or a button stops it. Assumes A is MH3's carve button on the Classic.
+- F9 (hotkeys ui_swap; /ui; Config, Interface): Monster Hunter's HUD (hook_cockpit, Block mh_hud) in place
+  of FFXI's interface (ui_state empty but the menu and the chat line).
+- The launcher's name (FFXI_NAME, 15 at most; empty: config's name).
+- Linkpearl: FFXI's own, "ustats"' third row's first (white, tinted x2 by the colour), its alpha doubled
+  (FFXI's 128 is opaque; the GM icon's too: it was half see-through).
+- GM: the name red (GM_NAME), and an aura (ModelBlock flags 4, wiikit video_model_aura: six faint copies
+  either side swaying across the view, just behind the model, blended; gm_aura = false for none).
+
+**River's third round (2026-10-06)**: built; the damage did NOT work (see the fourth round).
 - FFXI's damage dealt as the game's own: added to the monster's pending damage (ENEMY_WORK +0x928, s16),
   which its damage routine (fn_8011F6B8, each frame) takes off its HP, running its death when none is
   left (the HP written directly never died, nor flinched). The layer counts what it has dealt

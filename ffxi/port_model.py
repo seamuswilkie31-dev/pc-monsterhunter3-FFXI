@@ -35,7 +35,7 @@ VERTS_AT = CLIPS_AT + MAX_CLIPS * CLIP.size
 POOL_AT = VERTS_AT + MAX_VERTS * VERT_FLOATS * 4
 TEX_AT = POOL_AT + POOL * 4
 SIZE = TEX_AT + MAX_LAYERS * TEX * TEX * 4
-DRAW, HIDE_HUNTER = 1, 2
+DRAW, HIDE_HUNTER, AURA = 1, 2, 4      # AURA: a GM's, faint copies of it swaying about it
 
 
 def fourcc(name: str) -> int:
@@ -135,8 +135,8 @@ class PortModel:
         """Monster Hunter's hunter's motion now: its animation's name ("co_0313", "w01_0105"...)."""
         return bytes(self.mm[MOTION_AT:MOTION_AT + 16]).split(b"\0")[0].decode("latin-1")
 
-    def set_flags(self, draw: bool, hide_hunter: bool) -> None:
-        self._set(7, (DRAW if draw else 0) | (HIDE_HUNTER if hide_hunter else 0))
+    def set_flags(self, draw: bool, hide_hunter: bool, aura: bool = False) -> None:
+        self._set(7, (DRAW if draw else 0) | (HIDE_HUNTER if hide_hunter else 0) | (AURA if aura else 0))
 
     def keep_alive(self) -> None:
         self._set(8, self._get(8) + 1)

@@ -35,11 +35,14 @@ nameplate_height = 200   # how high above your feet, in the game's units, with n
 target_arrow = true      # FFXI's arrow above your target (the nearest monster); hold L (the pad's LB) to lock on
 all_magic = true         # every spell unlocked from the start (the Job menu's All Magic switches it in the game)
 allow_kills = true       # FFXI's blows, magic and Trusts can finish a monster (false: the game's own last blow)
-damage_through_game = true   # FFXI's damage dealt as the game's own (the monster flinches, falls, is carved)
-mh_swings = true         # the pad's Y and B swing as in Monster Hunter beside FFXI's Attack (/mhcombat off: not
-                         # while attacking: FFXI's auto-attack fights for you)
-dpad_target = "engaged"  # the d-pad moves the target to the next monster that way: "engaged" (while attacking or
-                         # locked on), "always" (the game's own use of the d-pad given up), "off"
+damage_through_game = true   # FFXI's damage dealt as a hunter's blow (the monster flinches, falls, is carved)
+combat_mode = "ffxi"     # ffxi: FFXI's Attack fights for you (the pad's Y and B don't swing while it does), the
+                         # d-pad picks your target, a fallen target is carved; mh: Monster Hunter's buttons and
+                         # d-pad (the menu's Config, or /combat ffxi|mh, switches it in the game; kept in the save)
+auto_carve = true        # FFXI's combat: a fallen target walked up to and carved (your own stick stops it)
+dpad_target = "auto"     # the d-pad moves the target to the next monster that way: "auto" (in FFXI's combat),
+                         # "engaged" (while attacking or locked on), "always", "off"
+gm_aura = true           # the launcher's GM: FFXI's GM aura about the character
 ui = "game"              # game: the FFXI interface in the game's window (the port); window; console
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
 weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,
@@ -96,6 +99,7 @@ type = "u16"
 weapon_skills = [0x33, 0x34, 0x35, 0x36]                   # 3 4 5 6 -> your weapon's 4 WS
 spells = [0x37, 0x38, 0x39, 0x30, 0xBD, 0xBB, 0xDB, 0xDD]  # 7 8 9 0 - = [ ] -> job spells in order
 pause = 0x50                                               # P: pause / resume the layer
+ui_swap = 0x78                                             # F9: FFXI's interface or Monster Hunter's HUD
 
 
 [music_tracks]

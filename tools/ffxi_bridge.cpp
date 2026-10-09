@@ -41,7 +41,7 @@ extern uint32_t g_rso_base[];
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 10;
+constexpr uint32_t kVersion = 11;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -134,8 +134,14 @@ struct Block {
         float name_x, name_y;           // port: where its name goes, above its head (-1..1, y up)
         uint32_t name_ok;               // port: 1 when that's in front of the camera
     } companions[6];
+    // FFXI's combat (the layer's): a target that falls carved as the hunter carves (carve_frame), and which
+    // interface shows (the layer's F9): Monster Hunter's HUD in place of FFXI's.
+    uint32_t auto_carve;                // layer: 1: the target, fallen, is walked up to and carved
+    uint32_t mh_hud;                    // layer: 1: Monster Hunter's own HUD drawn (the layer hides its own)
+    uint32_t carve_seq;                 // port: bumped as each carving starts (the layer says so)
+    uint32_t reserved4[5];
 };
-static_assert(sizeof(Block) == 1592, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 1624, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -284,8 +290,12 @@ void hook_add_resource(PPCContext& c) {
     orig_add_resource(c);
 }
 
-// MH3_HIDE_HUD=1: Monster Hunter's hunt HUD (mh3_CockpitDraw) is not drawn; the FFXI interface replaces it.
-void hook_cockpit(PPCContext&) {}
+// MH3_HIDE_HUD=1: Monster Hunter's hunt HUD (mh3_CockpitDraw) is not drawn while the FFXI interface replaces
+// it; drawn when the layer asks for it (its F9: Block::mh_hud) or isn't running.
+bool hud_wanted();
+void hook_cockpit(PPCContext& c) {
+    if (hud_wanted()) orig_cockpit(c);
+}
 
 void trace(const char* fn, PPCContext& c, const char* text) {
     static std::mutex m;
@@ -309,18 +319,17 @@ void hook_item_name(PPCContext& c) {
 }
 
 // fn_8011E6BC(em*, delta, cap): the One Hit Kill code's function (NEXT.md).
-std::atomic<uint32_t> g_ffxi_em{0};                  // the monster FFXI's damage was last handed to,
-std::atomic<int32_t> g_ffxi_owed{0};                  // and how much of it the game hasn't taken off yet
+uint32_t g_dmg_now_em = 0;          // the game's thread: the monster whose damage routine runs now with FFXI's
+int32_t g_dmg_now = 0;              // damage in it, not yet seen taken off (hook_em_damage)
 void hook_em_hp(PPCContext& c) {
     uint32_t obj = c.r[3];
     int32_t delta = (int32_t)c.r[4];
     orig_em_hp(c);
-    if (delta < 0 && obj == g_ffxi_em.load(std::memory_order_relaxed)) {   // FFXI's, the game taking it off
-        int32_t owed = g_ffxi_owed.load(std::memory_order_relaxed);
-        if (owed > 0 && -delta <= owed) {
-            g_ffxi_owed.store(owed + delta, std::memory_order_relaxed);
-            return;                                           // (not one of the hunter's blows)
-        }
+    if (delta < 0 && g_dmg_now > 0 && obj == g_dmg_now_em) {    // FFXI's, taken off with this frame's blows
+        int32_t take = std::min(-delta, g_dmg_now);
+        g_dmg_now -= take;
+        delta += take;
+        if (!delta) return;                                    // all FFXI's: not one of the hunter's blows
     }
     g_monster.store(obj, std::memory_order_relaxed);
     g_delta.store(delta, std::memory_order_relaxed);
@@ -359,6 +368,12 @@ constexpr uint32_t kMenuButtons = kClUp | kClDown | kClLeft | kClRight | kClA | 
 Block* g_block = nullptr;
 std::atomic<bool> g_layer_up{false};    // the layer bumped the overlay's alive within 3 s
 
+// Monster Hunter's HUD (hook_cockpit, MH3_HIDE_HUD=1): drawn when the layer asks for it (its F9) or isn't running
+bool hud_wanted() {
+    Block* b = g_block;
+    return !b || !g_layer_up.load(std::memory_order_relaxed) || b->mh_hud;
+}
+
 // Channel 1's Classic, before the game reads it. Y is shared with the game, which sheathes the
 // weapon and uses items with it: a tap reaches the game (at its release), held it opens the menu.
 constexpr auto kHoldForMenu = std::chrono::milliseconds(350);
@@ -367,6 +382,9 @@ constexpr auto kHoldForMenu = std::chrono::milliseconds(350);
 // acts); and whether the camera is locked on (target_frame's, for the pad's thread)
 std::atomic<int> g_target_step{0};
 std::atomic<bool> g_locked_on{false};
+// a fallen target being carved (carve_frame): the stick toward it, its carving button; the pad's own ends it
+std::atomic<float> g_carve_lx{0.0f}, g_carve_ly{0.0f};
+std::atomic<bool> g_carve_on{false}, g_carve_a{false}, g_carve_stop{false};
 
 void classic_filter(int chan, ClassicState& s) {
     s.buttons &= ~kClHome;                        // the Home Button menu crashes the port: never opened
@@ -432,6 +450,18 @@ void classic_filter(int chan, ClassicState& s) {
     // the game's own swings (the Classic's X and A: the pad's Y and B), dropped while FFXI's Attack fights
     // for you, if button combat is off (the layer's /mhcombat)
     if (!b->menu_open && b->no_mh_swings && (b->engage & 1)) s.buttons &= ~(kClX | kClA);
+
+    // a fallen target carved (carve_frame): its stick and A, until the pad's own stick or a button
+    if (g_carve_on.load(std::memory_order_relaxed) && !b->menu_open) {
+        constexpr uint32_t kOwn = kClA | kClB | kClX | kClY | kClL | kClUp | kClDown | kClLeft | kClRight;
+        if (std::fabs(s.lx) > 0.35f || std::fabs(s.ly) > 0.35f || (pressed & kOwn)) {
+            g_carve_stop.store(true, std::memory_order_relaxed);
+        } else {
+            s.lx = g_carve_lx.load(std::memory_order_relaxed);
+            s.ly = g_carve_ly.load(std::memory_order_relaxed);
+            if (g_carve_a.load(std::memory_order_relaxed)) s.buttons |= kClA;
+        }
+    }
 
     // L, the game's camera behind the hunter: a tap is the game's, as Y's is; held, FFXI's lock-on
     static bool l_held = false;
@@ -798,30 +828,144 @@ float g_target_place[4] = {};             // the target's feet and its height, f
 bool g_target_ok = false;
 PPCFunc orig_cam_position, orig_cam_posture;
 
-// FFXI's damage to a monster, dealt as the game deals its own: added to the monster's pending damage
-// (ENEMY_WORK +0x928, s16), which its damage routine (fn_8011F6B8, each frame) takes off its HP, ending
-// it as the game ends a monster (its fall, its carving) when nothing's left. The layer counts all it has
-// dealt (Block::damage_total); each frame the new part goes to the monster its HP is read from.
+// FFXI's damage to a monster, dealt as the game deals a hunter's blow. A monster's damage routine
+// (fn_8011F6B8, each frame of its update) sums what its parts were hit for this frame (ENEMY_WORK +0x7CA, an
+// s16 a part: the hunter's blows add to it, fn_8011EF88; all cleared as the frame starts, fn_8029A200),
+// takes that off its HP, makes it flinch when a part has had enough, and runs its fall when none is left.
+// (+0x928, beside it, is its poison's: set by its ailments each frame, before the routine.) The layer
+// counts all it has dealt (Block::damage_total); the new part waits here (game_damage) for that monster's
+// routine, where it is a blow on its first part (hook_em_damage); not taken in 2 s (a state the monster
+// can't be hurt in), it goes.
+std::atomic<uint32_t> g_dmg_em{0};          // the monster FFXI's damage waits for
+std::atomic<int32_t> g_dmg_queue{0};        // and how much
+PPCFunc orig_em_damage;
+
 void game_damage(Block* b) {
     static uint32_t seen = 0;
     static bool started = false;
+    static int waited = 0;
     uint32_t total = b->damage_total;
     if (!started) seen = total, started = true;               // (dealt before the port came: not again)
     uint32_t add = total - seen;
     seen = total;
-    if (!add || add > 1000000) return;
+    if (add > 1000000) add = 0;
     uint32_t em = object(kBaseMonster);
-    if (!em || !in_ram(em + 0x928, 2)) return;
-    int32_t pending = (int16_t)ld16(em + 0x928) + (int32_t)add;
-    st16(em + 0x928, (uint16_t)(int16_t)std::min(pending, 32767));
-    if (g_ffxi_em.exchange(em, std::memory_order_relaxed) != em) g_ffxi_owed.store(0, std::memory_order_relaxed);
-    g_ffxi_owed.fetch_add((int32_t)add, std::memory_order_relaxed);
-    static int told = 0;
-    if (told < 5) {
-        ++told;
-        rt_log("ffxi: FFXI's damage %u handed to monster %08X (pending now %d, HP %d)", add, em, pending,
-               (int32_t)ld32(em + 0x7A0));
+    if (em != g_dmg_em.load(std::memory_order_relaxed)) {     // another monster: what waited for the last goes
+        g_dmg_em.store(em, std::memory_order_relaxed);
+        g_dmg_queue.store(0, std::memory_order_relaxed);
     }
+    if (!em) return;
+    if (add) {
+        g_dmg_queue.fetch_add((int32_t)add, std::memory_order_relaxed);
+        waited = 0;
+        static int told = 0;
+        if (told < 5) {
+            ++told;
+            rt_log("ffxi: FFXI's damage %u for monster %08X (HP %d of %d)", add, em, (int32_t)ld32(em + 0x7A0),
+                   (int32_t)ld32(em + 0x7A4));
+        }
+    } else if (g_dmg_queue.load(std::memory_order_relaxed) > 0 && ++waited > 120) {
+        rt_log("ffxi: FFXI's damage %d not taken by monster %08X in 2 s: dropped",
+               g_dmg_queue.exchange(0, std::memory_order_relaxed), em);
+        waited = 0;
+    }
+}
+
+// fn_8011F6B8(em): the monster's damage this frame. FFXI's waiting for it goes in as a blow on its first
+// part, the routine taking it off with the hunter's; if its HP doesn't move (the routine passed the
+// blows by), the blow is taken back out and waits for the next frame.
+void hook_em_damage(PPCContext& c) {
+    uint32_t em = c.r[3];
+    int32_t q = em && em == g_dmg_em.load(std::memory_order_relaxed)
+                    ? g_dmg_queue.exchange(0, std::memory_order_relaxed) : 0;
+    if (q <= 0 || !in_ram(em + 0x7A0, 4) || !in_ram(em + 0x7CA, 2)) {
+        if (q > 0) g_dmg_queue.fetch_add(q, std::memory_order_relaxed);
+        orig_em_damage(c);
+        return;
+    }
+    int32_t was = (int16_t)ld16(em + 0x7CA);
+    int32_t put = std::min(q, 32767 - std::max(was, 0));
+    if (put < q) g_dmg_queue.fetch_add(q - put, std::memory_order_relaxed);
+    st16(em + 0x7CA, (uint16_t)(was + put));
+    int32_t hp = (int32_t)ld32(em + 0x7A0);
+    g_dmg_now_em = em, g_dmg_now = put;
+    orig_em_damage(c);
+    g_dmg_now = 0;
+    int32_t after = (int32_t)ld32(em + 0x7A0);
+    static int told = 0;
+    if (after != hp && told < 5) {
+        ++told;
+        rt_log("ffxi: monster %08X took FFXI's %d as a blow: HP %d -> %d", em, put, hp, after);
+    }
+    if (after == hp && hp > 0) {                               // not taken: out again, to wait
+        int32_t now = (int16_t)ld16(em + 0x7CA);
+        if (now >= put) st16(em + 0x7CA, (uint16_t)(now - put));
+        g_dmg_queue.fetch_add(put, std::memory_order_relaxed);
+    }
+}
+
+// FFXI's combat (Block::auto_carve): the target fallen, the hunter walks up to it and carves it, as its
+// player would: the left stick toward it (the game reads it by its camera), then the Classic's A, its
+// carving button, pressed every half second for its carves; the pad's own stick or buttons, the
+// command menu, or the carcass gone end it. carve_frame on the game's thread; classic_filter, on the
+// pad's, puts it in.
+struct Carve {
+    bool on = false;
+    uint32_t model = 0;                  // the carcass's scene model
+    uint32_t frame = 0;                  // when it fell
+    float best = 1e9f;                   // the nearest the hunter has come, and when
+    uint32_t best_frame = 0;
+    bool there = false;                  // close enough: carving
+} g_carve;
+void carve_frame(Block* b, uint32_t pl, uint32_t cam, uint32_t target_model, uint32_t target_em) {
+    // the target's fall: the last frame's target's monster, its HP gone from some to none (the target has
+    // moved on from it since: a fallen one isn't one)
+    static uint32_t watch_em = 0, watch_model = 0;
+    static int32_t watch_hp = 0;
+    int32_t hp = watch_em && in_ram(watch_em + 0x7A0, 4) ? (int32_t)ld32(watch_em + 0x7A0) : 0;
+    if (watch_em && watch_hp > 0 && hp <= 0 && b && b->auto_carve) {
+        g_carve = Carve{};
+        g_carve.on = true, g_carve.model = watch_model, g_carve.frame = g_frame;
+        g_carve_stop.store(false, std::memory_order_relaxed);
+        b->carve_seq = b->carve_seq + 1;
+        rt_log("ffxi: the target fell: carving it");
+    }
+    watch_em = target_em, watch_model = target_model;
+    watch_hp = target_em && in_ram(target_em + 0x7A0, 4) ? (int32_t)ld32(target_em + 0x7A0) : 0;
+    auto stop = [&] {
+        g_carve.on = false;
+        g_carve_on.store(false, std::memory_order_relaxed);
+        g_carve_a.store(false, std::memory_order_relaxed);
+    };
+    if (!g_carve.on) return;
+    const Enemy* c = nullptr;
+    for (const Enemy& e : g_enemies)
+        if (e.obj == g_carve.model && g_frame - e.frame <= 3) c = &e;
+    uint32_t age = g_frame - g_carve.frame;
+    if (!c || !pl || !cam || !b || !b->auto_carve || b->menu_open || age > 60 * 14 ||
+        g_carve_stop.exchange(false, std::memory_order_relaxed)) {
+        stop();
+        return;
+    }
+    if (age < 60 * 2) return;                                  // its fall first
+    float hx = f32(pl + 0x3C), hz = f32(pl + 0x44);
+    float dx = c->x - hx, dz = c->z - hz, d = std::hypot(dx, dz);
+    // close enough: within a reach of its middle that grows with its size, or as near as its body lets
+    float reach = 110.0f + 0.35f * std::max(0.0f, enemy_top(*c) - c->y);
+    if (d + 5.0f < g_carve.best) g_carve.best = d, g_carve.best_frame = g_frame;
+    if (!g_carve.there && (d <= reach || g_frame - g_carve.best_frame > 40)) g_carve.there = true;
+    float lx = 0, ly = 0;
+    if (!g_carve.there && d > 1.0f) {
+        // the way to it in the camera's terms: its view's first row the screen's right, its third the back
+        float rx = f32(cam + 0), rz = f32(cam + 8), bx = f32(cam + 32), bz = f32(cam + 40);
+        float sx = (rx * dx + rz * dz), sy = -(bx * dx + bz * dz);
+        float n = std::hypot(sx, sy);
+        if (n > 1e-4f) lx = sx / n, ly = sy / n;
+    }
+    g_carve_lx.store(lx, std::memory_order_relaxed);
+    g_carve_ly.store(ly, std::memory_order_relaxed);
+    g_carve_a.store(g_carve.there && (age % 30) < 6, std::memory_order_relaxed);
+    g_carve_on.store(true, std::memory_order_relaxed);
 }
 
 uint32_t g_chosen = 0;                              // the target the d-pad chose, kept while it's near
@@ -840,16 +984,27 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
     float hx = pl ? f32(pl + 0x3C) : 0, hy = pl ? f32(pl + 0x40) : 0, hz = pl ? f32(pl + 0x44) : 0;
     auto dist = [&](const Enemy& e) { return std::hypot(e.x - hx, e.z - hz); };
     bool toggle = g_lock_toggle.exchange(false, std::memory_order_relaxed);
+    // the target that falls (its monster's HP none) is kept a moment, the layer seeing it fall (its defeat,
+    // its EXP); then a fallen monster is no target, as in FFXI: the lock lets go of it, the next is taken
+    static uint32_t fell_obj = 0, fell_frame = 0;
+    auto dead = [&](uint32_t obj) {
+        uint32_t em = em_of_model(obj);
+        return em && in_ram(em + 0x7A0, 4) && (int32_t)ld32(em + 0x7A0) <= 0;
+    };
+    if (g_target_obj && fell_obj != g_target_obj && dead(g_target_obj)) fell_obj = g_target_obj, fell_frame = g_frame;
+    bool keep_fell = g_frame - fell_frame <= 90;
+    auto fallen = [&](const Enemy& e) { return dead(e.obj) && !(e.obj == fell_obj && keep_fell); };
     Enemy* t = g_lock.on ? live(g_target_obj) : nullptr;
-    if (g_lock.on && (!t || !pl || dist(*t) > kLockReach)) g_lock.on = false, t = nullptr;   // gone: let go
+    if (g_lock.on && (!t || !pl || dist(*t) > kLockReach || fallen(*t))) g_lock.on = false, t = nullptr;   // gone: let go
     if (!t && g_chosen) {                                    // the d-pad's choice, while it's near
         t = live(g_chosen);
-        if (!t || !pl || dist(*t) > kLockReach) g_chosen = 0, t = nullptr;
+        if (!t || !pl || dist(*t) > kLockReach || fallen(*t)) g_chosen = 0, t = nullptr;
     }
+    if (!t && g_target_obj && g_target_obj == fell_obj && keep_fell) t = live(g_target_obj);   // just fallen: kept
     if (!t && pl) {
         float best = kTargetReach;
         for (Enemy& e : g_enemies)
-            if (g_frame - e.frame <= 3 && dist(e) < best) best = dist(e), t = &e;
+            if (g_frame - e.frame <= 3 && dist(e) < best && !fallen(e)) best = dist(e), t = &e;
     }
     if (int step = g_target_step.exchange(0, std::memory_order_relaxed); step && cam && pl) {
         // from where the target is on the screen (none: the middle), the nearest that way, straight ahead
@@ -862,7 +1017,7 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
         Enemy* best = nullptr;
         float score = 1e9f;
         for (Enemy& e : g_enemies) {
-            if (g_frame - e.frame > 3 || (t && e.obj == t->obj) || dist(e) > kLockReach) continue;
+            if (g_frame - e.frame > 3 || (t && e.obj == t->obj) || dist(e) > kLockReach || fallen(e)) continue;
             float w[3] = {e.x, e.y + 50.0f, e.z}, ex, ey;
             if (!project(cam, w, ex, ey)) continue;
             float dx = ex - cx, dy = ey - cy;
@@ -870,6 +1025,21 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
             float aside = step <= 2 ? std::fabs(dx) : std::fabs(dy);
             if (along <= 0.02f) continue;
             if (along + 2.0f * aside < score) score = along + 2.0f * aside, best = &e;
+        }
+        if (!best) {
+            // nothing that way in sight (behind the camera, off the screen): the next nearer or further one,
+            // as FFXI's target cycles (up and left nearer, down and right further), round to the other end
+            std::vector<Enemy*> around;
+            for (Enemy& e : g_enemies)
+                if (g_frame - e.frame <= 3 && dist(e) <= kLockReach && !fallen(e)) around.push_back(&e);
+            std::sort(around.begin(), around.end(), [&](Enemy* a, Enemy* b) { return dist(*a) < dist(*b); });
+            if (around.size() > 1) {
+                size_t i = 0;
+                while (i < around.size() && t && around[i]->obj != t->obj) ++i;
+                if (i == around.size()) i = 0;
+                bool further = step == 2 || step == 4;
+                best = around[(i + (further ? 1 : around.size() - 1)) % around.size()];
+            }
         }
         if (best) {
             t = best;
@@ -897,7 +1067,9 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
         g_lock.on = locked_by_attack = false;
     }
     g_locked_on.store(g_lock.on, std::memory_order_relaxed);
-    g_target_em.store(t ? em_of_model(t->obj) : 0, std::memory_order_relaxed);
+    uint32_t tem = t ? em_of_model(t->obj) : 0;
+    g_target_em.store(tem, std::memory_order_relaxed);
+    carve_frame(b, pl, cam, t ? t->obj : 0, tem);
     static uint32_t told_target = 0;
     if (t && t->obj != told_target) {                        // each new target, for a report of a strange one
         told_target = t->obj;
@@ -1032,7 +1204,7 @@ struct ModelBlock {
     uint32_t magic, version;
     uint32_t serial;        // the layer bumps it once everything below is written
     uint32_t n_verts, layers, tex_w, tex_h;
-    uint32_t flags;         // 1: draw it; 2: hide Monster Hunter's hunter
+    uint32_t flags;         // 1: draw it; 2: hide Monster Hunter's hunter; 4: a GM's aura about it
     uint32_t alive;         // the layer bumps it while it runs
     uint32_t n_joints, n_clips;
     uint32_t act_seq;       // the layer bumps it with each request:
@@ -1735,6 +1907,7 @@ void model_frame() {
     uint32_t sh = g_shadow.load(std::memory_order_relaxed);
     video_model_shadow((sh & 2) ? g_shadow_radius.load(std::memory_order_relaxed) : 0.0f, (float)(sh >> 8 & 0xFF) / 255.0f,
                        g_anim.place[7]);
+    video_model_aura(up && (mb->flags & 4) ? 1.0f : 0.0f);    // a GM's aura (ModelBlock::flags bit 3)
 }
 
 void serve(Block* b, OverlayBlock* o, ModelBlock* mb) {
@@ -1799,7 +1972,7 @@ void install() {
     orig_set_perspective = ppc_hook("SetPerspective__Q34nw4r3g3d6CameraFffff", hook_set_perspective);
     if (const char* h = std::getenv("MH3_HIDE_HUD"); h && !std::strcmp(h, "1")) {
         orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
-        rt_log("ffxi: Monster Hunter's HUD hidden (MH3_HIDE_HUD=1)");
+        rt_log("ffxi: Monster Hunter's HUD hidden (MH3_HIDE_HUD=1) while the FFXI interface shows");
     }
     if (const char* t = std::getenv("MH3_RES_TRACE"); t && !std::strcmp(t, "1"))
         orig_add_resource = ppc_hook("nwAddResource__FPcPv", hook_add_resource);
@@ -1840,6 +2013,8 @@ void install() {
     orig_play_stream = ppc_hook("PlayStream__FUlUl", hook_play_stream);
     orig_bgm_vol = ppc_hook("set_str_bgm_main_vol__Ff", hook_bgm_vol);
     orig_se_req = ppc_hook("fn_800D9D2C", hook_se_req);
+    orig_em_damage = ppc_hook("fn_8011F6B8", hook_em_damage);
+    if (!orig_em_damage) rt_log("ffxi: fn_8011F6B8 isn't hooked (tools/mh3-hooks.txt): FFXI's damage won't reach monsters");
     g_se_trace = std::getenv("MH3_SE_TRACE") && !std::strcmp(std::getenv("MH3_SE_TRACE"), "1");
     if (const char* m = std::getenv("MH3_MUTE_SE")) {
         for (const char* p = m; *p;) {

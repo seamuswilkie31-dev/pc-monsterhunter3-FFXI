@@ -29,6 +29,7 @@ BG_ALPHA = 200
 BORDER, BORDER_IN = (214, 220, 236), (64, 78, 128)
 WHITE, DIM, SHADOW = (255, 255, 255), (150, 158, 184), (0, 0, 0)
 PARTY_NAME = (150, 215, 255)                      # a party member's name: light blue, as FFXI's
+GM_NAME = (255, 92, 80)                           # a GM's name: red, as FFXI shows its GMs
 HP_COL = [(1.0, (238, 240, 250)), (0.75, (246, 232, 120)), (0.5, (250, 170, 80)), (0.25, (240, 90, 80))]
 MP_BAR, TP_READY, TP_LOW = (122, 168, 255), (160, 236, 140), (190, 200, 220)
 EXP_BAR = (230, 200, 110)
@@ -228,19 +229,24 @@ class FfxiUi:
             d.line([(x + 1, y + 1), (fx, y + 1)], fill=(*[min(255, c + 50) for c in col], 255))
 
     def _nameplate(self, img, d, s: UiState) -> None:
-        """Your name above your head, as FFXI shows it: white, slanted, outlined, centred; a GM's icon
-        before it, a linkpearl before that."""
+        """Your name above your head, as FFXI shows it: white (a GM's red), slanted, outlined, centred; a
+        GM's icon before it, a linkpearl before that."""
         x = (s.nameplate[0] + 1) / 2 * W
         y = (1 - s.nameplate[1]) / 2 * H
         if 0 <= x < W and 0 <= y < H:
-            self._text(d, (int(x), int(y)), s.name, self.f_tag, WHITE, anchor="ms")
+            self._text(d, (int(x), int(y)), s.name, self.f_tag, GM_NAME if s.gm else WHITE, anchor="ms")
             left = x - d.textlength(s.name, font=self.f_tag) / 2
             icon = gm_icon() if s.gm else None
             if icon:                                 # FFXI's GM icon, left of the name
                 left -= icon.width + 3
                 img.alpha_composite(icon, (int(left), int(y - 7 - icon.height / 2)))
             if s.linkpearl:                          # the linkpearl, left of those
-                _pearl(d, int(left - 12), int(y - 7), s.linkpearl)
+                pearl = pearl_icon(s.linkpearl)
+                if pearl:
+                    left -= pearl.width + 2
+                    img.alpha_composite(pearl, (int(left), int(y - 7 - pearl.height / 2)))
+                else:
+                    _pearl(d, int(left - 12), int(y - 7), s.linkpearl)
 
     def _arrow(self, d, s: UiState) -> None:
         """FFXI's target arrow: pointing down at the target's head, bobbing; ringed while locked on."""
@@ -420,31 +426,56 @@ class FfxiUi:
                 self._text(d, (x1 - 10, y), detail, self.f_small, DIM, anchor="ra")
 
 
-_GM_ICON: list = []
+_ICONS: dict = {}
 
 
-def gm_icon():
-    """FFXI's GM icon (its name-status icons, ROM/0/1.DAT's "ustats": the third row's second), cut from your
-    installation the first time and kept with the interface's pieces; None without it."""
-    if _GM_ICON:
-        return _GM_ICON[0]
-    p = ui_assets() / "gm_icon.png"
+def status_icon(name: str, box: tuple, size: int):
+    """One of FFXI's name-status icons (ROM/0/1.DAT's "ustats", 16 x 16 each: the GM's, the linkpearl's...),
+    cut from your installation the first time and kept with the interface's pieces, its alpha made whole
+    (FFXI's 128 is opaque); None without FFXI."""
+    if name in _ICONS:
+        return _ICONS[name]
+    p = ui_assets() / f"{name}.png"
     img = None
     try:
         if not p.exists():
             import ffxi_assets as A
             import ffxi_model as M
             b = (M.ffxi_root(None) / "ROM" / "0" / "1.DAT").read_bytes()
-            for at, _nm, typ, size in A.chunks(b):
-                info = A.image_info(b, at, size) if typ == 0x20 else None
+            for at, _nm, typ, size_ in A.chunks(b):
+                info = A.image_info(b, at, size_) if typ == 0x20 else None
                 if info and info["name"] == "ustats":
                     p.parent.mkdir(parents=True, exist_ok=True)
-                    Image.fromarray(A.decode(b, info)).crop((16, 32, 32, 48)).save(p)
+                    Image.fromarray(A.decode(b, info)).crop(box).save(p)
                     break
-        img = Image.open(p).convert("RGBA").resize((19, 19), Image.LANCZOS)
+        img = Image.open(p).convert("RGBA")
+        img.putalpha(img.getchannel("A").point(lambda v: min(255, v * 2)))
+        img = img.resize((size, size), Image.LANCZOS)
     except Exception:                                    # noqa: BLE001  no FFXI here: no icon
         img = None
-    _GM_ICON.append(img)
+    _ICONS[name] = img
+    return img
+
+
+def gm_icon():
+    """FFXI's GM icon: "ustats"' third row's second."""
+    return status_icon("gm_icon", (16, 32, 32, 48), 19)
+
+
+def pearl_icon(rgb: tuple):
+    """FFXI's linkpearl by a name: "ustats"' third row's first, a white pearl, in the linkshell's colour (the
+    texel times the colour, twice over as FFXI's interface shades: its 128 is whole)."""
+    key = ("pearl", tuple(rgb))
+    if key in _ICONS:
+        return _ICONS[key]
+    white = status_icon("pearl_icon", (0, 32, 16, 48), 15)
+    img = None
+    if white is not None:
+        import numpy as np
+        a = np.asarray(white, np.float32)
+        a[..., :3] = np.clip(a[..., :3] * np.asarray(rgb, np.float32) / 255.0 * 2.0, 0, 255)
+        img = Image.fromarray(a.astype(np.uint8), "RGBA")
+    _ICONS[key] = img
     return img
 
 

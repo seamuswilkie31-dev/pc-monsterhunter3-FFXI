@@ -347,7 +347,7 @@ class Party:
                 mb.mp = mb.mp / mb.max_mp * full if mb.max_mp else full
                 mb.max_mp = full
             mb.mp = min(mb.max_mp, mb.mp + mb.max_mp * dt * (0.004 if mb.engaged else 0.015))   # back between fights
-            want = f["engaged"] and target is not None and m_hp is not None
+            want = f["engaged"] and target is not None and m_hp is not None and m_hp > 0   # (not at the fallen)
             if want != mb.engaged:
                 mb.engaged = want
                 mb.next_swing = now + 1.5 + 0.3 * mb.slot
@@ -371,7 +371,7 @@ class Party:
                         new = min(f["p_max"], p_hp + max(1, hp))
                         self.say(f"{name} casts {spell}. {me} recovers {new - p_hp} HP.", "heal")
                         p_hp = new
-                    elif fx[0] in ("damage", "drain") and on_foe and m_hp is not None:
+                    elif fx[0] in ("damage", "drain") and on_foe and m_hp is not None and m_hp > 0:
                         dmg = int(f["avg_hit"] * fx[1] * D.JOBS.get(t["job"], {}).get("nuke_mult", 1.0) * 0.6
                                   * random.uniform(0.9, 1.1))
                         self.say(f"{name} casts {spell}. The {foe} takes {dmg} points of damage.", "magic")

@@ -160,6 +160,8 @@ def key_name(vk: int) -> str:
         return chr(vk)
     if 0x60 <= vk <= 0x69:
         return f"Num{vk - 0x60}"
+    if 0x70 <= vk <= 0x7B:
+        return f"F{vk - 0x6F}"
     return {0x6A: "Num*", 0x6B: "Num+", 0x6D: "Num-", 0x6E: "Num.", 0x6F: "Num/", 0xBA: ";", 0xBB: "=",
             0xBC: ",", 0xBD: "-", 0xBE: ".", 0xBF: "/", 0xC0: "`", 0xDB: "[", 0xDC: "\\", 0xDD: "]",
             0xDE: "'"}.get(vk, hex(vk))
@@ -179,6 +181,7 @@ def start_hotkeys(cfg: dict, actions: queue.Queue, typing=lambda: False):
         return None
     keys = {vk: i for i, vk in enumerate(macro_keys(cfg))}
     pause_key = cfg["hotkeys"].get("pause", 0x6E)
+    ui_key = cfg["hotkeys"].get("ui_swap", 0x78)                # F9: FFXI's interface or Monster Hunter's
 
     def on_press(key):
         if typing():                                   # the chat line has the keyboard
@@ -190,6 +193,8 @@ def start_hotkeys(cfg: dict, actions: queue.Queue, typing=lambda: False):
             actions.put(("macro", keys[vk]))
         elif vk == pause_key:
             actions.put(("pause", 0))
+        elif vk == ui_key:
+            actions.put(("ui", 0))
 
     lst = keyboard.Listener(on_press=on_press)
     lst.daemon = True
@@ -247,6 +252,8 @@ class App:
         self.engaged_until = 0.0
         self._hits_seen = None
         self._hp_seen = None
+        self.mh_hud = False            # F9 (or /ui): Monster Hunter's own HUD shown, FFXI's interface hidden
+        self._carvings = None          # the port's count of carvings begun, as last seen
         import mh3_text
         self.monster_names = mh3_text.monster_names(cfg.get("mh3_extract"))   # em027: "Aptonoth"
 
@@ -295,13 +302,14 @@ class App:
             dealt = m - writes.pop("monster_hp")
             if dealt > 0:
                 self.mem.deal_damage(dealt)
-                self.e.ffxi_owed += dealt
+                self.e.owe(dealt, now)
             self.e.prev_monster = m
         for name, val in writes.items():
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
         self.player_hp = writes.get("player_hp", p)
         self._play_events()
+        self._carve_said()
         self._music(now, p)
         self._weapon_watch()
         self._chat_step()
@@ -466,13 +474,44 @@ class App:
                     self.sounds.play_spell(anim)
 
     def _engage_port(self) -> None:
-        if hasattr(self.mem, "set_mh_swings"):                     # the game's own swings (/mhcombat)
-            self.mem.set_mh_swings(self.cfg.get("mh_swings", True) is not False)
+        ffxi = self.e.ffxi_combat
+        if hasattr(self.mem, "set_mh_swings"):                     # the game's own swings: Monster Hunter's combat
+            self.mem.set_mh_swings(not ffxi)
         if hasattr(self.mem, "set_dpad_target"):                   # the d-pad's targeting (dpad_target)
-            mode = str(self.cfg.get("dpad_target", "engaged")).lower()
-            self.mem.set_dpad_target({"off": 0, "never": 0, "always": 2}.get(mode, 1))
+            mode = str(self.cfg.get("dpad_target", "auto")).lower()
+            self.mem.set_dpad_target({"off": 0, "never": 0, "always": 2, "engaged": 1}.get(mode, 2 if ffxi else 0))
+        if hasattr(self.mem, "set_auto_carve"):                    # a fallen target carved: FFXI's combat
+            self.mem.set_auto_carve(ffxi and self.cfg.get("auto_carve", True) is not False)
+        if hasattr(self.mem, "set_mh_hud"):
+            self.mem.set_mh_hud(self.mh_hud)
         if hasattr(self.mem, "set_engage"):
             self.mem.set_engage(self.e.engaged, self.e.engaged and self.cfg.get("attack_lock_camera", True) is not False)
+
+    def set_combat(self, ffxi: bool) -> None:
+        """FFXI's combat (Attack fights for you: the pad's Y and B don't swing while it does, the d-pad picks
+        the target, a fallen target is carved) or Monster Hunter's (its buttons and d-pad as they were)."""
+        e = self.e
+        e.ffxi_combat = bool(ffxi)
+        e.dirty = True
+        self._engage_port()
+        e.say("Combat mode: FFXI. Attack fights for you, the d-pad picks your target, the fallen are carved."
+              if ffxi else "Combat mode: Monster Hunter. Y and B swing, the d-pad is the game's.", "info")
+
+    def swap_ui(self, mh: bool | None = None) -> None:
+        """F9 (or /ui): Monster Hunter's own HUD in place of FFXI's interface, and back."""
+        self.mh_hud = (not self.mh_hud) if mh is None else bool(mh)
+        self._engage_port()
+        self.e.say("Monster Hunter's interface (F9: FFXI's)." if self.mh_hud else "FFXI's interface (F9: Monster Hunter's).",
+                   "info")
+
+    def _carve_said(self) -> None:
+        """The port began carving a fallen target: said, as FFXI says what you do."""
+        if not hasattr(self.mem, "carvings"):
+            return
+        n = self.mem.carvings()
+        if self._carvings is not None and n != self._carvings:
+            self.e.say(f"{self.e.me} carves the {self.e.target}.", "info")
+        self._carvings = n
 
     def _mute_port(self) -> None:
         """The hunter's own sounds the port drops, FFXI's race's voice in their place (config.toml's
@@ -1029,6 +1068,14 @@ class App:
             {"label": "All Magic", "ok": True, "detail": "On" if e.all_magic else "Off", "act": ("all_magic",),
              "help": "On: every spell unlocked from the start, whatever your job and level. "
                      "Off: the spells your jobs have learnt by their levels."}]})
+        root.append({"label": "Config", "ok": True, "detail": "", "children": [
+            {"label": "Combat Mode", "ok": True, "detail": "FFXI" if e.ffxi_combat else "Monster Hunter",
+             "act": ("combat",),
+             "help": "FFXI: Attack fights for you (Y and B don't swing while it does), the d-pad picks your "
+                     "target, a fallen target is carved.\nMonster Hunter: Y and B swing, the d-pad is the game's "
+                     "(/mhcombat)."},
+            {"label": "Interface", "ok": True, "detail": "Monster Hunter" if self.mh_hud else "FFXI", "act": ("ui",),
+             "help": "FFXI's windows, or Monster Hunter's own HUD in their place (F9, /ui)."}]})
         return root
 
     def _gear_menu(self) -> list[dict]:
@@ -1053,10 +1100,6 @@ class App:
             slots.append({"label": G.SLOT_LABEL[slot], "ok": bool(choices), "detail": worn["name"] if worn else "",
                           "help": g.describe(worn) if worn else "", "children": choices or
                           [{"label": "(Nothing to wear here)", "ok": False, "detail": ""}]})
-        slots.append({"label": "Button Combat", "ok": True,
-                      "detail": "On" if self.cfg.get("mh_swings", True) is not False else "Off", "act": ("mhcombat",),
-                      "help": "On: the pad's Y and B swing as in Monster Hunter, beside FFXI's Attack.\n"
-                              "Off: while you attack, FFXI's auto-attack fights for you (/mhcombat)."})
         slots.append({"label": "Lockstyle", "ok": True, "detail": "On" if e.lockstyle else "Off", "act": ("lockstyle",),
                       "help": "On: the look you have now stays, whatever you wear (FFXI's /lockstyle).\n"
                               "Off: your equipment shows."})
@@ -1156,9 +1199,13 @@ class App:
         elif act[0] == "release":
             if self.party:
                 self.party.release(act[1])
-        elif act[0] == "mhcombat":
-            self.chat_command("/mhcombat " + ("off" if self.cfg.get("mh_swings", True) is not False else "on"))
+        elif act[0] == "combat":
+            self.set_combat(not e.ffxi_combat)
+            self.save()
             return                                     # the menu stays open: its detail shows the change
+        elif act[0] == "ui":
+            self.swap_ui()
+            return
         elif act[0] == "lockstyle":
             self.lockstyle(not e.lockstyle)
             return                                     # the menu stays open: its detail shows the change
@@ -1250,6 +1297,10 @@ class App:
             check = e._mob_label()
         elif self.port_target:                                     # targeted, not yet hit: as FFXI, unhurt
             target = 1.0
+        if self.mh_hud:                    # Monster Hunter's HUD in its place: only what's asked for
+            typing = self.chat_typing is not None
+            return U.UiState(name=e.me, log=self._log_lines(now) if typing else (), chat_input=self.chat_typing,
+                             menu=self.menu_view(now), menu_help=self.menu_help(now))
         return U.UiState(
             name=e.me, job=e.job_label(), hp=self.player_hp, max_hp=e.player_max_hp,
             mp=int(e.mp), max_mp=e.max_mp, tp=int(e.tp), exp=e.exp_now, tnl=e.tnl,
@@ -1396,12 +1447,14 @@ class App:
                 self.character.request(code, hold if isinstance(hold, str) else (code if hold else None))
         elif word in ("attack", "a"):
             self.attack(rest.lower() != "off" and not (self.e.engaged and not rest))
-        elif word in ("mhcombat", "buttons"):                      # the game's own swings on the pad's Y and B
-            on = rest.lower() not in ("off", "0") if rest else self.cfg.get("mh_swings", True) is False
-            self.cfg["mh_swings"] = on
-            e.say("Button combat on: the pad's Y and B swing as in Monster Hunter, beside FFXI's Attack." if on else
-                  "Button combat off: while you attack, FFXI's auto-attack fights for you (Y and B do nothing).",
-                  "info")
+        elif word in ("mhcombat", "buttons"):                      # Monster Hunter's combat on (or off: FFXI's)
+            self.set_combat(rest.lower() in ("off", "0") if rest else not e.ffxi_combat)
+            self.save()
+        elif word == "combat":                                     # /combat ffxi | mh
+            self.set_combat(rest.lower() not in ("mh", "monster", "monsterhunter") if rest else not e.ffxi_combat)
+            self.save()
+        elif word in ("ui", "hud"):                                # FFXI's interface or Monster Hunter's
+            self.swap_ui({"mh": True, "monster": True, "ffxi": False}.get(rest.lower()) if rest else None)
         elif word == "lockstyle":                                  # FFXI's: the look kept, whatever is worn
             self.lockstyle(rest.lower() != "off" if rest else not e.lockstyle)
         elif word in ("refa", "release"):                          # FFXI's: /refa all sends the Trusts away
@@ -1453,7 +1506,8 @@ class App:
         under the game's light (character_light: 0, unlit, its textures as they are; lit, FFXI's textures
         are made for twice the light: 2) and how much dark ground dims it (character_ground_shade: 0, as
         the game's own hunter)."""
-        pm.set_flags(not self.show_hunter, not self.show_hunter and self.cfg.get("hide_hunter", True))
+        pm.set_flags(not self.show_hunter, not self.show_hunter and self.cfg.get("hide_hunter", True),
+                     self.gm and self.cfg.get("gm_aura", True) is not False)          # a GM's aura about it
         pm.set_light(self.cfg.get("character_light", 2.0), self.cfg.get("character_ground_shade", 0.0))
         # its shadow (character_shadow): "ffxi", FFXI's round one in place of Monster Hunter's foot shadows;
         # "mh", Monster Hunter's kept; "none"
@@ -1591,6 +1645,8 @@ class App:
             if a[0] == "pause":
                 self.paused = not self.paused
                 self.e.say("Layer paused." if self.paused else "Layer resumed.")
+            elif a[0] == "ui":
+                self.swap_ui()
             elif not only_pause:
                 out.append(a)
 
@@ -1721,8 +1777,10 @@ def main() -> int:
         sys.exit(f"unknown weapon {weapon}; pick one of {', '.join(D.WEAPONS)}")
 
     engine = Engine(job, weapon, cfg.get("player_max_hp", 150), allow_kills=a.allow_kills or cfg.get("allow_kills", True) is not False,
-                    me=cfg.get("name", "Adventurer"), exp_rate=cfg.get("exp_rate", D.EXP_RATE))
+                    me=(os.environ.get("FFXI_NAME") or "").strip()[:15] or cfg.get("name", "Adventurer"),
+                    exp_rate=cfg.get("exp_rate", D.EXP_RATE))
     engine.all_magic = cfg.get("all_magic", True) is not False      # a saved choice, below, wins
+    engine.ffxi_combat = str(cfg.get("combat_mode", "ffxi")).lower() != "mh"
     engine.load_progress(saved)
     engine.set_jobs(job, sub)
     if a.level:
@@ -1750,7 +1808,8 @@ def main() -> int:
     print(f"FFXI layer: {engine.me}, {D.JOBS[engine.job]['name']} ({engine.job_label()}) with "
           f"{weapon.replace('_', ' ')}. Macros: "
           + ", ".join(f"{key_name(k)} {n}" for k, n in zip(keys, app.macros()) if n)
-          + f". {key_name(cfg['hotkeys'].get('pause', 0x6E))} = pause.")
+          + f". {key_name(cfg['hotkeys'].get('pause', 0x6E))} = pause, "
+          f"{key_name(cfg['hotkeys'].get('ui_swap', 0x78))} = FFXI's interface or Monster Hunter's.")
     ui = "console" if a.no_overlay else a.ui or cfg.get("ui") or ("game" if backend == "port" and not a.sim else "window")
     if ui == "console":
         app.run_console(a.seconds)
