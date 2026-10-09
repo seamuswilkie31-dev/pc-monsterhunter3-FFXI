@@ -1,5 +1,31 @@
 # FFXI layer — next session
 
+**More FFXI (2026-10-08, Seamus's list 2-8)**: built, NOT YET checked in play. Block version 12 (2124 bytes).
+- Pad macro bars (FFXI's combat, pad_macros): LT (the Classic's ZL) or RT (ZR) held shows that bar in place of
+  the keys' (UiState.palette_title); the d-pad and the face buttons then fire its eight (up right down left,
+  then the face's top right bottom left: Xbox Y B A X); a trigger tapped alone still reaches the game.
+  classic_filter's block, before the Y menu's; Block macro_held, macro_events. Bars: pad_macros_lt/_rt, else
+  the weapon skills and newest spells and abilities.
+- "Obtains" for the hunter's own finds: the pouch (European Gecko codes: 48 slots of u16 item, u16 count from
+  0x900E0610) watched each frame in the field (pouch_frame: not in the village, not 2 s after a map loads,
+  not a bulk change of more than 3 items); each gain with the game's name (ItemName's table at 0x806AED38 + 4)
+  to the layer (got_items, got_names). wiiboot.log's "the pouch holds: ..." once: check it is the pouch.
+- Quests' ends: nwAddResource always hooked; 04/co_clear, co_failed, co_retire.brres registering (the banner
+  as it shows) -> "has completed the quest!" (FFXI's level-up fanfare), "The quest has failed.", "has
+  abandoned the quest." quest_init__FUc can't mark a start (it clears the quest work from 7 places, at boot
+  too). An area's name across the top as you arrive (AREA_NAMES from data00_eng.bin's short names' order;
+  map07 on unchecked).
+- Treasure pool: a kill's drops wait 5 min (10 at most): the menu's Treasure Pool (Lot, Pass), /lot, /pass;
+  unpassed when the time's up, yours; passed, lost. treasure_pool = false: straight to you as before.
+- Vana'diel's clock (vana_time: 25x real from 898 at 2002-01-01 00:00 UTC; the day's element), top left; the
+  day's element's magic x1.1, the element it beats x0.9 (Engine.day_element, day_bonus).
+- Auto-target (FFXI's combat, auto_target): 2.5 s after a kill, the port's next target engaged if within
+  auto_target_range (1500).
+- Pets seen: the engine's pet (an avatar, the wyvern) built as a Trust from FFXI's monster model (pet_list's
+  pool's model; file = model + 1300: Carbuncle 16 ... Diabolos 25, Wyvern 24), following and swinging (its
+  damage the engine's pet tick's); released when the pet goes. A slot of the five.
+- The crash entering a quest area a second time: resolved (Seamus, 2026-10-08).
+
 **Fights more like FFXI, and polish (2026-10-08, Seamus's ask)**: built, NOT YET checked in play.
 - Weapon skills in motion: each skill of the hunter's weapon has the race's own file (ffxi_fx.WS_BASE + its
   animation - 1) holding its motions; its `main` routine plays them on the caster (op 0x05, the name's three

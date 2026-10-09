@@ -39,7 +39,7 @@ import tomllib
 from pathlib import Path
 
 import ffxi_data as D
-from ffxi_engine import Engine
+from ffxi_engine import Engine, vana_time
 
 HERE = Path(__file__).resolve().parent
 
@@ -214,6 +214,11 @@ MUSIC_TRACKS = {"village": 112,       # Selbina, a fishing town's
                 "field": 109,         # Ronfaure
                 "battle": 101,        # Battle Theme
                 "tough_battle": 125}  # Tough Battle
+# The areas' names, by the map's code module (the game's own short names in data00_eng.bin, in this order)
+AREA_NAMES = {"map_village": "Moga Village", "map01": "Deserted Island", "map02": "Sandy Plains",
+              "map03": "Flooded Forest", "map04": "Tundra", "map05": "Volcano", "map06": "Great Desert",
+              "map07": "Underwater Ruin", "map08": "Land Arena", "map09": "Land Arena", "map10": "Water Arena",
+              "map11": "Sacred Land"}
 # Monster Hunter's large monsters, by their number (em001...): the tough battle's
 LARGE_MONSTERS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 14, 15, 16, 18, 19, 20, 24, 25}
 
@@ -254,6 +259,12 @@ class App:
         self._hp_seen = None
         self.mh_hud = False            # F9 (or /ui): Monster Hunter's own HUD shown, FFXI's interface hidden
         self.resting = None            # /heal: {"since", "next", "ticks", "at": where the hunter knelt}
+        self.pool = []                 # FFXI's treasure pool: {"iid", "name", "until", "passed"}, a kill's drops
+        self.banner = None             # an area's name shown as you arrive: (text, until)
+        self._map_seen = None          # the map last seen (its name said on arriving)
+        self._quest_seen = None        # the port's count of quests ended, as last seen
+        self._retarget_at = None       # auto-target: when to engage the next monster after a kill
+        self._pet_seen = None          # the engine's pet as last shown beside you
         self._carvings = None          # the port's count of carvings begun, as last seen
         import mh3_text
         self.monster_names = mh3_text.monster_names(cfg.get("mh3_extract"))   # em027: "Aptonoth"
@@ -289,8 +300,13 @@ class App:
             self.e.prev_monster, self.e.prev_player = m, p
             self._drain_actions(only_pause=True)
             return
+        self.e.day_element = vana_time(time.time())["element"]    # Vana'diel's day: its element's magic stronger
         writes = self.e.tick(now, m, p, mx, mid, self.monster_max or None)
-        for a in self._drain_actions():
+        actions = self._drain_actions()
+        if hasattr(self.mem, "macro_events"):                      # the pad's bars: a trigger held, a button
+            bars = self.pad_macros()
+            actions += [("use", bars[8 * bar + i]) for bar, i in self.mem.macro_events() if 8 * bar + i < len(bars)]
+        for a in actions:
             name = self.macros()[a[1]] if a[0] == "macro" and a[1] < len(self.macros()) else a[1]
             if a[0] in ("macro", "use") and name:
                 writes.update(self.e.use(name, now, writes.get("monster_hp", m), writes.get("player_hp", p)))
@@ -313,6 +329,11 @@ class App:
         self._play_events()
         self._motion_step(now)
         self._carve_said()
+        self._got_said()
+        self._quest_said()
+        self._area_said(now)
+        self._pool_step(now)
+        self._retarget(now)
         self._music(now, p)
         self._weapon_watch()
         self._chat_step()
@@ -427,6 +448,14 @@ class App:
             self.e.trusts = list(self.trusts)
             print(f"FFXI Trusts: {len(self.trusts)} to call (the menu's Magic, Trust; /refa all sends them away)")
             self._trust_list = None
+        pet = self.e.pet["name"] if self.e.pet else None              # your pet beside you (an avatar, a wyvern)
+        if pet != self._pet_seen:
+            if self._pet_seen:
+                self.party.release(self._pet_seen, pets=True)
+            self._pet_seen = pet
+            if pet and self.cfg.get("pets_seen", True) is not False:
+                import ffxi_model as FM
+                self.party.summon_pet(pet, FM.ffxi_root(self.cfg.get("ffxi_path")))
         dt = min(0.1, now - getattr(self, "_trust_t", now))
         self._trust_t = now
         scene = self.fx.get("scene") if self.fx else None
@@ -491,6 +520,8 @@ class App:
             self.mem.set_auto_carve(ffxi and self.cfg.get("auto_carve", True) is not False)
         if hasattr(self.mem, "set_mh_hud"):
             self.mem.set_mh_hud(self.mh_hud)
+        if hasattr(self.mem, "set_pad_macros"):                    # the triggers' bars: FFXI's combat
+            self.mem.set_pad_macros(ffxi and self.cfg.get("pad_macros", True) is not False)
         if hasattr(self.mem, "set_engage"):
             self.mem.set_engage(self.e.engaged, self.e.engaged and self.cfg.get("attack_lock_camera", True) is not False)
 
@@ -567,6 +598,101 @@ class App:
         while queue_ and self.character and now >= queue_[0][0]:
             self.character.request(queue_.pop(0)[1])
 
+    def _got_said(self) -> None:
+        """What came into the pouch in the field, as FFXI says what you obtain."""
+        if not hasattr(self.mem, "got"):
+            return
+        for _iid, n, name in self.mem.got():
+            name = name or "an item"
+            if n > 1:
+                self.e.say(f"{self.e.me} obtains {n} {name}.", "heal")
+            else:
+                article = "an" if name[:1].lower() in "aeiou" else "a"
+                self.e.say(f"{self.e.me} obtains {article} {name}.", "heal")
+
+    def _quest_said(self) -> None:
+        """A quest's end (its banner loading), in FFXI's words; complete, FFXI's fanfare."""
+        if not hasattr(self.mem, "quest"):
+            return
+        seq, kind = self.mem.quest()
+        if self._quest_seen is None or seq == self._quest_seen:
+            self._quest_seen = seq
+            return
+        self._quest_seen = seq
+        e = self.e
+        if kind == 2:
+            e.say(f"{e.me} has completed the quest!", "skillchain")
+            if self.sounds:
+                import ffxi_sound as FS
+                self.sounds.play_effect(FS.LEVEL_UP)
+        elif kind == 3:
+            e.say("The quest has failed.", "warn")
+        elif kind == 4:
+            e.say(f"{e.me} has abandoned the quest.", "info")
+
+    def _area_said(self, now: float) -> None:
+        """Arriving in an area: its name across the top a few seconds, as FFXI shows a zone's."""
+        if not hasattr(self.mem, "map_name"):
+            return
+        where = self.mem.map_name()
+        if where == self._map_seen:
+            return
+        first = self._map_seen is None
+        self._map_seen = where
+        name = AREA_NAMES.get(where)
+        if name and not first:
+            self.banner = (name, now + 5.0)
+            self.e.say(f"=== Area: {name} ===", "info")
+
+    def _retarget(self, now: float) -> None:
+        """Auto-target (FFXI's combat, auto_target): a moment after a kill, the next monster near is engaged."""
+        if self._retarget_at is None or now < self._retarget_at:
+            return
+        self._retarget_at = None
+        t = self.port_target
+        reach = float(self.cfg.get("auto_target_range", 1500.0))
+        if t and t["dist"] <= reach and self.monster_hp and not self.e.engaged:
+            self.attack(True)
+
+    # --- FFXI's treasure pool: a kill's drops wait in it, each lotted, passed, or yours when its time is up ---
+    POOL_TIME, POOL_SIZE = 300.0, 10
+
+    def _pool_add(self, it: dict, now: float) -> None:
+        if len(self.pool) >= self.POOL_SIZE:                      # full: the oldest goes out to you
+            self._pool_settle(self.pool[0], lotted=False)
+        article = "an" if it["name"][:1].lower() in "aeiou" else "a"
+        self.e.say(f"You find {article} {it['name']} on the {self.e.target}.", "info")
+        self.pool.append({"iid": it["id"], "name": it["name"], "until": now + self.POOL_TIME, "passed": False})
+
+    def _pool_settle(self, entry: dict, lotted: bool) -> None:
+        """An item out of the pool: yours (lotted, or its time up unpassed), or lost (passed)."""
+        if entry in self.pool:
+            self.pool.remove(entry)
+        if entry["passed"] and not lotted:
+            self.e.say(f"{entry['name']} is lost.", "warn")
+            return
+        self.gear.give(entry["iid"])
+        article = "an" if entry["name"][:1].lower() in "aeiou" else "a"
+        self.e.say(f"{self.e.me} obtains {article} {entry['name']}.", "skillchain")
+        self.e.dirty = True
+        self.save()
+
+    def pool_lot(self, i: int) -> None:
+        if 0 <= i < len(self.pool):
+            entry = self.pool[i]
+            self.e.say(f"{self.e.me}'s lot for {entry['name']}: {random.randint(1, 999)} points.", "info")
+            self._pool_settle(entry, lotted=True)
+
+    def pool_pass(self, i: int) -> None:
+        if 0 <= i < len(self.pool):
+            entry = self.pool[i]
+            entry["passed"] = True
+            self.e.say(f"{self.e.me} passes {entry['name']}.", "info")
+
+    def _pool_step(self, now: float) -> None:
+        for entry in [x for x in self.pool if now >= x["until"]]:
+            self._pool_settle(entry, lotted=False)
+
     def _carve_said(self) -> None:
         """The port began carving a fallen target: said, as FFXI says what you do."""
         if not hasattr(self.mem, "carvings"):
@@ -632,6 +758,8 @@ class App:
                 self._drops(int(name))
             if kind == "kill" and self.e.engaged:
                 self.attack(False)
+                if self.e.ffxi_combat and self.cfg.get("auto_target", True) is not False:
+                    self._retarget_at = time.monotonic() + 2.5            # (the port moves on from the fallen)
             if kind == "ws" and self.character:        # the skill's own motions, as its file plays them
                 plan = getattr(self, "_ws_plans", {}).get(name)
                 if plan:
@@ -1015,6 +1143,24 @@ class App:
             tmp.write_text(json.dumps(self.e.progress(), indent=1), encoding="utf-8")
             tmp.replace(self.save_path)
 
+    def pad_macros(self) -> list[str]:
+        """The pad's two bars, eight each (LT then RT; each the d-pad's up, right, down, left, then the face's
+        top, right, bottom, left): config.toml's pad_macros_lt / pad_macros_rt where set, else your weapon
+        skills and newest spells and abilities, as the keys' macros run on."""
+        e = self.e
+        ws = e.known_ws()[-4:]
+        ws += [""] * (4 - len(ws))
+        own = sorted([(lv, x) for lv, x in e.j["spells"] + e.j["abilities"]
+                      if lv <= e.level and not D.ABILITIES.get(x, {}).get("sp")], key=lambda t: -t[0])
+        auto = ws + [x for _, x in own]
+        out = []
+        for bar, key in ((0, "pad_macros_lt"), (1, "pad_macros_rt")):
+            chosen = self.cfg.get(key, [])
+            for i in range(8):
+                k = 8 * bar + i
+                out.append(chosen[i] if i < len(chosen) and chosen[i] else (auto[k] if k < len(auto) else ""))
+        return out
+
     def macros(self) -> list[str]:
         """What each macro key does: [macros] in config.toml where set, else the newest of each."""
         e, n = self.e, len(macro_keys(self.cfg))
@@ -1102,6 +1248,13 @@ class App:
                 root.append({"label": "Magic", "ok": True, "detail": "", "children": [
                     {"label": names.get(s, s.title()), "ok": True, "detail": "",
                      "children": [action(n) for n in ns]} for s, ns in schools.items()]})
+        if self.pool:                                             # FFXI's treasure pool: Lot or Pass each
+            root.append({"label": "Treasure Pool", "ok": True, "detail": f"{len(self.pool)}", "children": [
+                {"label": x["name"], "ok": not x["passed"], "icon": x["iid"],
+                 "detail": "Passed" if x["passed"] else f"{int(max(0, x['until'] - now)) // 60}:{int(max(0, x['until'] - now)) % 60:02d}",
+                 "children": [{"label": "Lot", "ok": True, "detail": "", "act": ("lot", i)},
+                              {"label": "Pass", "ok": not x["passed"], "detail": "", "act": ("pass", i)}]}
+                for i, x in enumerate(self.pool)]})
         if self.party and self.party.members:                     # the Trusts called: each to send away
             called = [m.trust["name"] for m in self.party.members]
             root.append({"label": "Party", "ok": True, "detail": f"{len(called)}", "children": [
@@ -1268,6 +1421,13 @@ class App:
         elif act[0] == "release":
             if self.party:
                 self.party.release(act[1])
+        elif act[0] == "lot":
+            self.pool_lot(act[1])
+            self._menu_close()
+            return
+        elif act[0] == "pass":
+            self.pool_pass(act[1])
+            return
         elif act[0] == "combat":
             self.set_combat(not e.ffxi_combat)
             self.save()
@@ -1354,11 +1514,18 @@ class App:
             effects.append(("Chain", int(D.SC_WINDOW_CLOSE - (now - e.last_ws_time))))
         keys = macro_keys(self.cfg)
         pal = []
-        for k, n in zip(keys, self.macros()):
+        held = self.mem.macro_held() if hasattr(self.mem, "macro_held") and e.ffxi_combat else 0
+        if held:                                                   # a trigger held: its bar, as FFXI's on a pad
+            labels = ("\u2191", "\u2192", "\u2193", "\u2190", "Y", "B", "A", "X")
+            bar = self.pad_macros()[8 * (held - 1):8 * held]
+            entries = zip(labels, bar)
+        else:
+            entries = ((key_name(k), n) for k, n in zip(keys, self.macros()))
+        for label, n in entries:
             if n:
                 ok, _ = e.can_use(n, now)
                 left = e.recasts.get(n, 0) - now
-                pal.append((key_name(k), n, ok, f"{int(left) + 1}s" if left > 0 else ""))
+                pal.append((label, n, ok, f"{int(left) + 1}s" if left > 0 else ""))
         cast_frac = 1 - max(0.0, e.cast_done - now) / e.cast_total if e.casting and e.cast_total else 0.0
         target = check = None
         if self.monster_hp is not None and self.monster_max:
@@ -1380,9 +1547,17 @@ class App:
             log=self._log_lines(now), palette=tuple(pal), menu=self.menu_view(now), menu_help=self.menu_help(now),
             nameplate=self._nameplate(), linkpearl=self._linkpearl(), **self._target_arrow(now),
             chat_input=self.chat_typing, party=self.party.party_rows() if self.party else (), gm=self.gm,
-            **self._equip_grid(now),
+            **self._equip_grid(now), palette_title=("LT", "RT")[held - 1] if held else "",
+            clock=self._clock() if self.cfg.get("vanadiel_clock", True) is not False else None,
+            pool=tuple((x["iid"], x["name"], int(max(0, x["until"] - now)), x["passed"]) for x in self.pool),
+            banner=self.banner[0] if self.banner and now < self.banner[1] else None,
             party_names=self.party.nameplates() if self.party and self.cfg.get("nameplate", True) is not False else (),
             status="" if self.status == "connected" else self.status)
+
+    def _clock(self) -> tuple:
+        """Vana'diel's day and hour: (day, element, hour, minute), the minute in tens (redrawn at most then)."""
+        v = vana_time(time.time())
+        return (v["day"], v["element"], v["hour"], v["minute"] // 10 * 10)
 
     def _equip_grid(self, now: float) -> dict:
         """FFXI's Equipment window while the menu's Equipment is open: what's worn in each slot, and the slot
@@ -1454,10 +1629,14 @@ class App:
         import ffxi_model as FM
         t = self.port_target
         big = bool(t) and (mh3_text.model_number(t["name"]) or 0) in LARGE_MONSTERS
+        now = time.monotonic()
         for it in self.gear.roll_drop(mob_level, big):
-            self.gear.give(it["id"])
-            article = "an" if it["name"][:1].lower() in "aeiou" else "a"
-            self.e.say(f"{self.e.me} obtains {article} {it['name']}.", "skillchain")
+            if self.cfg.get("treasure_pool", True) is False:
+                self.gear.give(it["id"])
+                article = "an" if it["name"][:1].lower() in "aeiou" else "a"
+                self.e.say(f"{self.e.me} obtains {article} {it['name']}.", "skillchain")
+            else:
+                self._pool_add(it, now)
         self.save()
 
     def equip(self, slot: str, iid) -> None:
@@ -1535,6 +1714,14 @@ class App:
         elif word in ("mhcombat", "buttons"):                      # Monster Hunter's combat on (or off: FFXI's)
             self.set_combat(rest.lower() in ("off", "0") if rest else not e.ffxi_combat)
             self.save()
+        elif word in ("lot", "pass"):                              # FFXI's: /lot, /pass (all, or the first)
+            if not self.pool:
+                e.say("There is nothing in the treasure pool.", "warn")
+            elif word == "lot":
+                self.pool_lot(0)
+            else:
+                for i in range(len(self.pool)) if rest.lower() == "all" else [0]:
+                    self.pool_pass(i)
         elif word == "combat":                                     # /combat ffxi | mh
             self.set_combat(rest.lower() not in ("mh", "monster", "monsterhunter") if rest else not e.ffxi_combat)
             self.save()

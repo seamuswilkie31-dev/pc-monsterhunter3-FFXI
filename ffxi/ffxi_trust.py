@@ -176,6 +176,13 @@ WEAPON_SKILL = {"WAR": "Raging Rush", "MNK": "Asuran Fists", "THF": "Evisceratio
                 "SCH": "Omniscience", "GEO": "Exudation"}
 
 
+# Pets seen: FFXI's monster model of each (LandSandBoat's pet_list and mob_pools: the pool's model number),
+# the model's file its number + 1300
+MONSTER_FILE = 1300
+PET_MODELS = {"Carbuncle": 16, "Fenrir": 17, "Ifrit": 18, "Titan": 19, "Leviathan": 20, "Garuda": 21, "Shiva": 22,
+              "Ramuh": 23, "Wyvern": 24, "Diabolos": 25}
+
+
 def _keeps_back(trust: dict) -> bool:
     return trust["job"] in BACK_ROW
 
@@ -272,6 +279,7 @@ class Member:
     max_mp: float = 0.0
     casting: tuple | None = None         # (spell, when it goes off, on the target or on you)
     arrived: bool = False                # its coming shown (the call's effect where it appears)
+    pet: bool = False                    # a summoner's avatar, a beast, a wyvern: the engine's pet, seen
     swing_n: int = 0
 
 
@@ -293,6 +301,24 @@ class Party:
 
     level: int = 1                       # the Trusts' level: yours (Party.fight sets it)
     _fought: float = 0.0                 # the last fight's tick
+
+    def summon_pet(self, name: str, root) -> bool:
+        """Your pet seen beside you (the engine's: an avatar, a wyvern), its model FFXI's (PET_MODELS: monster
+        model m in file m + 1300), following and fighting as a Trust does (its blows the engine's pet's)."""
+        import ffxi_sound as S
+        model = PET_MODELS.get(name)
+        p = S.file_path(root, model + MONSTER_FILE) if model is not None else None
+        if not p or not p.exists() or self.called(name):
+            return False
+        if len(self.members) >= MAX_CALLED:
+            self.say(f"There is no room for {name} to appear.", "warn")
+            return False
+        used = {m.slot for m in self.members}
+        m = Member({"name": name, "file": str(p), "job": "", "sub": "", "delay": 3.5, "damage": 1.0},
+                   min(s for s in range(1, MAX_CALLED + 1) if s not in used), pet=True)
+        self.members.append(m)
+        threading.Thread(target=self._build, args=(m,), daemon=True).start()
+        return True
 
     def summon(self, trust: dict) -> bool:
         if self.called(trust["name"]):
@@ -321,20 +347,22 @@ class Party:
             m.pm = m.pm or PortModel(m.slot)
             m.pm.send(packed)
             m.ready = True
-            self.say(f"{m.trust['name']} joins the party.", "system")
+            if not m.pet:
+                self.say(f"{m.trust['name']} joins the party.", "system")
         except Exception as e:                                # noqa: BLE001
             m.failed = str(e)
             self.say(f"{m.trust['name']} couldn't be called: {e}", "warn")
             if m in self.members:
                 self.members.remove(m)
 
-    def release(self, name: str | None = None) -> None:
-        """One Trust sent away, or (None) all of them."""
-        gone = [m for m in self.members if name is None or m.trust["name"] == name]
+    def release(self, name: str | None = None, pets: bool = False) -> None:
+        """One Trust sent away, or (None) all of them (pets: the pet too, silently: the engine says it)."""
+        gone = [m for m in self.members if (name is None or m.trust["name"] == name) and (pets or not m.pet)]
         for m in gone:
             self.members.remove(m)
             self.mem.set_companion(m.slot, False)
-            self.say(f"{m.trust['name']} has left the party.", "system")
+            if not m.pet:
+                self.say(f"{m.trust['name']} has left the party.", "system")
         if name and not gone:
             self.say(f"{name} isn't in the party.", "warn")
 
@@ -464,6 +492,14 @@ class Party:
                 continue
             if mb.casting:
                 continue
+            if mb.pet:                                        # a pet: its blows seen, the engine's pet dealing them
+                if mb.engaged and now >= mb.next_swing and self.in_reach(mb, target):
+                    mb.next_swing = now + max(2.0, t.get("delay", 3.5)) * random.uniform(0.9, 1.1)
+                    mb.swing_n += 1
+                    if mb.pm:
+                        mb.pm.request(f"at{mb.swing_n % 3}")
+                    shown.append(("strike", False))
+                continue
             # a cure for you, when you're hurt (whether fighting or not)
             if p_hp is not None and f["p_max"]:
                 need = HEALERS.get(t["job"]) or HEALERS.get(t["sub"], 0.0) * 0.8
@@ -554,7 +590,7 @@ class Party:
         MP (None: a job without magic), TP."""
         rows = []
         for m in self.members:
-            if m.ready:
+            if m.ready and not m.pet:
                 rows.append((m.trust["name"], 1.0, (m.mp / m.max_mp) if m.max_mp else None, int(m.tp)))
         return tuple(rows)
 

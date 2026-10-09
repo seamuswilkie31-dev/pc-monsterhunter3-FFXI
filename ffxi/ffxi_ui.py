@@ -37,6 +37,8 @@ KIND = {"ws": (255, 255, 255), "damage": (255, 255, 255), "magic": (170, 205, 25
         "skillchain": (255, 226, 120), "burst": (255, 200, 90), "warn": (250, 150, 140), "info": (210, 214, 230),
         "say": (255, 255, 255), "emote": (230, 220, 255)}
 UP, DOWN = "\u25b2", "\u25bc"
+ELEMENT_COLOUR = {"fire": (255, 120, 90), "earth": (220, 190, 110), "water": (110, 170, 255), "wind": (130, 230, 140),
+                  "ice": (170, 230, 255), "thunder": (210, 150, 255), "light": (255, 255, 230), "dark": (170, 150, 200)}
 
 
 def font(size: int, bold: bool = True, italic: bool = False) -> ImageFont.FreeTypeFont:
@@ -149,6 +151,10 @@ class UiState:
     party_names: tuple = ()               # the Trusts' names above their heads: ((name, x, y), ...), -1..1, y up
     equip_grid: tuple = ()                # the Equipment window, FFXI's 4 x 4: each slot's item id (0: none), in
     equip_cursor: int = -1                # ffxi_gear.SLOTS' order; the slot the menu points at (-1: none)
+    palette_title: str = ""               # the macro bar shown is a pad's: "LT" or "RT" (held)
+    clock: tuple | None = None            # Vana'diel's (day, element, hour, minute)
+    pool: tuple = ()                      # FFXI's treasure pool: ((item, name, seconds left, passed), ...)
+    banner: str | None = None             # an area's name as you arrive
     status: str = ""
 
 
@@ -190,6 +196,12 @@ class FfxiUi:
             self._cast(img, d, s)
         if s.palette:
             self._palette(img, d, s)
+        if s.clock:
+            self._clock(img, d, s)
+        if s.pool:
+            self._pool(img, d, s)
+        if s.banner:
+            self._text(d, (W // 2, 120), s.banner, font(30, italic=True), (240, 236, 210), anchor="ms")
         if s.menu:
             self._menu(img, d, s)
         if s.equip_grid:
@@ -435,6 +447,30 @@ class FfxiUi:
             if i == s.equip_cursor:
                 d.rectangle([cx - 1, cy - 1, cx + cell, cy + cell], outline=(255, 226, 120, 255), width=2)
 
+    def _clock(self, img, d, s: UiState) -> None:
+        """Vana'diel's day and hour, top left, the day in its element's colour."""
+        day, element, hour, minute = s.clock
+        x0, y0 = 12, 10
+        self.window(img, (x0, y0, x0 + 196, y0 + 30))
+        self._text(d, (x0 + 12, y0 + 7), day, self.f_small, ELEMENT_COLOUR.get(element, WHITE))
+        self._text(d, (x0 + 184, y0 + 7), f"{hour:02d}:{minute:02d}", self.f_small, WHITE, anchor="ra")
+
+    def _pool(self, img, d, s: UiState) -> None:
+        """FFXI's treasure pool: each item waiting, its icon, its time left (or Passed)."""
+        rows = s.pool[:10]
+        x0, y0 = 12, 46
+        x1 = x0 + 300
+        self.window(img, (x0, y0, x1, y0 + 30 + 22 * len(rows)))
+        self._text(d, (x0 + 12, y0 + 7), "Treasure Pool", self.f_small, DIM)
+        for i, (iid, name, left, passed) in enumerate(rows):
+            y = y0 + 27 + 22 * i
+            pic = item_icon(iid, 20) if iid else None
+            if pic is not None:
+                img.alpha_composite(pic if not passed else _dimmed(pic), (x0 + 10, y - 2))
+            self._text(d, (x0 + 36, y), name[:26], self.f_small, DIM if passed else WHITE)
+            self._text(d, (x1 - 12, y), "Passed" if passed else f"{left // 60}:{left % 60:02d}", self.f_small,
+                       DIM, anchor="ra")
+
     def _help(self, img, d, s: UiState) -> None:
         """An item's description, as FFXI shows it: its name first, then its slots, stats and jobs."""
         lines = [ln for ln in s.menu_help.splitlines() if ln.strip()][:9]
@@ -447,13 +483,16 @@ class FfxiUi:
             self._text(d, (x0 + 14, y0 + 8 + 20 * i), ln, self.f_val if i == 0 else self.f_small, col)
 
     def _palette(self, img, d, s: UiState) -> None:
-        """The macro bar: your keys and what they do."""
+        """The macro bar: your keys and what they do (a trigger held on the pad: that bar's, its buttons)."""
         rows = s.palette
         x1, y0 = W - 12, 34
         x0 = x1 - 250
-        self.window(img, (x0, y0, x1, y0 + 14 + 18 * len(rows)))
+        top = 20 if s.palette_title else 0
+        self.window(img, (x0, y0, x1, y0 + 14 + top + 18 * len(rows)))
+        if s.palette_title:
+            self._text(d, (x0 + 12, y0 + 7), f"Macro bar ({s.palette_title})", self.f_small, KIND["skillchain"])
         for i, (key, name, ok, detail) in enumerate(rows):
-            y = y0 + 8 + 18 * i
+            y = y0 + 8 + top + 18 * i
             self._text(d, (x0 + 12, y), key, self.f_small, KIND["skillchain"] if ok else DIM)
             self._text(d, (x0 + 40, y), name, self.f_small, WHITE if ok else DIM)
             if detail:

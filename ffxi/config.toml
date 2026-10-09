@@ -43,6 +43,14 @@ auto_carve = true        # FFXI's combat: a fallen target walked up to and carve
 dpad_target = "auto"     # the d-pad moves the target to the next monster that way: "auto" (in FFXI's combat),
                          # "engaged" (while attacking or locked on), "always", "off"
 gm_aura = true           # the launcher's GM: FFXI's GM aura about the character
+pad_macros = true        # FFXI's combat: hold LT or RT on the pad and press the d-pad or a face button for that bar's
+                         # macro (eight each; pad_macros_lt = ["Fast Blade", ...] / pad_macros_rt to choose them,
+                         # in the order up, right, down, left, Y, B, A, X)
+auto_target = true       # FFXI's combat: after a kill, the next monster near is engaged (auto_target_range units)
+auto_target_range = 1500
+treasure_pool = true     # a kill's drops wait in FFXI's treasure pool (the menu's Treasure Pool, /lot, /pass)
+vanadiel_clock = true    # Vana'diel's day and hour, top left; the day's element's magic a tenth stronger
+pets_seen = true         # your avatar or wyvern seen beside you, as FFXI's
 ui = "game"              # game: the FFXI interface in the game's window (the port); window; console
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
 weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,

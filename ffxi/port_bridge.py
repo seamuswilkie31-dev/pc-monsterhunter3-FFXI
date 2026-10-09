@@ -21,8 +21,12 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     chat_open, chat_seq, chat_line[128], chat_sent[128]: FFXI's chat line ("/" opens it in the game's
         window; the port captures the typing): open, lines sent so far, what's typed, the last sent
     mute_se[8], companions[6]: the hunter's sounds silenced; the Trusts, where each stands
-    auto_carve, mh_hud, carve_seq, reserved[5]: FFXI's combat (a fallen target carved: the layer's word,
-        the port's count of carvings begun); Monster Hunter's HUD shown in place of FFXI's (F9)
+    auto_carve, mh_hud, carve_seq: FFXI's combat (a fallen target carved: the layer's word, the port's
+        count of carvings begun); Monster Hunter's HUD shown in place of FFXI's (F9)
+    pad_macros, macro_held, macro_head, macro_events[8]: FFXI's macro bars on the pad (a trigger held, a
+        face button or the d-pad: bar << 8 | button)
+    got_head, got_items[16], got_names[16][24]: what came into the hunter's pouch in the field
+    quest_seq, quest_kind, reserved[4]: a quest's end as its banner loads (2 complete, 3 failed, 4 abandoned)
 
 A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
 local hunter's object, or in the monster whose HP the game last changed).
@@ -35,7 +39,7 @@ import time
 
 TAG = "mh3-ffxi"
 MAGIC = 0x4D483346  # 'MH3F'
-VERSION = 11
+VERSION = 12
 WATCHES, OFFSETS = 8, 4
 
 HEADER = struct.Struct("<4I")
@@ -64,9 +68,12 @@ COMPANIONS_AT = MUTE_AT + 8 * 4         # the Trusts: where each stands ([0] unu
 COMPANION = struct.Struct("<I4fII2f2fI")  # shown, x y z, yaw, battle, dead, shadow radius and darkness (the
 COMPANION_SET = struct.Struct("<I4fII2f")  # layer's); where its name goes, x y, and whether it shows (the port's)
 COMBAT_AT = COMPANIONS_AT + 6 * COMPANION.size
-COMBAT = struct.Struct("<3I5I")         # auto_carve, mh_hud, carve_seq, reserved
-SIZE = COMBAT_AT + COMBAT.size
-assert SIZE == 1624, "the layout must match struct Block in tools/ffxi_bridge.cpp"
+COMBAT = struct.Struct("<3I")           # auto_carve, mh_hud, carve_seq
+MACROS_AT = COMBAT_AT + COMBAT.size     # pad_macros, macro_held, macro_head, macro_events[8]
+GOT_AT = MACROS_AT + 11 * 4             # got_head, got_items[16], got_names[16][24]
+QUEST_AT = GOT_AT + 4 + 16 * 4 + 16 * 24   # quest_seq, quest_kind, reserved[4]
+SIZE = QUEST_AT + 6 * 4
+assert SIZE == 2124, "the layout must match struct Block in tools/ffxi_bridge.cpp"
 
 # the Classic's buttons, as the port's filter reports them (the pad's: by position)
 CL_UP, CL_LEFT, CL_X, CL_A, CL_Y, CL_B, CL_DOWN, CL_RIGHT = 0x0001, 0x0002, 0x0008, 0x0010, 0x0020, 0x0040, 0x4000, 0x8000
@@ -116,6 +123,8 @@ class PortBackend:
         self._hb, self._hb_time = HEADER.unpack_from(self.mm, 0)[2], 0.0  # connected once it moves
         self._where = {}  # name -> the address last read
         self._ev_tail = u32(self.mm, MENU_AT + 20)  # the command menu's events: from now on
+        self._macro_tail = u32(self.mm, MACROS_AT + 8)  # the pad's macros, the pouch's gains: from now on
+        self._got_tail = u32(self.mm, GOT_AT)
 
     def _set_watch(self, i: int, a: dict) -> None:
         t = a.get("type", "u16")
@@ -268,6 +277,48 @@ class PortBackend:
     def carvings(self) -> int:
         """How many carvings the port has begun (a fallen target walked up to and carved)."""
         return u32(self.mm, COMBAT_AT + 8)
+
+    # --- FFXI's macro bars on the pad; the pouch's gains; a quest's end ---
+    def set_pad_macros(self, on: bool) -> None:
+        put_u32(self.mm, MACROS_AT, 1 if on else 0)
+
+    def macro_held(self) -> int:
+        """The bar a trigger holds open: 0 none, 1 LT, 2 RT."""
+        return u32(self.mm, MACROS_AT + 4)
+
+    def macro_events(self) -> list[tuple[int, int]]:
+        """The macros pressed since the last call, oldest first: (bar 0 LT / 1 RT, button 0-7: up, right,
+        down, left, then the face's top, right, bottom, left)."""
+        head = u32(self.mm, MACROS_AT + 8)
+        if (head - self._macro_tail) & 0xFFFFFFFF > 8:
+            self._macro_tail = (head - 8) & 0xFFFFFFFF
+        out = []
+        while self._macro_tail != head:
+            v = u32(self.mm, MACROS_AT + 12 + 4 * (self._macro_tail % 8))
+            out.append((v >> 8 & 0xFF, v & 0xFF))
+            self._macro_tail = (self._macro_tail + 1) & 0xFFFFFFFF
+        return out
+
+    def got(self) -> list[tuple[int, int, str]]:
+        """What came into the hunter's pouch in the field since the last call: (item number, how many, the
+        game's name for it)."""
+        head = u32(self.mm, GOT_AT)
+        if (head - self._got_tail) & 0xFFFFFFFF > 16:
+            self._got_tail = (head - 16) & 0xFFFFFFFF
+        out = []
+        while self._got_tail != head:
+            k = self._got_tail % 16
+            v = u32(self.mm, GOT_AT + 4 + 4 * k)
+            at = GOT_AT + 4 + 16 * 4 + 24 * k
+            name = bytes(self.mm[at:at + 24]).split(b"\0")[0].decode("latin-1")
+            out.append((v & 0xFFFF, v >> 16, name))
+            self._got_tail = (self._got_tail + 1) & 0xFFFFFFFF
+        return out
+
+    def quest(self) -> tuple[int, int]:
+        """A quest's end as the port saw its banner load: (a count, the last kind: 2 complete, 3 failed, 4
+        abandoned)."""
+        return u32(self.mm, QUEST_AT), u32(self.mm, QUEST_AT + 4)
 
     def set_mh_hud(self, on: bool) -> None:
         """Monster Hunter's own HUD drawn (the FFXI interface hidden by the layer), or FFXI's in its place."""

@@ -41,7 +41,7 @@ extern uint32_t g_rso_base[];
 namespace {
 
 constexpr uint32_t kMagic = 0x4D483346;            // 'MH3F'
-constexpr uint32_t kVersion = 11;
+constexpr uint32_t kVersion = 12;
 constexpr int kWatches = 8, kOffsets = 4;
 constexpr uint32_t kMem1 = 0x80000000u, kMem1Size = 0x01800000u;
 constexpr uint32_t kMem2 = 0x90000000u, kMem2Size = 0x04000000u;
@@ -139,9 +139,21 @@ struct Block {
     uint32_t auto_carve;                // layer: 1: the target, fallen, is walked up to and carved
     uint32_t mh_hud;                    // layer: 1: Monster Hunter's own HUD drawn (the layer hides its own)
     uint32_t carve_seq;                 // port: bumped as each carving starts (the layer says so)
-    uint32_t reserved4[5];
+    // FFXI's macro bars on the pad (classic_filter): a trigger held, a face button or the d-pad fires a macro
+    uint32_t pad_macros;                // layer: 1: the triggers' bars (FFXI's combat)
+    uint32_t macro_held;                // port: the bar shown: 0 none, 1 LT (the Classic's ZL), 2 RT (ZR)
+    uint32_t macro_head;                // port: macros pressed so far
+    uint32_t macro_events[8];           // port: a ring, each the bar (0 LT, 1 RT) << 8 | its button (0-7: up,
+                                        // right, down, left, then the face's top, right, bottom, left)
+    // What comes into the hunter's pouch in the field (pouch_frame): each an item and how many, its name
+    uint32_t got_head;                  // port: items told so far
+    uint32_t got_items[16];             // port: a ring, each the item's number | how many << 16
+    char got_names[16][24];             // port: its name, as the game's own (ItemName)
+    // A quest's end, as its banner is loaded (hook_add_resource): 2 complete, 3 failed, 4 abandoned
+    uint32_t quest_seq, quest_kind;     // port
+    uint32_t reserved5[4];
 };
-static_assert(sizeof(Block) == 1624, "ffxi/port_bridge.py mirrors this layout");
+static_assert(sizeof(Block) == 2124, "ffxi/port_bridge.py mirrors this layout");
 
 // The FFXI interface the layer draws, laid over the game's picture by the renderer
 // (video_overlay_update). Its own block ("mh3-ffxi-overlay"): two image slots; the layer
@@ -285,9 +297,13 @@ void serve_music(Block* b, bool layer_up) {
 
 // MH3_RES_TRACE=1: every resource the game registers once a file is loaded (nwAddResource), to name
 // the one that arrives damaged when NW4R panics (ResTex::ref: Object not valid).
+bool g_res_trace = false;
+void quest_banner(const std::string& name);
 void hook_add_resource(PPCContext& c) {
-    rt_log("ffxi: resource %s at %08X", guest_cstr(c.r[3], 96).c_str(), c.r[4]);
+    std::string name = guest_cstr(c.r[3], 96);
+    if (g_res_trace) rt_log("ffxi: resource %s at %08X", name.c_str(), c.r[4]);
     orig_add_resource(c);
+    quest_banner(name);
 }
 
 // MH3_HIDE_HUD=1: Monster Hunter's hunt HUD (mh3_CockpitDraw) is not drawn while the FFXI interface replaces
@@ -376,8 +392,9 @@ void hook_master(PPCContext& c) {
 }
 
 // The Classic's buttons (KPAD_CL_*, as video.cpp's).
-enum : uint32_t { kClUp = 0x0001, kClLeft = 0x0002, kClX = 0x0008, kClA = 0x0010, kClY = 0x0020,
-                  kClB = 0x0040, kClHome = 0x0800, kClL = 0x2000, kClDown = 0x4000, kClRight = 0x8000 };
+enum : uint32_t { kClUp = 0x0001, kClLeft = 0x0002, kClZR = 0x0004, kClX = 0x0008, kClA = 0x0010, kClY = 0x0020,
+                  kClB = 0x0040, kClZL = 0x0080, kClHome = 0x0800, kClL = 0x2000, kClDown = 0x4000,
+                  kClRight = 0x8000 };
 std::atomic<bool> g_lock_toggle{false};  // the Classic's L held: lock on (or off), for target_frame
 constexpr uint32_t kMenuButtons = kClUp | kClDown | kClLeft | kClRight | kClA | kClB | kClX | kClY;
 
@@ -388,6 +405,20 @@ std::atomic<bool> g_layer_up{false};    // the layer bumped the overlay's alive 
 bool hud_wanted() {
     Block* b = g_block;
     return !b || !g_layer_up.load(std::memory_order_relaxed) || b->mh_hud;
+}
+
+// A quest's end: its banner's file registered (04/co_clear.brres, co_failed, co_retire: loaded as it shows),
+// for the layer to say as FFXI would.
+void quest_banner(const std::string& name) {
+    Block* b = g_block;
+    if (!b) return;
+    int kind = name.find("co_clear") != std::string::npos ? 2 : name.find("co_failed") != std::string::npos ? 3
+             : name.find("co_retire") != std::string::npos ? 4 : 0;
+    if (!kind) return;
+    b->quest_kind = (uint32_t)kind;
+    std::atomic_thread_fence(std::memory_order_release);
+    b->quest_seq = b->quest_seq + 1;
+    rt_log("ffxi: the quest's banner: %s", name.c_str());
 }
 
 // Channel 1's Classic, before the game reads it. Y is shared with the game, which sheathes the
@@ -424,6 +455,43 @@ void classic_filter(int chan, ClassicState& s) {
         y_held = false;
         return;                                   // no layer: the pad is the game's, as it was
     }
+    // FFXI's macro bars (the layer's pad_macros: FFXI's combat). LT or RT held shows that bar; a face button
+    // or the d-pad meanwhile fires its macro (the layer's), and the game doesn't see it. A trigger tapped with
+    // no macro reaches the game as a tap, as Y's does.
+    {
+        static bool chord = false;
+        static clock::time_point trig_since{}, trig_until{};
+        static uint32_t trig_tap = 0;
+        constexpr uint32_t kTrig = kClZL | kClZR;
+        constexpr uint32_t kChord[8] = {kClUp, kClRight, kClDown, kClLeft, kClX, kClA, kClB, kClY};
+        constexpr uint32_t kChordAll = kClUp | kClRight | kClDown | kClLeft | kClX | kClA | kClB | kClY;
+        if (b->pad_macros && !b->menu_open) {
+            if (pressed & kTrig) trig_since = now, chord = false;
+            int bar = (s.buttons & kClZL) ? 1 : (s.buttons & kClZR) ? 2 : 0;
+            b->macro_held = (uint32_t)bar;
+            if (bar) {
+                for (int i = 0; i < 8; ++i)
+                    if (pressed & kChord[i]) {
+                        b->macro_events[b->macro_head % 8] = (uint32_t)(bar - 1) << 8 | (uint32_t)i;
+                        std::atomic_thread_fence(std::memory_order_release);
+                        b->macro_head = b->macro_head + 1;
+                        chord = true;
+                    }
+                s.buttons &= ~kChordAll;
+                pressed &= ~kChordAll;
+                released &= ~kChordAll;
+            }
+            if ((released & kTrig) && !chord && now - trig_since < std::chrono::milliseconds(300)) {
+                trig_tap = released & kTrig;
+                trig_until = now + std::chrono::milliseconds(120);
+            }
+            s.buttons &= ~kTrig;
+            if (now < trig_until) s.buttons |= trig_tap;
+        } else {
+            b->macro_held = 0;
+        }
+    }
+
     if (b->menu_open) {
         if (pressed & kClY) {                     // a tap closes it
             b->menu_open = 0;
@@ -1032,12 +1100,85 @@ void carve_frame(Block* b, uint32_t pl, uint32_t cam, uint32_t target_model, uin
     g_carve_on.store(true, std::memory_order_relaxed);
 }
 
+// The hunter's item pouch (the European Gecko codes': 24 slots from 0x900E0610, a gunner's 24 after them, each
+// a u16 item and a u16 count). What comes into it in the field (carved, gathered, mined, mixed, picked up) is
+// told to the layer (Block::got_items, with the game's name for it: ItemName's table, 0x806AED38 + 4, an item
+// number's string), as FFXI tells what you obtain; in the village (the item box, the shops) and for a moment
+// after a map loads, nothing.
+constexpr uint32_t kPouch = 0x900E0610u, kPouchSlots = 48, kItemNames = 0x806AED38u, kItems = 0x2EB;
+void pouch_frame(Block* b) {
+    static uint16_t was[kPouchSlots][2];
+    static bool known = false;
+    static char last_map[16] = {};
+    static uint32_t settle = 0;
+    if (!b || !in_ram(kPouch, kPouchSlots * 4)) { known = false; return; }
+    uint16_t now_[kPouchSlots][2];
+    for (uint32_t i = 0; i < kPouchSlots; ++i) {
+        now_[i][0] = ld16(kPouch + 4 * i), now_[i][1] = ld16(kPouch + 4 * i + 2);
+        if (now_[i][0] >= kItems || now_[i][1] > 99) { known = false; return; }   // not a pouch now
+    }
+    char map[16];
+    std::memcpy(map, b->map, sizeof map);
+    map[15] = 0;
+    if (std::strncmp(map, last_map, sizeof map) != 0) {
+        std::memcpy(last_map, map, sizeof map);
+        settle = 120;                                          // a new map: its first 2 s not counted
+    }
+    bool field = map[0] && std::strncmp(map, "map_village", 11) != 0;
+    auto name_of = [](uint16_t id) {
+        uint32_t names = in_ram(kItemNames + 4, 4) ? ld32(kItemNames + 4) : 0;
+        uint32_t ptr = names && in_ram(names + 4u * id, 4) ? ld32(names + 4u * id) : 0;
+        return ptr && in_ram(ptr, 1) ? guest_cstr(ptr, 23) : std::string();
+    };
+    static bool shown = false;
+    if (!shown && map[0]) {                                    // once: what it holds, to check it's the pouch
+        shown = true;
+        std::string list;
+        for (uint32_t i = 0; i < kPouchSlots; ++i)
+            if (now_[i][0]) list += name_of(now_[i][0]) + " x" + std::to_string(now_[i][1]) + ", ";
+        rt_log("ffxi: the pouch holds: %s", list.empty() ? "nothing" : list.c_str());
+    }
+    int gaining = 0;                                           // a bulk change (a pouch filled, swapped): not a find
+    for (uint32_t i = 0; i < kPouchSlots; ++i)
+        gaining += now_[i][0] && (now_[i][0] != was[i][0] || now_[i][1] > was[i][1]);
+    if (known && field && !settle && gaining <= 3) {
+        for (uint32_t i = 0; i < kPouchSlots; ++i) {
+            uint16_t id = now_[i][0];
+            if (!id) continue;
+            bool first = true;                                 // each item once, at its first slot
+            for (uint32_t j = 0; j < i; ++j) first = first && now_[j][0] != id;
+            if (!first) continue;
+            int after = 0, before = 0;
+            for (uint32_t j = 0; j < kPouchSlots; ++j) {
+                if (now_[j][0] == id) after += now_[j][1];
+                if (was[j][0] == id) before += was[j][1];
+            }
+            int gain = after - before;
+            if (gain <= 0 || gain > 20) continue;
+            uint32_t k = b->got_head % 16;
+            b->got_items[k] = id | (uint32_t)gain << 16;
+            std::memset(b->got_names[k], 0, sizeof b->got_names[k]);
+            std::string n = name_of(id);
+            for (size_t c = 0, o = 0; c < n.size() && o < 23; ++c)
+                if ((unsigned char)n[c] >= 32 && (unsigned char)n[c] < 127) b->got_names[k][o++] = n[c];
+            std::atomic_thread_fence(std::memory_order_release);
+            b->got_head = b->got_head + 1;
+            static int told = 0;
+            if (told++ < 8) rt_log("ffxi: into the pouch: item %u x%d (%s)", id, gain, b->got_names[k]);
+        }
+    }
+    if (settle) --settle;
+    std::memcpy(was, now_, sizeof was);
+    known = true;
+}
+
 uint32_t g_chosen = 0;                              // the target the d-pad chose, kept while it's near
 
 void target_frame(uint32_t pl, uint32_t cam, float dt) {
     ++g_frame;
     Block* b = g_block;
     if (b) game_damage(b);
+    pouch_frame(b);
     g_enemies.erase(std::remove_if(g_enemies.begin(), g_enemies.end(),
                                    [](const Enemy& e) { return g_frame - e.frame > 30; }), g_enemies.end());
     auto live = [&](uint32_t obj) -> Enemy* {
@@ -2045,8 +2186,8 @@ void install() {
     orig_cockpit = ppc_hook("mh3_CockpitDraw", hook_cockpit);
     orig_menu_cursor = ppc_hook("put_menu_cursor__FPUsUsPC10_mh_ivec2_", hook_menu_cursor);
     orig_set_current_camera = ppc_hook("SetCurrentCamera__Q34nw4r3g3d7ScnRootFi", hook_set_current_camera);
-    if (const char* t = std::getenv("MH3_RES_TRACE"); t && !std::strcmp(t, "1"))
-        orig_add_resource = ppc_hook("nwAddResource__FPcPv", hook_add_resource);
+    g_res_trace = std::getenv("MH3_RES_TRACE") && !std::strcmp(std::getenv("MH3_RES_TRACE"), "1");
+    orig_add_resource = ppc_hook("nwAddResource__FPcPv", hook_add_resource);   // a quest's banner (quest_banner)
     if (const char* t = std::getenv("MH3_HUD_TRACE"); t && !std::strcmp(t, "1")) {
         orig_font_ex = ppc_hook("font_print_ex__FsssPSce", hook_font_ex);
         orig_font = ppc_hook("font_print__FPSce", hook_font);

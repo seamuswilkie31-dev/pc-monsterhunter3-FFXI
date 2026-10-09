@@ -40,6 +40,30 @@ def resolve_skillchain(opener: list[str], closer: list[str]) -> str | None:
     return best
 
 
+# Vana'diel's days, in order, and their elements; each element beats the next in FFXI's wheel (fire ice wind
+# earth thunder water, round; light and dark each other)
+DAYS = (("Firesday", "fire"), ("Earthsday", "earth"), ("Watersday", "water"), ("Windsday", "wind"),
+        ("Iceday", "ice"), ("Lightningday", "thunder"), ("Lightsday", "light"), ("Darksday", "dark"))
+BEATS = {"fire": "ice", "ice": "wind", "wind": "earth", "earth": "thunder", "thunder": "water", "water": "fire",
+         "light": "dark", "dark": "light"}
+
+
+def vana_time(unix: float) -> dict:
+    """Vana'diel's time now: 25 times the real, its year 898 at 2002-01-01 00:00 UTC (FFXI's clocks'
+    reckoning); the day (and its element), the hour, the minute."""
+    ms = (898 * 360 + 30) * 86400000 + (unix - 1009843200) * 1000 * 25
+    day = int(ms // 86400000) % 8
+    minutes = int(ms // 60000) % (24 * 60)
+    return {"day": DAYS[day][0], "element": DAYS[day][1], "hour": minutes // 60, "minute": minutes % 60}
+
+
+def day_bonus(day_element: str, element: str) -> float:
+    """The day's sway on magic of an element: its own a tenth stronger, the one it beats a tenth weaker."""
+    if not day_element or not element:
+        return 1.0
+    return 1.1 if element == day_element else 0.9 if BEATS.get(day_element) == element else 1.0
+
+
 def spell_family(name: str) -> str:
     """A spell's family, one of which is on at a time: its name without its grade, the -ra (party) forms as
     their own (Protect for Protect III and Protectra II; Dia for Dia II)."""
@@ -90,6 +114,8 @@ class Engine:
     dot_carry: float = 0.0                           # damage over time not yet whole, to the next tick
     ffxi_owed: int = 0                               # FFXI's damage handed to the game, not yet off the monster's HP
     owed_at: float = 0.0                             # when it was last handed over (not taken in 3 s: let go)
+    day_element: str = ""                            # Vana'diel's day's element (the layer's): its magic stronger,
+                                                     # the one it beats weaker
     ffxi_combat: bool = True                         # FFXI's combat (auto-attack, the d-pad's targets, carving), or
                                                      # Monster Hunter's (its buttons, its d-pad)
     checked: bool = False                            # this monster's /check said
@@ -789,6 +815,7 @@ class Engine:
                     dmg = self.avg_hit * f[1] * max(self.magic_mult, 0.3) * (1 + self.effect("nuke_bonus"))
                     if burst:
                         dmg *= D.MB_BONUS
+                    dmg *= day_bonus(self.day_element, f[2])
                 dmg = int(dmg * (1 + self.mob("def_down")))
                 if spell:
                     head = f"Magic Burst! {self.me} casts {src}. " if burst else f"{self.me} casts {src}. "
