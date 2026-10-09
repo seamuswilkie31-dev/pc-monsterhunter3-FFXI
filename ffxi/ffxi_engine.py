@@ -114,6 +114,7 @@ class Engine:
     dot_carry: float = 0.0                           # damage over time not yet whole, to the next tick
     ffxi_owed: int = 0                               # FFXI's damage handed to the game, not yet off the monster's HP
     owed_at: float = 0.0                             # when it was last handed over (not taken in 3 s: let go)
+    voice: int = 0                                   # /voice: the character's voice set (se2NN; 0: by race and face)
     day_element: str = ""                            # Vana'diel's day's element (the layer's): its magic stronger,
                                                      # the one it beats weaker
     ffxi_combat: bool = True                         # FFXI's combat (auto-attack, the d-pad's targets, carving), or
@@ -927,7 +928,7 @@ class Engine:
         return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp),
                 "inventory": list(self.inventory), "equipment": dict(self.equipment), "all_jobs": self.all_jobs,
                 "lockstyle": dict(self.lockstyle), "gear_serial": self.gear_serial, "all_magic": self.all_magic,
-                "ffxi_combat": self.ffxi_combat}
+                "ffxi_combat": self.ffxi_combat, "voice": self.voice}
 
     def load_progress(self, d: dict) -> None:
         self.levels = {k: int(v) for k, v in d.get("levels", {}).items() if k in D.JOBS}
@@ -939,6 +940,7 @@ class Engine:
         self.gear_serial = int(d.get("gear_serial", 0))
         self.all_magic = bool(d.get("all_magic", self.all_magic))
         self.ffxi_combat = bool(d.get("ffxi_combat", self.ffxi_combat))
+        self.voice = int(d.get("voice", 0) or 0)
         job, sub = d.get("job", self.job), d.get("sub", self.sub)
         if job in D.JOBS and (sub is None or (sub in D.JOBS and sub != job)):
             self.set_jobs(job, sub)

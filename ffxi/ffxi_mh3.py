@@ -1049,7 +1049,8 @@ class App:
                                                                 self.cfg["character_race"])
                 import ffxi_sound as FS
                 face = int(self.cfg.get("character_look", {}).get("face", 1))
-                vset = self.cfg.get("voice_set") or FS.voice_set(lib.root, self.cfg["character_race"], face)
+                vset = self.e.voice or self.cfg.get("voice_set") or FS.voice_set(lib.root, self.cfg["character_race"], face)
+                self._voice_now = vset
                 for kind, routine in (("attack", "vatk"), ("hurt", "vdam"), ("faint", "vded")):
                     opts = FX.voice_options(lib.caster, routine)            # se236's, as the file names them
                     self._voice_sets[kind] = [None if n is None else (int(vset) * 1000 + n % 1000 if vset else n)
@@ -1077,6 +1078,41 @@ class App:
             pick = random.choice(options)
             if pick is not None:
                 self.sounds.play(pick)
+
+    def voice_command(self, arg: str) -> None:
+        """/voice: the voice heard (its attack grunt played); /voice next or prev: the readable sets in turn;
+        /voice 214: that set; /voice auto: the race's again; /voice off or on. Kept with your progress."""
+        import ffxi_model as FM
+        import ffxi_sound as FS
+        e = self.e
+        if arg in ("off", "on"):
+            self.cfg["race_voice"] = arg == "on"
+            e.say(f"Voice {'on' if arg == 'on' else 'off'}.", "info")
+            return
+        root = FM.ffxi_root(self.cfg.get("ffxi_path"))
+        if not hasattr(self, "_all_voices"):
+            self._all_voices = FS.voice_sets(root)
+        now = getattr(self, "_voice_now", None) or e.voice
+        if arg in ("next", "prev", "n", "p") and self._all_voices:
+            sets = self._all_voices
+            i = sets.index(now) if now in sets else -1
+            e.voice = sets[(i + (1 if arg[0] == "n" else -1)) % len(sets)]
+        elif arg.isdigit() and FS.readable_voice(root, int(arg)):
+            e.voice = int(arg)
+        elif arg == "auto":
+            e.voice = 0
+        elif arg:
+            e.say("/voice: next, prev, a set's number (201-328), auto, off, on.", "warn")
+            return
+        if hasattr(self, "_voice_sets"):
+            del self._voice_sets                                   # chosen again from the new set
+        e.dirty = True
+        self._voices([])                                           # (builds the sets)
+        options = [n for n in (self._voice_sets or {}).get("attack", []) if n is not None]
+        if self.sounds and options:
+            self.sounds.play(options[0])
+        e.say(f"Voice: se{self._voice_now}" + (" (the race's)" if not e.voice else "") +
+              ". /voice next or prev to hear others.", "info")
 
     def _music(self, now: float, player_hp) -> None:
         """FFXI's music in place of Monster Hunter's: the village's, the field's, or, engaged (the weapon
@@ -1727,6 +1763,8 @@ class App:
             self.save()
         elif word in ("ui", "hud"):                                # FFXI's interface or Monster Hunter's
             self.swap_ui({"mh": True, "monster": True, "ffxi": False}.get(rest.lower()) if rest else None)
+        elif word == "voice":                                      # the character's voice: tried, kept
+            self.voice_command(rest.lower())
         elif word == "lockstyle":                                  # FFXI's: the look kept, whatever is worn
             self.lockstyle(rest.lower() != "off" if rest else not e.lockstyle)
         elif word in ("refa", "release"):                          # FFXI's: /refa all sends the Trusts away

@@ -446,6 +446,7 @@ void classic_filter(int chan, ClassicState& s) {
     uint32_t pressed = s.buttons & ~prev, released = prev & ~s.buttons;
     prev = s.buttons;
     bool up = g_layer_up.load(std::memory_order_relaxed);
+    bool open_before = b->menu_open != 0;
     if (b->menu_close_seq != b->menu_close_ack) {
         b->menu_open = 0;
         b->menu_close_ack = b->menu_close_seq;
@@ -515,6 +516,13 @@ void classic_filter(int chan, ClassicState& s) {
         }
         s.buttons &= ~kMenuButtons;
     }
+    // the menu just closed (an action chosen, or B back out of it): the buttons still held then aren't the
+    // game's until let go (the confirm press, still down, read by the game as its own: a roll, a swing)
+    static uint32_t swallow = 0;
+    if (open_before && !b->menu_open) swallow |= s.buttons & kMenuButtons;
+    swallow &= s.buttons;
+    s.buttons &= ~swallow;
+    pressed &= ~swallow;
     if (b->item_seq != b->item_ack) {
         b->item_ack = b->item_seq;
         y_until = now + std::chrono::milliseconds(120);
@@ -1019,6 +1027,29 @@ void hook_em_damage(PPCContext& c) {
     int32_t put = std::min(q, 32767 - std::max(was, 0));
     if (put < q) g_dmg_queue.fetch_add(q - put, std::memory_order_relaxed);
     st16(em + 0x7CA, (uint16_t)(was + put));
+    // and it is struck as a hunter's blow strikes it (fn_8029B97C): hit this frame (+0x833), the blow's kind of
+    // reaction (+0x828, +0x82A: 1, an ordinary blow's, or what the hunter's own blows have been) and where it
+    // came from (+0x816: the way from the hunter to it, turned half round), so it reacts (a small monster
+    // staggers) as to a sword. A blow of the hunter's this frame is learnt from and left as it is.
+    static uint16_t hit_kind = 1;
+    static uint8_t hit_830 = 0;
+    if (in_ram(em + 0x816, 0x20)) {
+        if (ld8(em + 0x833)) {
+            uint16_t k = ld16(em + 0x82A);
+            if (k >= 1 && k <= 9) hit_kind = k, hit_830 = ld8(em + 0x830);
+        } else {
+            st8(em + 0x833, 1);
+            st16(em + 0x828, hit_kind);
+            st16(em + 0x82A, hit_kind);
+            st8(em + 0x830, hit_830);
+            uint32_t pl = object(kBasePlayer);
+            if (pl && g_target_ok) {
+                float dx = g_target_place[0] - f32(pl + 0x3C), dz = g_target_place[2] - f32(pl + 0x44);
+                int32_t a = (int32_t)std::lround(std::atan2(dx, dz) * 65536.0f / 6.2831853f);
+                st16(em + 0x816, (uint16_t)((a + 0x8000) & 0xFFFF));
+            }
+        }
+    }
     int32_t hp = (int32_t)ld32(em + 0x7A0);
     g_dmg_now_em = em, g_dmg_now = put;
     orig_em_damage(c);

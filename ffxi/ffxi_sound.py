@@ -48,27 +48,52 @@ def sound_path(root: Path, n: int) -> Path:
 
 
 # A character's voice (grunts attacking, hurt, falling): a set of 16 sounds (se2NN001-016: idle 1-2,
-# attacking 3-6, hurt 7-10, staggering 11-13, falling 14-16), one per race and face, 16 a race in FFXI's
-# order of races from se201 (the race's effect file names se236's, the client putting the character's in
-# its place). A few are ATRAC3, which isn't read here: the nearest face's of the race then.
+# attacking 3-6, hurt 7-10, staggering 11-13, falling 14-16). The race's effect file names se236's, a
+# stand-in the client fills with the voice its NPC is given: the sets se201-se328 are FFXI's NPCs' voices,
+# not one per race and face (Gessho's, a Galka's, is se214; Babban's, a Mithra's, se220; Fablinix's, a
+# goblin's, se211; King of Hearts' se268). FFXI's own player characters have none, so each race takes one
+# that suits it: by the voice's pitch, measured across the readable sets (2026-10-09: a Tarutaru given
+# se267, the deepest of all, sounded like an ogre), its faces through the race's list in turn. A few sets
+# are ATRAC3, not read here: the next in the list then. /voice in the game tries others.
 VOICE_RACES = ["hume_male", "hume_female", "elvaan_male", "elvaan_female", "tarutaru_male", "tarutaru_female",
                "mithra", "galka"]
+VOICE_CHOICES = {
+    "hume_male": [201, 222, 228, 254, 305, 232],          # a man's (about 120-160 Hz)
+    "elvaan_male": [221, 303, 215, 254, 305, 222],
+    "hume_female": [290, 307, 249, 223, 280, 234],        # a woman's (about 210-350 Hz)
+    "elvaan_female": [249, 234, 307, 290, 223],
+    "mithra": [220, 238, 231, 234, 249],                   # Babban's first, then the brighter women's
+    "tarutaru_male": [236, 212, 243, 241, 242, 268],      # the highest, a child's (about 530-700 Hz)
+    "tarutaru_female": [316, 311, 213, 242, 241, 243],
+    "galka": [214, 302, 219, 218, 309],                    # Gessho's first, then the deepest
+}
+
+
+def readable_voice(root: Path, vset: int) -> bool:
+    try:
+        read_spw(sound_path(root, int(vset) * 1000 + 3).read_bytes())
+        return True
+    except Exception:                                                  # noqa: BLE001  ATRAC3, or missing
+        return False
 
 
 def voice_set(root: Path, race: str, face: int) -> int | None:
-    """The voice set (se2NN) for a race and face (1-16), the nearest readable face's if its isn't."""
-    if race not in VOICE_RACES:
+    """The voice set (se2NN) for a race and face (1-16): the race's list (VOICE_CHOICES), its faces in turn,
+    the next readable one if that isn't."""
+    choices = VOICE_CHOICES.get(race)
+    if not choices:
         return None
-    base = 201 + 16 * VOICE_RACES.index(race)
-    want = max(0, min(15, int(face) - 1))
-    for d in sorted(range(16), key=lambda f: (abs(f - want), f)):
-        p = sound_path(root, (base + d) * 1000 + 3)
-        try:
-            read_spw(p.read_bytes())
-            return base + d
-        except Exception:                                              # noqa: BLE001  ATRAC3, or missing
-            continue
+    start = (max(1, int(face)) - 1) % len(choices)
+    for i in range(len(choices)):
+        vset = choices[(start + i) % len(choices)]
+        if readable_voice(root, vset):
+            return vset
     return None
+
+
+def voice_sets(root: Path) -> list[int]:
+    """Every readable voice set, se201-se328 (for /voice to step through)."""
+    return [v for v in range(201, 329) if readable_voice(root, v)]
 
 
 MUSIC_ROOTS = ("sound", "sound2", "sound3", "sound4", "sound5", "sound6", "sound9")   # the base game, then each expansion's

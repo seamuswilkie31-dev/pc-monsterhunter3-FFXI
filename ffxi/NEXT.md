@@ -1,5 +1,24 @@
 # FFXI layer — next session
 
+**Fixes (2026-10-09)**: built, NOT YET checked in play (the GM aura checked: it looks right).
+- Voices: se201-se328 are FFXI's NPCs' voice sets, not one per race and face (the Trusts' models name a few:
+  Gessho, a Galka, se214; Babban, a Mithra, se220; Fablinix, a goblin, se211; King of Hearts se268); FFXI's
+  player characters have none. A Tarutaru male's face 3 got se267, the deepest of all (about 64 Hz: "an
+  ogre"). Each race now takes from its own list (ffxi_sound.VOICE_CHOICES, by pitch measured with YIN on the
+  hurt and fall sounds: Tarutaru the highest, about 530-700 Hz; Galka Gessho's then the deepest); /voice
+  next/prev/<n>/auto/off/on tries others in the game (its attack grunt played), kept with the progress.
+- The command menu's confirm leaking into the game: picking an action closes the menu with the button still
+  down, and the game took it as its own press (the pad's A is the Classic's B: a roll). The buttons held as
+  the menu closes are now kept from the game until let go (classic_filter's swallow).
+- Monsters react to FFXI's blows as to a sword's: with the damage, hook_em_damage marks the monster hit this
+  frame (+0x833, as fn_8029B97C does first) with an ordinary blow's reaction (+0x828/+0x82A: kind 1, the
+  priority table at 0x805CE448 giving 1-3 and 6-9 priority 1; or what the hunter's own blows have been,
+  learnt) and where it came from (+0x816: the way from the hunter, half round); a blow of the hunter's in
+  the same frame is left as it is.
+- The GM's legs: the Judge's Cuisses mark a band of alpha 0x55 across the thighs, the Greaves 0x44-0x55 all
+  over; on the usual alpha scale (not doubled as PS2's), the renderer's cut-out at half took them away.
+  ffxi_model.ps2_alpha: such a texture keeps only its lowest steps (< 0x20) as cut-outs.
+
 **More FFXI (2026-10-08, Seamus's list 2-8)**: built, NOT YET checked in play. Block version 12 (2124 bytes).
 - Pad macro bars (FFXI's combat, pad_macros): LT (the Classic's ZL) or RT (ZR) held shows that bar in place of
   the keys' (UiState.palette_title); the d-pad and the face buttons then fire its eight (up right down left,

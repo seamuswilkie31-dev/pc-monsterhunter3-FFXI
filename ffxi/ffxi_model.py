@@ -1066,10 +1066,16 @@ def ground_speed(joints: list[dict], verts: np.ndarray, data: np.ndarray, rate: 
 def ps2_alpha(img: np.ndarray) -> np.ndarray:
     """FFXI keeps the PlayStation 2's alpha, 0x80 opaque: a texture whose alpha stays in that range
     (DXT's rounding a little over it) is put on the usual scale, 0xFF opaque. Read as it is, half
-    its pixels fall under the renderer's cut-out and the cloth shows a lattice of holes."""
+    its pixels fall under the renderer's cut-out and the cloth shows a lattice of holes.
+    A texture already on the usual scale keeps only its lowest steps as cut-outs (DXT3's 0 and 17),
+    the rest whole: armour marks other things than holes in its alpha (the Judge's Cuisses a band of
+    0x55 across the thighs, its Greaves 0x44-0x55 nearly all over), which the renderer's cut-out at
+    half took away (2026-10-09: a GM's legs missing above the knees)."""
     a = img[..., 3]
     if a.max() > 0x90:
-        return img
+        out = img.copy()
+        out[..., 3] = np.where(a >= 0x20, 255, a).astype(np.uint8)
+        return out
     out = img.copy()
     out[..., 3] = np.minimum(a.astype(np.int32) * 2, 255).astype(np.uint8)
     return out
