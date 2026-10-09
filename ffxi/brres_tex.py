@@ -15,6 +15,7 @@ the original in build/extract-orig, and `restore` puts it back.
     uv run brres_tex.py clear  04/cock_eng.brres cock00                # fully transparent
     uv run brres_tex.py restore 04/cock_eng.brres
     uv run brres_tex.py test   04/cock_eng.brres 04/menu_eng.brres     # decode, encode, compare
+    uv run brres_tex.py ffxi   on|off      # the game's window and dialog frames in FFXI's colours, or back
 
 Paths are relative to build/extract/files (or absolute).
 """
@@ -320,6 +321,64 @@ class Brres:
         self.path.write_bytes(self.b)
 
 
+# ------------------------------------------------------------------------------------------------
+# FFXI's colours on Monster Hunter's own frames (its menus' and dialog boxes' borders, waku_*.brres): their
+# wood and brass and their greys shaded as FFXI's windows are, navy to silver by brightness, their shapes as
+# they are. Every language's file; made each time from the original kept in build/extract-orig.
+FFXI_FRAMES = [f"04/waku_{lang}.brres" for lang in ("eng", "fre", "ger", "ita", "spa")]
+FFXI_STOPS = np.array([[0.0, 6, 10, 30], [0.30, 34, 48, 108], [0.62, 150, 164, 204], [0.85, 214, 222, 240],
+                       [1.0, 250, 252, 255]], np.float64)
+
+
+def ffxi_colours(rgba: np.ndarray) -> np.ndarray:
+    """Colours as FFXI's windows': warm ones (browns, golds, olives) wholly, greys mostly, by their brightness
+    along FFXI's navy-to-silver; others (a red label, a green mark) kept; alpha kept."""
+    a = np.asarray(rgba, np.float64)
+    rgb = a[..., :3] / 255.0
+    lum_ = rgb @ np.array([0.3, 0.59, 0.11])
+    mx, mn = rgb.max(-1), rgb.min(-1)
+    chroma = mx - mn
+    sat = np.where(mx > 0, chroma / np.maximum(mx, 1e-6), 0.0)
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    safe = np.maximum(chroma, 1e-6)
+    hue = np.where(mx == r, ((g - b) / safe) % 6, np.where(mx == g, (b - r) / safe + 2, (r - g) / safe + 4)) * 60.0
+    grad = np.stack([np.interp(lum_, FFXI_STOPS[:, 0], FFXI_STOPS[:, k]) for k in (1, 2, 3)], -1)
+    warm = (hue >= 12) & (hue <= 95) & (sat >= 0.22)
+    w = np.where(warm, 1.0, np.where(sat < 0.22, 0.75, 0.0))[..., None]
+    out = a.copy()
+    out[..., :3] = rgb * 255.0 * (1 - w) + grad * w
+    return out.clip(0, 255).astype(np.uint8)
+
+
+def ffxi_look(on: bool) -> str:
+    """The game's frames in FFXI's colours (on), or as they were (off). Returns what was done."""
+    done = 0
+    for rel in FFXI_FRAMES:
+        path = FILES / rel
+        orig = ORIG / rel
+        if not path.exists():
+            continue
+        if orig.exists():
+            shutil.copy2(orig, path)                       # from the original, never twice over
+        if not on:
+            done += orig.exists()
+            continue
+        br = Brres(path)
+        for name, t in br.tex.items():
+            p = br.pal.get(name)
+            if t["ci"] and p and p["fmt"] in PAL_DEC:
+                at = p["data"]
+                raw = np.frombuffer(bytes(br.b[at:at + 2 * p["count"]]), ">u2")
+                new = PAL_ENC[p["fmt"]](ffxi_colours(PAL_DEC[p["fmt"]](raw)))
+                br.b[at:at + 2 * p["count"]] = np.asarray(new, ">u2").tobytes()
+            elif not t["ci"] and t["images"] == 1:
+                br.put(name, ffxi_colours(br.image(name)))
+        br.save()
+        done += 1
+    return (f"FFXI's colours on the game's frames ({done} files)" if on else
+            f"the game's own frames ({done} files restored)")
+
+
 def resolve(p: str) -> Path:
     path = Path(p)
     return path if path.is_absolute() else FILES / path
@@ -349,6 +408,7 @@ def main() -> int:
     c.add_argument("brres")
     c.add_argument("texture")
     sub.add_parser("restore").add_argument("brres")
+    sub.add_parser("ffxi").add_argument("state", choices=["on", "off"])
     t = sub.add_parser("test")
     t.add_argument("brres", nargs="+")
     a = ap.parse_args()
@@ -363,6 +423,9 @@ def main() -> int:
         return 0
     if a.cmd == "test":
         return test([resolve(p) for p in a.brres])
+    if a.cmd == "ffxi":
+        print(ffxi_look(a.state == "on"))
+        return 0
 
     br = Brres(resolve(a.brres))
     if a.cmd == "list":

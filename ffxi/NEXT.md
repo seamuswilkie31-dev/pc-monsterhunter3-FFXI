@@ -1,5 +1,32 @@
 # FFXI layer — next session
 
+**Fights more like FFXI, and polish (2026-10-08, Seamus's ask)**: built, NOT YET checked in play.
+- Weapon skills in motion: each skill of the hunter's weapon has the race's own file (ffxi_fx.WS_BASE + its
+  animation - 1) holding its motions; its `main` routine plays them on the caster (op 0x05, the name's three
+  letters and ?, a duration; delays trail their command) and shows the target hurt at its `mdam` call
+  (ffxi_fx.motion_schedule). ffxi_model.ws_clips adds them to the character as battle actions (ws<n><motion>;
+  the same motion in several skills one clip: a character holds 96, a sword's skills bring 89), the layer
+  plays them in turn (_motions) and the engine lands the blow at mdam's time (Engine.ws_land, landing).
+- Trusts: their own spells (LandSandBoat's mob_spell_lists by mob_pools' spellList; -ra forms as the single)
+  and weapon skills (mob_skill_lists by skill_list_id, named by the rows' comments); buffs on you (ON_YOU:
+  Protect, Shell, Haste, Refresh, Regen, songs, Indi-) and debuffs on the foe (ON_FOE), each family's
+  strongest and again once worn off (Engine.cast_by, family_active, spell_family: a stronger one replaces
+  a weaker); their weapon skills through Engine.ws_by, opening and closing skillchains with yours; their
+  WS's look from them. trusts.json rebuilt with "spells" and "skills".
+- FFXI's item icons (ffxi_items.icon: the item block's 0x280, a 32x32 8-bit bitmap, its palette's alpha 128
+  opaque; kept as PNGs in the asset folder's icons) in the Items and Equipment menus; FFXI's 4x4
+  Equipment window (ffxi_ui._equipment) while Equipment is open, the menu's slot ringed.
+- /heal: resting, HP and MP back each 10 s (the first after 20 s), more each tick; moving, hurt, fighting or
+  casting stands you up (App.rest, _rest_step).
+- FFXI's colours on Monster Hunter's own frames (brres_tex.ffxi_look: waku_*.brres, palettes and RGBA8
+  recoloured navy-to-silver by brightness; warm colours and greys only), the launcher's checkbox (on),
+  applied before the game starts, the originals kept in build/extract-orig and put back when off.
+- NOT done: FFXI's blows on the part faced (the parts' tables, ENEMY_WORK +0x83A flinch HP per part and the
+  break groups f_801266F4, give no positions; blows on a part a monster lacks could misbehave: needs the
+  hitzones' joints, found and checked in play); the lock-on camera avoiding walls (needs the game's camera
+  collision, or a ray through the scenery's draws).
+- Shield clipping: fixed (Seamus, 2026-10-08).
+
 **River's fourth round (2026-10-08)**: checked in play (Moga Woods, Kelbi): FFXI's blows took its HP to 0
 (wiiboot.log: "took FFXI's 17 as a blow: HP 35 -> 18"...), it fell, the hunter walked over and carved it (Raw
 Meat), "defeats the Kelbi" and EXP; the d-pad's targets and F9 work. NOT YET seen: the GM's aura and red
@@ -63,7 +90,7 @@ name, the linkpearl's sprite in the game, the launcher's name, a large monster's
    is what it hides of the other pieces, each triangle group's display type (the 0x8010 instruction's
    fourteenth byte) what it is (1-3 hair, 4 face, 5 wrists, 6 trousers, 7 shins); a hat hides the outer
    hair, a helmet all of it. Checked in renders (face 1A, 4A, Sallet).
-2. Shield clipping: NOT YET. The shield hangs off its mount (joint 87, a child of the forearm), keyed by
+2. Shield clipping: fixed (2026-10-08). The shield hangs off its mount (joint 87, a child of the forearm), keyed by
    every motion as the client does; its info chunk's sixth byte is 1 for a shield (no grip joint, byte 7
    0xFF) but what it changes isn't known. In renders the peace run swings it into the body. Asked for a
    screenshot of where it clips.

@@ -85,16 +85,19 @@ class Launcher:
         self.hide_hud = tk.BooleanVar(value=self.s.get("hide_hud", True))
         ttk.Checkbutton(f, text="Hide Monster Hunter's HUD (the FFXI interface replaces it; F9 in the game swaps them)",
                         variable=self.hide_hud).grid(row=7, column=0, columnspan=3, sticky="w")
+        self.ffxi_menus = tk.BooleanVar(value=self.s.get("ffxi_menus", True))
+        ttk.Checkbutton(f, text="FFXI's colours on Monster Hunter's own menus and dialog boxes",
+                        variable=self.ffxi_menus).grid(row=8, column=0, columnspan=3, sticky="w")
         # your name, as FFXI's interface and its combat log call you (else config.toml's name)
         named = ttk.Frame(f, style="TLabel")
-        named.grid(row=8, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        named.grid(row=9, column=0, columnspan=3, sticky="w", pady=(4, 0))
         ttk.Label(named, text="Your name:").pack(side="left")
         self.name = tk.StringVar(value=self.s.get("name", ""))
         ttk.Entry(named, textvariable=self.name, width=18).pack(side="left", padx=(8, 6))
         ttk.Label(named, text="(15 letters at most; empty: the config's)").pack(side="left")
         # a linkpearl by your name, as a linkshell's member wears one: its colour chosen
         pearl = ttk.Frame(f, style="TLabel")
-        pearl.grid(row=9, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        pearl.grid(row=10, column=0, columnspan=3, sticky="w", pady=(4, 0))
         self.pearl_on = tk.BooleanVar(value=bool(self.s.get("linkpearl")))
         self.pearl_colour = self.s.get("linkpearl") or self.s.get("linkpearl_last") or "#3c8cff"
         ttk.Checkbutton(pearl, text="Show a linkpearl by your name", variable=self.pearl_on).pack(side="left")
@@ -106,9 +109,9 @@ class Launcher:
         ttk.Checkbutton(pearl, text="GM (FFXI's GM icon, red name and aura; !additem in the chat line)",
                         variable=self.gm).pack(side="left", padx=(18, 0))
         self.play_btn = ttk.Button(f, text="Play", command=self.play)
-        self.play_btn.grid(row=10, column=0, sticky="w", pady=8)
+        self.play_btn.grid(row=11, column=0, sticky="w", pady=8)
         self.status = tk.StringVar(value="")
-        ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=11, column=0, columnspan=3, sticky="w")
+        ttk.Label(f, textvariable=self.status, wraplength=520).grid(row=12, column=0, columnspan=3, sticky="w")
         self.setup_btn = ttk.Button(f, text="Open the setup steps", command=self.open_setup)
         self.refresh()
         self.check_setup()
@@ -121,7 +124,7 @@ class Launcher:
         if missing:
             names = "; ".join(m.what for m in missing)
             self.status.set(f"This PC still needs: {names}. See {self.setup_file.name} in the project folder.")
-            self.setup_btn.grid(row=12, column=0, sticky="w", pady=(4, 0))
+            self.setup_btn.grid(row=13, column=0, sticky="w", pady=(4, 0))
         else:
             self.setup_btn.grid_remove()
         return not missing
@@ -196,7 +199,13 @@ class Launcher:
         self.s["linkpearl_last"] = self.pearl_colour
         self.s["gm"] = self.gm.get()
         self.s["name"] = self.name.get().strip()[:15]
+        self.s["ffxi_menus"] = self.ffxi_menus.get()
         save_settings(self.s)
+        try:                                           # the game's frames, before it reads them
+            import brres_tex as B
+            B.ffxi_look(self.s["ffxi_menus"])
+        except Exception as ex:                        # noqa: BLE001  the game plays either way
+            print(f"[the game's frames left as they are: {ex}]")
         run.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, MH3_FFXI="1")
         if self.hide_hud.get():
