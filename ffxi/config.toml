@@ -51,6 +51,8 @@ auto_target_range = 1500
 treasure_pool = true     # a kill's drops wait in FFXI's treasure pool (the menu's Treasure Pool, /lot, /pass)
 vanadiel_clock = true    # Vana'diel's day and hour, top left; the day's element's magic a tenth stronger
 pets_seen = true         # your avatar or wyvern seen beside you, as FFXI's
+close_with_game = 8      # the game closed (no word from it this many seconds once it was there): the layer saves
+                         # and closes too; 0: it waits for the game to come back
 ui = "game"              # game: the FFXI interface in the game's window (the port); window; console
 job = "RDM"             # WAR, DRK, PLD, RDM, WHM, BLM  (see ffxi_data.py)
 weapon = "sword_and_shield"   # great_sword, long_sword, sword_and_shield, hammer, lance,

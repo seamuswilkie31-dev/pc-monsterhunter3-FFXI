@@ -1932,10 +1932,17 @@ class App:
         self._start_trusts()
         start, last_draw = time.monotonic(), 0.0
         print("FFXI interface: in the game's window. Ctrl+C to stop.")
+        close_after = float(self.cfg.get("close_with_game", 8))  # the game gone this long: the layer closes too
+        alive_at = None
         try:
             while seconds is None or time.monotonic() - start < seconds:
                 self.step()
                 now = time.monotonic()
+                if self.mem.connected():
+                    alive_at = now
+                elif alive_at is not None and close_after > 0 and now - alive_at > close_after:
+                    print("The game has closed: the FFXI layer closes with it.")
+                    break
                 if now - last_draw >= 1 / 20:            # 20 images a second at most, only when it changed
                     last_draw = now
                     img = ui.render(self.ui_state(now))
