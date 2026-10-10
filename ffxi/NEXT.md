@@ -1,5 +1,16 @@
 # FFXI layer — next session
 
+**The level-up banner (2026-10-09)**: built, NOT YET checked in play.
+- The client's level effects (ROM/13/35 level up, 13/34 down: the files whose sounds already played) now play
+  about the character (App._fx_level): "Level Up !!" in gold (lvu1) at the chest, sparks crossing about it,
+  its echoes drifting below, gone in about 2.5 s; one banner for several levels at once.
+- Child generators in ffxi_fx: a particle's 0x3C (a generator emitting once where it's born: each spark's
+  crossing twin, g001's g002, turned 90 degrees) and 0x44 (one following it while it lives: the banner's echo,
+  g000's g004). 0x53 and 0x6A still not run.
+- The banner's letters stand on a box of white at alpha 75/128, which the client cuts away: ffxi_fx.CUT_BOX_FILES
+  cuts alpha < 100 for those two files only.
+- A GM's !levelup [n]: n levels, the EXP given (for trying it).
+
 **Fixes (2026-10-09)**: built, NOT YET checked in play (the GM aura checked: it looks right).
 - Voices: se201-se328 are FFXI's NPCs' voice sets, not one per race and face (the Trusts' models name a few:
   Gessho, a Galka, se214; Babban, a Mithra, se220; Fablinix, a goblin, se211; King of Hearts se268); FFXI's

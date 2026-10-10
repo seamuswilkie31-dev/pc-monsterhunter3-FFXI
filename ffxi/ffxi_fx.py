@@ -731,8 +731,9 @@ class Particle:
 
 
 class Generator:
-    def __init__(self, fx: "Effects", d: GenDef, emit_ticks: float, play: "Play"):
-        self.fx, self.d, self.play = fx, d, play
+    def __init__(self, fx: "Effects", d: GenDef, emit_ticks: float, play: "Play", parent: "Particle | None" = None):
+        """parent: a particle this is a child generator of (its 0x3C or 0x44): it stands where that does."""
+        self.fx, self.d, self.play, self.parent = fx, d, play, parent
         self.max_emit = float(emit_ticks)
         self.life = 0.0
         self.until_next = 0.0
@@ -745,12 +746,21 @@ class Generator:
         self.place()
 
     def actor(self) -> Actor | None:
+        if self.parent is not None:
+            return self.parent.gen.actor()
         src, tgt = self.play.source, self.play.target or self.play.source
         return tgt if self.d.attach in (2, 4, 6) else src
 
     def place(self):
         """Where it is: its actor's feet (a joint named: half its height up), turned as it faces; the
         target's sampled once, the caster's every tick."""
+        if self.parent is not None:                  # a child: where its particle is, turned as that is
+            if self.parent.age < self.parent.max_age or not self._frozen:
+                w, _ = particle_matrices(self.parent, None)
+                self.assoc_pos = w[:3, 3].copy()
+                self.assoc_rot = self.parent.assoc_rot.copy()
+                self._frozen = True
+            return
         if self._frozen and self.d.attach in (2, 4, 6):
             return
         a = self.actor()
@@ -769,7 +779,7 @@ class Generator:
         return not self.d.valid or (not self.particles and self.done_emitting())
 
     def update(self, ticks: float):
-        if self.d.attach in (1, 3, 5, 9, 0):
+        if self.d.attach in (1, 3, 5, 9, 0) or self.parent is not None:
             self.place()
         self.emit(ticks)
         for p in self.particles:
@@ -825,6 +835,10 @@ def sphere_offset(radius_var, base, sx=1.0, sy=1.0, sz=1.0, rot_z=0.0, rot_y=0.0
     return (m @ np.array([base + radius_var * r, 0.0, 0.0, 1.0]))[:3]
 
 
+CHILD_ONCE, CHILD_FOLLOW = 0x3C, 0x44     # a particle's child generator: emitting once where it's born (a
+                                         # flare's crossing twin), or following it while it lives (a trail)
+
+
 def new_particle(g: Generator) -> Particle:
     p = Particle(g)
     s = g.d.setup
@@ -832,6 +846,14 @@ def new_particle(g: Generator) -> Particle:
     for o in g.d.streams[1]:
         init_op(p, o)
     p.prev_pos = p.pos.copy()
+    for o in g.d.streams[1]:                      # its child generators, once it stands where it was born
+        if o.op in (CHILD_ONCE, CHILD_FOLLOW) and len(o.args) >= 8 and len(g.play.generators) < 300:
+            r = g.d.file.find(GEN, o.ref(1), g.d.dir)
+            if r:
+                d = g.d.file.generator(r[0], r[1], r[2])
+                if d.valid and d is not g.d:
+                    span = 0.0 if o.op == CHILD_ONCE else max(1.0, p.max_age)
+                    g.fx.born.append((g.play, Generator(g.fx, d, span, g.play, parent=p)))
     return p
 
 
@@ -1088,6 +1110,7 @@ class Effects:
         self.plays: list[Play] = []
         self.clock = 0.0
         self.camera: Camera | None = None
+        self.born: list = []                     # child generators made this step: (their play, it)
 
     def play(self, file: EffectFile, routine: str, source: Actor, target: Actor | None = None,
              op: int = 0x03) -> Play:
@@ -1143,6 +1166,9 @@ class Effects:
             for g in pl.generators:
                 g.update(ticks)
             pl.generators = [g for g in pl.generators if not g.expired()]
+        for pl, g in self.born:                  # the children, from their next step
+            pl.generators.append(g)
+        self.born = []
         self.plays = [pl for pl in self.plays if pl.pending or pl.generators]
 
     def busy(self) -> bool:
@@ -1397,11 +1423,21 @@ def preview(lib: Library, spell: str, cast: bool) -> int:
     return 0
 
 
+# The level's banners (the client's effects ROM/13/35 "Level Up !!", 13/34 the level lost): their letters stand
+# on a box of white at alpha 75 (of 128), which the client cuts away (as an alpha test would): cut here, these
+# alone (a soft particle's alpha left as it is)
+CUT_BOX_FILES = (("13", "35.DAT"), ("13", "34.DAT"))
+
+
 def load_texture(lib: Library, key, cache: dict) -> np.ndarray | None:
     if key not in cache:
         f = lib.file(Path(key[0]))
         r = f.find(TEX, key[1])
-        cache[key] = f.texture(r[0], r[1]) if r else None
+        img = f.texture(r[0], r[1]) if r else None
+        if img is not None and tuple(Path(key[0]).parts[-2:]) in CUT_BOX_FILES:
+            img = img.copy()
+            img[img[..., 3] < 100] = 0
+        cache[key] = img
     return cache[key]
 
 

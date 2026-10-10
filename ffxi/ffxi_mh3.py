@@ -392,10 +392,19 @@ class App:
         self._redress()
 
     def _gm_command(self, text: str) -> None:
-        """A GM's command: !additem <name> [count] (any item, by its name), as LandSandBoat's GMs type it."""
+        """A GM's command: !additem <name> [count] (any item, by its name), as LandSandBoat's GMs type it;
+        !levelup [n] (your job n levels up, the EXP given: FFXI's banner and fanfare as earned)."""
         e = self.e
         word, _, rest = text.partition(" ")
-        if word.lower() == "additem" and self.gear:
+        if word.lower() == "levelup":
+            n = int(rest) if rest.strip().isdigit() else 1
+            for _ in range(max(1, min(n, 99))):
+                if e.level >= D.LEVEL_CAP:
+                    break
+                e.gain_exp(max(1, e.tnl - e.exp_now))
+            e.dirty = True
+            self.save()
+        elif word.lower() == "additem" and self.gear:
             rest = rest.strip().strip('"')
             count = 1
             if rest.rsplit(" ", 1)[-1].isdigit() and " " in rest:
@@ -411,7 +420,7 @@ class App:
             e.dirty = True
             self.save()
         else:
-            e.say("GM commands: !additem <name> [count]", "info")
+            e.say("GM commands: !additem <name> [count], !levelup [levels]", "info")
 
     def _start_trusts(self) -> None:
         """FFXI's Trusts (ffxi_trust.py): their list read on a thread of its own (from LandSandBoat's
@@ -795,6 +804,9 @@ class App:
                     self._fx_weapon_skill(name)
                 elif kind == "skillchain":
                     self._fx_skillchain(name)
+            ups = [k for k, _ in events if k in ("level_up", "level_down")]
+            if ups:                                                 # several levels at once: one banner
+                self._fx_level(ups[-1] == "level_up")
         if not self.sounds:
             return
         self._voices(events)
@@ -881,6 +893,15 @@ class App:
         f = fx["lib"].weapon_skill(anim) if anim is not None else None
         if f is not None and fx["has_target"]:
             fx["effects"].play(f, "main", source or fx["me"], fx["them"])
+
+    def _fx_level(self, up: bool) -> None:
+        """A level gained (or lost): FFXI's own banner about the character, the client's effect (ROM/13/35:
+        "Level Up !!" in gold, sparks crossing about it, its echoes; 13/34 the level lost)."""
+        import ffxi_sound as FS
+        fx = self.fx
+        f = fx["lib"].file(fx["lib"].root / (FS.LEVEL_UP if up else FS.LEVEL_DOWN))
+        if f is not None:
+            fx["effects"].play(f, "main", fx["me"], fx["me"])
 
     def _fx_skillchain(self, name: str) -> None:
         """A skillchain closed: a burst of its element on the monster, the target's part of a spell of it,
