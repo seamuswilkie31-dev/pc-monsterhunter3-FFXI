@@ -1426,8 +1426,10 @@ def preview(lib: Library, spell: str, cast: bool) -> int:
 
 
 # The level's banners (the client's effects ROM/13/35 "Level Up !!", 13/34 the level lost): their letters stand
-# on a box of white at alpha 75 (of 128), which the client cuts away (as an alpha test would): cut here, these
-# alone (a soft particle's alpha left as it is)
+# on a box of white (alpha 75 of 128), and the letters' own alpha is noise, pixel by pixel anywhere from 0 to
+# 128 (read as it is, the letters looked like a television's static). The client shows solid gold letters and
+# no box: here the white and the empty are cut, the rest drawn whole. These alone (a soft particle's alpha
+# left as it is).
 CUT_BOX_FILES = (("13", "35.DAT"), ("13", "34.DAT"))
 
 
@@ -1438,7 +1440,9 @@ def load_texture(lib: Library, key, cache: dict) -> np.ndarray | None:
         img = f.texture(r[0], r[1]) if r else None
         if img is not None and tuple(Path(key[0]).parts[-2:]) in CUT_BOX_FILES:
             img = img.copy()
-            img[img[..., 3] < 100] = 0
+            box = (img[..., :3].min(-1) > 235) | (img[..., 3] == 0)
+            img[..., 3] = np.where(box, 0, 255).astype(np.uint8)
+            img[box, :3] = 0
         cache[key] = img
     return cache[key]
 
