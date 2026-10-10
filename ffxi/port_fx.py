@@ -14,8 +14,8 @@ import struct
 import numpy as np
 
 TAG = "mh3-ffxi-fx"
-MAGIC, VERSION = 0x4633484D, 1          # 'MH3F'
-MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 60000, 10, 128, 64
+MAGIC, VERSION = 0x4633484D, 2          # 'MH3F'
+MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 60000, 10, 128, 256   # TEX: the level banner's 256 across kept
 COUNTS_AT = 28                          # magic, version, alive, tex_serial, tex_layers, seq, front
 SCENE_AT = COUNTS_AT + 2 * 8 * 4         # scene_seq, scene_ok, target_ok
 CAMERA_AT = SCENE_AT + 12
@@ -25,7 +25,7 @@ VERTS_AT = 256
 SLOT = MAX_VERTS * VERT_FLOATS * 4
 TEX_AT = VERTS_AT + 2 * SLOT
 SIZE = TEX_AT + MAX_LAYERS * TEX * TEX * 4
-assert SIZE == 6897408, "the layout must match struct FxBlock in tools/ffxi_bridge.cpp"
+assert SIZE == 38354688, "the layout must match struct FxBlock in tools/ffxi_bridge.cpp"
 
 
 class PortFx:

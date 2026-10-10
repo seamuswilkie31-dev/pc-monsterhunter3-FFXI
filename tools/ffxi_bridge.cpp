@@ -1891,8 +1891,9 @@ ModelBlock* g_model_block = nullptr;
 // the frame's camera (video_fx_frame), which draws them into the scene after the character. The port
 // writes, each frame, where things are: the camera, the hunter, the target.
 // ================================================================================================
-constexpr uint32_t kFxMagic = 0x4633484D, kFxVersion = 1;            // 'MH3F'
-constexpr int kFxMaxVerts = 60000, kFxVertFloats = 10, kFxMaxLayers = 128, kFxTex = 64;
+constexpr uint32_t kFxMagic = 0x4633484D, kFxVersion = 2;            // 'MH3F'
+constexpr int kFxMaxVerts = 60000, kFxVertFloats = 10, kFxMaxLayers = 128, kFxTex = 256;   // (256: the level
+                                                  // banner's 256 x 64 letters kept, not squeezed to 64 across)
 struct FxBlock {
     uint32_t magic, version;
     uint32_t alive;                 // layer: bumped while it runs (3 s without: nothing drawn)
@@ -1911,7 +1912,7 @@ struct FxBlock {
     float verts[2][kFxMaxVerts * kFxVertFloats];
     uint8_t tex[kFxMaxLayers * kFxTex * kFxTex * 4];
 };
-static_assert(sizeof(FxBlock) == 6897408, "ffxi/port_fx.py mirrors this layout");
+static_assert(sizeof(FxBlock) == 38354688, "ffxi/port_fx.py mirrors this layout");
 FxBlock* g_fx_block = nullptr;
 
 void fx_frame(uint32_t pl, uint32_t cam) {

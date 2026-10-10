@@ -1440,9 +1440,13 @@ def load_texture(lib: Library, key, cache: dict) -> np.ndarray | None:
         img = f.texture(r[0], r[1]) if r else None
         if img is not None and tuple(Path(key[0]).parts[-2:]) in CUT_BOX_FILES:
             img = img.copy()
-            box = (img[..., :3].min(-1) > 235) | (img[..., 3] == 0)
+            rgb = img[..., :3].astype(np.int32)
+            # the box and the letters' whitish rim (stretched four times as tall, a dotted rim read as stripes)
+            box = ((rgb.min(-1) > 190) & (rgb.max(-1) - rgb.min(-1) < 48)) | (img[..., 3] == 0)
+            box[:, :3] = box[:, -3:] = True                  # its edges clear: the texture wraps (no sliver of
+            gold = img[~box, :3].mean(0) if (~box).any() else 0   # the far side's), the cut gold, not black
             img[..., 3] = np.where(box, 0, 255).astype(np.uint8)
-            img[box, :3] = 0
+            img[box, :3] = gold
         cache[key] = img
     return cache[key]
 
