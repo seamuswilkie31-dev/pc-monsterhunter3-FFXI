@@ -1,6 +1,16 @@
 # FFXI layer — next session
 
-**The level-up banner (2026-10-09)**: built, NOT YET checked in play.
+**The level-up banner (2026-10-09)**: checked in play ("good enough"), after these:
+- The effects' textures went to the port as 64 x 64 (port_fx TEX): the banner's 256 x 64 letters squeezed to
+  64 across, blurred and striped. Now 256 square (FxBlock version 2, 38 MB shared; kFxTex in the bridge).
+- The letters' own alpha is noise (0-128 pixel by pixel: "TV static"): the banner's drawn solid, its white
+  box and whitish rim cut, a clear border all round (the texture wraps: slivers of the far edge), sized to the
+  port's 256 here without ringing and its alpha left solid or clear (ffxi_fx.load_texture, CUT_BOX_FILES).
+- The XYZ billboard turned FFXI's X against the view's right: the echoes read mirrored over the XZ letters.
+- Effects stood at a Hume's height for every race (fx "me" now the character's own top).
+- character.py added missing keys after the file's last table: character_gear landed in [music_tracks] (the
+  music thread failed on it, the creator's gear never worn); added among the top-level keys now.
+Earlier notes of it:
 - The client's level effects (ROM/13/35 level up, 13/34 down: the files whose sounds already played) now play
   about the character (App._fx_level): "Level Up !!" in gold (lvu1) at the chest, sparks crossing about it,
   its echoes drifting below, gone in about 2.5 s; one banner for several levels at once.
