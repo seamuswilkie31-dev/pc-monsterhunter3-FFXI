@@ -1443,10 +1443,23 @@ def load_texture(lib: Library, key, cache: dict) -> np.ndarray | None:
             rgb = img[..., :3].astype(np.int32)
             # the box and the letters' whitish rim (stretched four times as tall, a dotted rim read as stripes)
             box = ((rgb.min(-1) > 190) & (rgb.max(-1) - rgb.min(-1) < 48)) | (img[..., 3] == 0)
-            box[:, :3] = box[:, -3:] = True                  # its edges clear: the texture wraps (no sliver of
-            gold = img[~box, :3].mean(0) if (~box).any() else 0   # the far side's), the cut gold, not black
+            box[:, :3] = box[:, -3:] = True                  # its edges clear, all four: the texture wraps (no
+            box[:2, :] = box[-2:, :] = True                  # sliver of the far side's along any of them)
+            gold = img[~box, :3].mean(0) if (~box).any() else 0   # the cut gold, not black: no dark fringe
             img[..., 3] = np.where(box, 0, 255).astype(np.uint8)
             img[box, :3] = gold
+            # at the port's size already (256 square), smoothed without ringing, its alpha solid or clear: a
+            # later resize's ripples left faint slivers along the cut edges
+            from PIL import Image
+            from port_fx import TEX as PORT_TEX
+            pad = PORT_TEX // 20                             # a clear border all round (the letters a tenth
+            inner = np.array(Image.fromarray(img, "RGBA").resize((PORT_TEX - 2 * pad, PORT_TEX - 2 * pad),
+                                                                 Image.BILINEAR))     # smaller): even the GPU's
+            big = np.zeros((PORT_TEX, PORT_TEX, 4), np.uint8)                       # coarser mips of it, wrapping,
+            big[..., :3] = gold                                                     # find nothing at its edges
+            big[pad:PORT_TEX - pad, pad:PORT_TEX - pad] = inner
+            big[..., 3] = np.where(big[..., 3] >= 128, 255, 0).astype(np.uint8)
+            img = big
         cache[key] = img
     return cache[key]
 
