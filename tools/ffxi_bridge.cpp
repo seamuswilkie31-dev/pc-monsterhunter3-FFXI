@@ -449,6 +449,9 @@ void classic_filter(int chan, ClassicState& s) {
     prev = s.buttons;
     bool up = g_layer_up.load(std::memory_order_relaxed);
     bool open_before = b->menu_open != 0;
+    // a menu of the game's up (its cursor drawn in the last quarter second): the d-pad and the stick are its
+    bool game_menu = now.time_since_epoch().count() - g_menu_cursor_at.load(std::memory_order_relaxed)
+                     < std::chrono::duration_cast<clock::duration>(std::chrono::milliseconds(250)).count();
     if (b->menu_close_seq != b->menu_close_ack) {
         b->menu_open = 0;
         b->menu_close_ack = b->menu_close_seq;
@@ -528,16 +531,18 @@ void classic_filter(int chan, ClassicState& s) {
     swallow &= s.buttons;
     s.buttons &= ~swallow;
     pressed &= ~swallow;
+    // FFXI's combat (menu_xy): the pad's A (the Classic's B, Monster Hunter's roll) does nothing, but in the
+    // game's own menus, where it is their back
+    if (b->menu_xy && !game_menu) {
+        s.buttons &= ~kClB;
+        pressed &= ~kClB;
+    }
     if (b->item_seq != b->item_ack) {
         b->item_ack = b->item_seq;
         y_until = now + std::chrono::milliseconds(120);
     }
     if (now < y_until) s.buttons |= kClY;         // a tap, or the layer's Items: the game's own Y
     else s.buttons &= ~kClY;                      // otherwise the filter's, until it knows
-
-    // a menu of the game's up (its cursor drawn in the last quarter second): the d-pad and the stick are its
-    bool game_menu = now.time_since_epoch().count() - g_menu_cursor_at.load(std::memory_order_relaxed)
-                     < std::chrono::duration_cast<clock::duration>(std::chrono::milliseconds(250)).count();
 
     // the d-pad, while the layer says (engaged, or locked on; or always) and there's a monster to target
     // (none: the village's menus, the game's camera), no menu of the game's up: the target moved to the next

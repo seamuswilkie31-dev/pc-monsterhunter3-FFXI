@@ -18,6 +18,8 @@
 - FFXI's command menu on X and Y in FFXI's combat (River): the pad's X held opens it, its Y confirms, its X goes
   back (closing it at the first level); A and B stay the game's even while it's open (Block menu_xy, the
   layer's _menu_step). Monster Hunter's combat keeps A confirm, B back, Y tapped closing it.
+  The pad's A (the Classic's B, the roll) then does nothing in FFXI's combat but in the game's own menus,
+  where it is their back (checked in play: no roll).
 - The GM's legs: the Judge's Cuisses mark a band of alpha 0x55 across the thighs, the Greaves 0x44-0x55 all
   over; on the usual alpha scale (not doubled as PS2's), the renderer's cut-out at half took them away.
   ffxi_model.ps2_alpha: such a texture keeps only its lowest steps (< 0x20) as cut-outs.
