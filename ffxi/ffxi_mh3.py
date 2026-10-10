@@ -520,6 +520,8 @@ class App:
             self.mem.set_auto_carve(ffxi and self.cfg.get("auto_carve", True) is not False)
         if hasattr(self.mem, "set_mh_hud"):
             self.mem.set_mh_hud(self.mh_hud)
+        if hasattr(self.mem, "set_menu_xy"):                       # the menu on X and Y: FFXI's combat
+            self.mem.set_menu_xy(ffxi)
         if hasattr(self.mem, "set_pad_macros"):                    # the triggers' bars: FFXI's combat
             self.mem.set_pad_macros(ffxi and self.cfg.get("pad_macros", True) is not False)
         if hasattr(self.mem, "set_engage"):
@@ -1406,6 +1408,8 @@ class App:
         if self.menu is None:
             self.menu = {"stack": [[0, 0]]}
         import port_bridge as P
+        # its confirm and back: FFXI's combat, the pad's Y and X (A and B left to the game); else its A and B
+        confirm, back = (P.CL_X, P.CL_Y) if self.e.ffxi_combat else (P.CL_B, P.CL_A)
         for ev in mem.menu_events():
             levels = self._menu_levels(now)
             title, nodes, cur, scroll = levels[-1]
@@ -1419,14 +1423,14 @@ class App:
                 top[0] = max(0, cur - MENU_ROWS)
             elif ev & P.CL_RIGHT:                  # a page down
                 top[0] = min(n - 1, cur + MENU_ROWS)
-            elif ev & P.CL_B:                      # the pad's bottom button (Xbox A): confirm
+            elif ev & confirm:                     # the pad's Y (FFXI's combat) or A: confirm
                 node = nodes[cur] if nodes else None
                 if node and "children" in node:
                     self.menu["stack"].append([0, 0])
                 elif node and node["ok"]:
                     self._menu_act(node["act"])
                     break
-            elif ev & P.CL_A:                      # the pad's right button (Xbox B): back
+            elif ev & back:                        # the pad's X (FFXI's combat) or B: back
                 self.menu["stack"].pop()
                 if not self.menu["stack"]:
                     self._menu_close()

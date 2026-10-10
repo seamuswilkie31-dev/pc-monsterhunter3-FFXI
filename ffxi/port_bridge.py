@@ -26,7 +26,8 @@ The block's layout must match struct Block in tools/ffxi_bridge.cpp: little-endi
     pad_macros, macro_held, macro_head, macro_events[8]: FFXI's macro bars on the pad (a trigger held, a
         face button or the d-pad: bar << 8 | button)
     got_head, got_items[16], got_names[16][24]: what came into the hunter's pouch in the field
-    quest_seq, quest_kind, reserved[4]: a quest's end as its banner loads (2 complete, 3 failed, 4 abandoned)
+    quest_seq, quest_kind: a quest's end as its banner loads (2 complete, 3 failed, 4 abandoned)
+    menu_xy, reserved[3]: FFXI's combat: the menu's buttons the pad's X and Y (A and B the game's)
 
 A watch's base: "address" (addr is an address), or "player" / "monster" (addr is an offset in the
 local hunter's object, or in the monster whose HP the game last changed).
@@ -319,6 +320,11 @@ class PortBackend:
         """A quest's end as the port saw its banner load: (a count, the last kind: 2 complete, 3 failed, 4
         abandoned)."""
         return u32(self.mm, QUEST_AT), u32(self.mm, QUEST_AT + 4)
+
+    def set_menu_xy(self, on: bool) -> None:
+        """The command menu on the pad's X and Y (Y confirms, X goes back; A and B the game's throughout), or
+        on its face's four (A confirms, B goes back)."""
+        put_u32(self.mm, QUEST_AT + 8, 1 if on else 0)
 
     def set_mh_hud(self, on: bool) -> None:
         """Monster Hunter's own HUD drawn (the FFXI interface hidden by the layer), or FFXI's in its place."""

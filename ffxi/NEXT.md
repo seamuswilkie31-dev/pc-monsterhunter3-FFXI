@@ -15,6 +15,9 @@
   priority table at 0x805CE448 giving 1-3 and 6-9 priority 1; or what the hunter's own blows have been,
   learnt) and where it came from (+0x816: the way from the hunter, half round); a blow of the hunter's in
   the same frame is left as it is.
+- FFXI's command menu on X and Y in FFXI's combat (River): the pad's X held opens it, its Y confirms, its X goes
+  back (closing it at the first level); A and B stay the game's even while it's open (Block menu_xy, the
+  layer's _menu_step). Monster Hunter's combat keeps A confirm, B back, Y tapped closing it.
 - The GM's legs: the Judge's Cuisses mark a band of alpha 0x55 across the thighs, the Greaves 0x44-0x55 all
   over; on the usual alpha scale (not doubled as PS2's), the renderer's cut-out at half took them away.
   ffxi_model.ps2_alpha: such a texture keeps only its lowest steps (< 0x20) as cut-outs.

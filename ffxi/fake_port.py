@@ -104,11 +104,15 @@ def serve_once(mm, ram: FakeRam) -> None:
 
 def press(mm, bits: int) -> None:
     """A button pressed on the pad, as classic_filter sees it: Y (held, in the port) opens the menu and
-    (tapped) closes it; while it is open, every press is an event for the layer."""
+    (tapped) closes it; while it is open, every press is an event for the layer. With menu_xy (FFXI's
+    combat) Y open is the layer's (back), and only the d-pad, X and Y are the menu's."""
     m = list(P.MENU.unpack_from(mm, P.MENU_AT))
-    if bits & P.CL_Y:
+    xy = P.u32(mm, P.QUEST_AT + 8)
+    if bits & P.CL_Y and not (xy and m[0]):
         m[0] ^= 1
         bits &= ~P.CL_Y
+    if xy:
+        bits &= P.CL_UP | P.CL_DOWN | P.CL_LEFT | P.CL_RIGHT | P.CL_X | P.CL_Y
     if m[0] and bits:
         P.put_u32(mm, P.EVENTS_AT + 4 * (m[5] % 32), bits)
         m[5] += 1
@@ -258,6 +262,7 @@ def test() -> int:
     cfg = tomllib.loads(CONFIG)
     cfg["equipment"] = False                              # the menu as it is without the item database
     app = M.App(M.Engine("RDM", "sword_and_shield", 150, levels={"RDM": 20}), P.PortBackend(cfg["addresses"]), cfg)
+    app.e.ffxi_combat = False                             # Monster Hunter's combat: the menu on A and B
     serve_once(mm, ram)
     app.step()
     press(mm, P.CL_Y)                                     # open (held, in the port)
@@ -295,6 +300,15 @@ def test() -> int:
     check(app.menu == {"stack": [[1, 0]]}, "back from a list returns to the first level")
     press(mm, P.CL_A); app.step(); serve_once(mm, ram)    # back again: closed
     check(app.menu is None and not app.mem.menu_open(), "back from the first level closes it")
+    app.e.ffxi_combat = True                              # FFXI's combat: the menu on X and Y, A and B the game's
+    app.step()
+    press(mm, P.CL_Y); app.step()                         # open (held)
+    press(mm, P.CL_DOWN); press(mm, P.CL_B); press(mm, P.CL_X)    # B the game's; the pad's Y (CL_X) confirms
+    app.step()
+    check(app.menu == {"stack": [[1, 0], [0, 0]]}, f"FFXI's combat: Y confirms, B is the game's ({app.menu})")
+    press(mm, P.CL_Y); app.step()                         # the pad's X (CL_Y): back
+    press(mm, P.CL_Y); app.step(); serve_once(mm, ram)    # and back again: closed
+    check(app.menu is None and not app.mem.menu_open(), "FFXI's combat: X goes back, then closes it")
 
     # the objects the port's hooks find (the real game's layout)
     be3 = P.PortBackend(tomllib.loads(CONFIG)["addresses"])

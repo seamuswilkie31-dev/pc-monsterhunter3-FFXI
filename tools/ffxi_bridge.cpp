@@ -151,7 +151,9 @@ struct Block {
     char got_names[16][24];             // port: its name, as the game's own (ItemName)
     // A quest's end, as its banner is loaded (hook_add_resource): 2 complete, 3 failed, 4 abandoned
     uint32_t quest_seq, quest_kind;     // port
-    uint32_t reserved5[4];
+    uint32_t menu_xy;                   // layer: 1 (FFXI's combat): the menu's buttons the pad's X and Y (Y confirms, X
+                                        // goes back) and the d-pad; A and B the game's, even while it's open
+    uint32_t reserved5[3];
 };
 static_assert(sizeof(Block) == 2124, "ffxi/port_bridge.py mirrors this layout");
 
@@ -493,8 +495,11 @@ void classic_filter(int chan, ClassicState& s) {
         }
     }
 
+    // the menu's buttons: the d-pad and the face's four; in FFXI's combat (menu_xy) the d-pad, X and Y only (the
+    // Classic's Y and X: the pad's X goes back, its Y confirms), A and B left to the game
+    const uint32_t menu_buttons = b->menu_xy ? (kClUp | kClDown | kClLeft | kClRight | kClX | kClY) : kMenuButtons;
     if (b->menu_open) {
-        if (pressed & kClY) {                     // a tap closes it
+        if (!b->menu_xy && (pressed & kClY)) {    // a tap closes it (menu_xy: it's the layer's back)
             b->menu_open = 0;
             pressed &= ~kClY;
         }
@@ -509,17 +514,17 @@ void classic_filter(int chan, ClassicState& s) {
         b->menu_open = 1;
     }
     if (b->menu_open) {
-        if (uint32_t ev = pressed & kMenuButtons) {
+        if (uint32_t ev = pressed & menu_buttons) {
             b->events[b->ev_head % 32] = ev;
             std::atomic_thread_fence(std::memory_order_release);
             b->ev_head = b->ev_head + 1;
         }
-        s.buttons &= ~kMenuButtons;
+        s.buttons &= ~menu_buttons;
     }
     // the menu just closed (an action chosen, or B back out of it): the buttons still held then aren't the
     // game's until let go (the confirm press, still down, read by the game as its own: a roll, a swing)
     static uint32_t swallow = 0;
-    if (open_before && !b->menu_open) swallow |= s.buttons & kMenuButtons;
+    if (open_before && !b->menu_open) swallow |= s.buttons & menu_buttons;
     swallow &= s.buttons;
     s.buttons &= ~swallow;
     pressed &= ~swallow;
