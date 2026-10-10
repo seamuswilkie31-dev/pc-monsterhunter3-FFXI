@@ -1208,7 +1208,9 @@ class Effects:
                     # the view's down), placed where it is
                     centre = to_mh(world[:3, 3])
                     if s["billboard"] == XYZ:
-                        basis = np.diag([-1.0, -1.0, 1.0])
+                        # (FFXI's Y down the view's down; its X the view's right, as XZ's: the level banner's
+                        # echoes, XYZ, read mirrored over its XZ letters with the X turned too)
+                        basis = np.diag([1.0, -1.0, 1.0])
                     else:
                         up_view = cam.rot_mh @ np.array([0.0, 1.0, 0.0])
                         basis = np.eye(3)

@@ -68,8 +68,18 @@ def write_config(values: dict) -> None:
         if line.search(text):
             text = line.sub(lambda m: m.group(1) + new + (m.group(3) or ""), text, count=1)
         else:
-            text = text.rstrip("\n") + f"\n{key} = {new}\n"
+            text = add_top_level(text, f"{key} = {new}")
     CONFIG.write_text(text, encoding="utf-8")
+
+
+def add_top_level(text: str, entry: str) -> str:
+    """A key added among the file's own (after the last before its first [table]): at the end, past a table's
+    header, it would be the table's (character_gear under [music_tracks]: read as a piece of music)."""
+    first_table = re.search(r"^\[", text, re.M)
+    top = text[:first_table.start()] if first_table else text
+    keys = list(re.finditer(r"^[A-Za-z_][\w-]*\s*=[^\n]*(?:\n[ \t]+#[^\n]*)*", top, re.M))
+    at = keys[-1].end() if keys else len(top.rstrip("\n"))
+    return text[:at] + "\n" + entry + text[at:]
 
 
 @lru_cache(maxsize=1)

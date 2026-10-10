@@ -928,8 +928,8 @@ class App:
             effects.camera = FX.Camera(-v[:, :3].T @ v[:, 3], v[:, :3])
             h = scene["hunter"]
             rot = h[:, :3] / np.maximum(np.linalg.norm(h[:, :3], axis=0), 1e-6)
-            me = FX.actor_from_mh(h[:, 3], rot)
-            fx["me"].pos, fx["me"].facing = me.pos, me.facing
+            me = FX.actor_from_mh(h[:, 3], rot, getattr(self, "_char_top", 175.0))   # the character's own height
+            fx["me"].pos, fx["me"].facing, fx["me"].height = me.pos, me.facing, me.height
             trusts = fx.setdefault("trusts", {})                  # the Trusts' places, for their effects
             for m in (self.party.members if self.party else []):
                 if m.ready and m.placed:
@@ -1137,13 +1137,19 @@ class App:
         e.say(f"Voice: se{self._voice_now}" + (" (the race's)" if not e.voice else "") +
               ". /voice next or prev to hear others.", "info")
 
+    def _music_tracks(self) -> dict:
+        """The pieces for each place: MUSIC_TRACKS, config.toml's [music_tracks] over them (numbers only: a key
+        that strayed under the table, as the creator's gear once did, isn't a piece)."""
+        own = {k: v for k, v in self.cfg.get("music_tracks", {}).items() if isinstance(v, int)}
+        return {**MUSIC_TRACKS, **own}
+
     def _music(self, now: float, player_hp) -> None:
         """FFXI's music in place of Monster Hunter's: the village's, the field's, or, engaged (the weapon
         out with a monster near, or blows traded in the last 6 seconds), battle music, tougher for a large
         monster; in the menus the game's own."""
         if not self.sounds or self.cfg.get("music", True) is False or not hasattr(self.mem, "map_name"):
             return
-        tracks = {**MUSIC_TRACKS, **self.cfg.get("music_tracks", {})}
+        tracks = self._music_tracks()
         where = self.mem.map_name()
         hits = self.mem.objects().get("monster_hits") if hasattr(self.mem, "objects") else None
         if hits != self._hits_seen and self._hits_seen is not None:
@@ -1186,7 +1192,7 @@ class App:
                                float(self.cfg.get("music_volume", 1.0)))
             player.prepare(D.SPELL_ANIMATION[n] for n in self.e.known_spells() if n in D.SPELL_ANIMATION)
             if self.cfg.get("music", True) is not False:            # decoded ahead, so a change doesn't wait
-                player.prepare_music({**MUSIC_TRACKS, **self.cfg.get("music_tracks", {})}.values())
+                player.prepare_music(self._music_tracks().values())
             return player
         except (Exception, SystemExit) as ex:                      # the layer runs without them
             print(f"[FFXI sounds unavailable: {ex}]")
