@@ -135,6 +135,8 @@ class Engine:
     equipment: dict = field(default_factory=dict)    # slot -> the item id worn there
     gear: dict = field(default_factory=dict)         # the equipment's stats summed (set_gear): DEF, STR, HP...
     gear_effects: dict = field(default_factory=dict) # what they do, as effects (gear_effect)
+    def_in_game: bool = False                        # your gear's DEF and VIT the hunter's defense in the game (the
+                                                     # layer's, game_defense): not cut from the blows again here
     all_jobs: bool = False                           # every job's spells and abilities at your level (solo)
     trusts: list = field(default_factory=list)       # FFXI's Trusts' spells (ffxi_trust): every job's, all unlocked
     all_magic: bool = False                          # every spell known from the start, whatever the job and level (the layer: on)
@@ -368,10 +370,18 @@ class Engine:
         }
         self.mp = min(self.mp, self.max_mp)
 
+    @property
+    def game_defense(self) -> int:
+        """Your gear as Monster Hunter's defense (an armor's sum and 1, which a monster's blow is taken against as
+        damage x 80 / (80 + defense)): DEF one for one, VIT a half. FFXI's level-75 gear, about 300: a blow a
+        fifth of its size; a starter's, about 15: most of it."""
+        return int(1 + self.gear.get("DEF", 0) + 0.5 * self.gear.get("VIT", 0))
+
     def effect(self, name: str) -> float:
         """An effect on you now: your buffs, your job's traits at its level, the subjob's at its, your gear's."""
         v = sum(b["power"] for (src, eff), b in self.buffs.items() if eff == name)
-        v += self.gear_effects.get(name, 0.0)
+        if not (name == "defn" and self.def_in_game):
+            v += self.gear_effects.get(name, 0.0)
         if name not in COUNTED:
             v += sum(p for lv, e, p in self.j["traits"] if e == name and lv <= self.level)
             if self.sj:
@@ -1044,6 +1054,13 @@ def selftest() -> int:
     for i in range(40):
         weak.tick(i * 1.0, 4000 - i, p, 150, 1, 4000)
     check(weak.avg_hit >= D.MH_RATE_FLOOR * D.MH_SHARE * 220 / 60 - 0.01, "never under the floor")
+    # your FFXI gear as the hunter's defense in the game: then not cut again here
+    armored = Engine("PLD", "sword_and_shield", rng=rng)
+    armored.set_gear({"DEF": 296, "VIT": 10})
+    check(armored.game_defense == 302, f"gear as Monster Hunter's defense ({armored.game_defense})")
+    cut = armored.effect("defn")
+    armored.def_in_game = True
+    check(cut > 0.25 and armored.effect("defn") < cut - 0.25, "the gear's DEF not cut twice")
     w = e.use("Burning Blade", t, m, p)
     check(w.get("monster_hp", m) < m, "a weapon skill damages the monster")
     m = w["monster_hp"]

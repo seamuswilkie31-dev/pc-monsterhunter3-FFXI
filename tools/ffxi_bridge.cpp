@@ -153,7 +153,9 @@ struct Block {
     uint32_t quest_seq, quest_kind;     // port
     uint32_t menu_xy;                   // layer: 1 (FFXI's combat): the menu's buttons the pad's X and Y (Y confirms, X
                                         // goes back) and the d-pad; A and B the game's, even while it's open
-    uint32_t reserved5[3];
+    uint32_t defense;                   // layer: FFXI's combat, your FFXI gear's: the hunter's defense in place of its
+                                        // armor's (apply_defense); 0: the armor's, as the game works it out
+    uint32_t reserved5[2];
 };
 static_assert(sizeof(Block) == 2124, "ffxi/port_bridge.py mirrors this layout");
 
@@ -1240,9 +1242,49 @@ void pouch_frame(Block* b) {
 
 uint32_t g_chosen = 0;                              // the target the d-pad chose, kept while it's near
 
+// The hunter's defense: fn_8027078C(PLW*) works it out (its armor's sum and 1, with its skills) into +0x3BA, and
+// as a float into +0x3C0, which a monster's blow takes as damage x 80 / (80 + defense) (fn_8029B05C). In FFXI's
+// combat the layer's (your FFXI gear's DEF) takes its place: set each frame, and again each time the game works
+// its own out (hook_pl_defense); the game's own put back once FFXI's is off. (2026-10-11: a save's hunter with
+// no armor, its defense 1, under FFXI's Judge's set: the monsters' blows landed whole.)
+PPCFunc orig_pl_defense;
+uint16_t g_game_defense = 0;                        // the game's own, as it last worked it out (0: not seen)
+uint32_t g_defense_pl = 0;                          // the hunter whose defense is FFXI's now (0: none)
+
+void apply_defense(uint32_t pl) {
+    Block* b = g_block;
+    uint32_t want = b && g_layer_up.load(std::memory_order_relaxed) ? std::min<uint32_t>(b->defense, 9999) : 0;   // (the layer gone: the armor's)
+    if (!pl || !in_ram(pl + 0x3BA, 0xC)) return;
+    if (want) {
+        static uint32_t told = 0;
+        if (g_defense_pl != pl) g_game_defense = ld16(pl + 0x3BA), told = 0;
+        g_defense_pl = pl;
+        if (told != want) rt_log("ffxi: the hunter's defense FFXI's %u (the armor's %u)", want, g_game_defense), told = want;
+        st16(pl + 0x3BA, (uint16_t)want);
+        st32(pl + 0x3C0, as_u32((float)want));
+    } else if (g_defense_pl) {
+        if (g_defense_pl == pl && g_game_defense) {
+            st16(pl + 0x3BA, g_game_defense);
+            st32(pl + 0x3C0, as_u32((float)g_game_defense));
+            rt_log("ffxi: the hunter's defense the armor's again (%u)", g_game_defense);
+        }
+        g_defense_pl = 0;
+    }
+}
+
+void hook_pl_defense(PPCContext& c) {
+    uint32_t pl = c.r[3];
+    orig_pl_defense(c);
+    if (pl && pl == object(kBasePlayer) && in_ram(pl + 0x3BA, 2)) {
+        g_game_defense = ld16(pl + 0x3BA);                    // the game's own, just worked out
+        if (g_defense_pl == pl) apply_defense(pl);
+    }
+}
+
 void target_frame(uint32_t pl, uint32_t cam, float dt) {
     ++g_frame;
     table_enemies();
+    apply_defense(pl);
     Block* b = g_block;
     if (b) game_damage(b);
     pouch_frame(b);
@@ -2310,6 +2352,8 @@ void install() {
     orig_se_req = ppc_hook("fn_800D9D2C", hook_se_req);
     orig_em_damage = ppc_hook("fn_8011F6B8", hook_em_damage);
     if (!orig_em_damage) rt_log("ffxi: fn_8011F6B8 isn't hooked (tools/mh3-hooks.txt): FFXI's damage won't reach monsters");
+    orig_pl_defense = ppc_hook("fn_8027078C", hook_pl_defense);
+    if (!orig_pl_defense) rt_log("ffxi: fn_8027078C isn't hooked (tools/mh3-hooks.txt): FFXI's defense only set each frame");
     g_se_trace = std::getenv("MH3_SE_TRACE") && !std::strcmp(std::getenv("MH3_SE_TRACE"), "1");
     if (const char* m = std::getenv("MH3_MUTE_SE")) {
         for (const char* p = m; *p;) {

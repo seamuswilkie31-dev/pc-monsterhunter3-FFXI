@@ -326,6 +326,11 @@ class PortBackend:
         on its face's four (A confirms, B goes back)."""
         put_u32(self.mm, QUEST_AT + 8, 1 if on else 0)
 
+    def set_defense(self, value: int) -> None:
+        """The hunter's defense in place of its armor's (your FFXI gear's, in FFXI's combat: the game's own blows
+        on you taken as damage x 80 / (80 + defense)); 0: the armor's, as the game works it out."""
+        put_u32(self.mm, QUEST_AT + 12, max(0, min(9999, int(value))))
+
     def set_mh_hud(self, on: bool) -> None:
         """Monster Hunter's own HUD drawn (the FFXI interface hidden by the layer), or FFXI's in its place."""
         put_u32(self.mm, COMBAT_AT + 4, 1 if on else 0)

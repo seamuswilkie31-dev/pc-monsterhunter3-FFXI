@@ -322,6 +322,7 @@ class App:
                 self.e.owe(dealt, now)
             self.e.prev_monster = m
         self._rest_step(now, writes, p)
+        self._defense_step()
         for name, val in writes.items():
             self.mem.write(name, val)
         self.monster_hp = writes.get("monster_hp", m)
@@ -557,6 +558,16 @@ class App:
             e.say(f"{e.me} stops resting.", "emote")
             if self.character:
                 self.character.request(None)
+
+    def _defense_step(self) -> None:
+        """FFXI's combat: your FFXI gear the hunter's defense in the game, in place of its Monster Hunter armor
+        (ffxi_defense); Monster Hunter's, the armor's."""
+        on = bool(self.e.ffxi_combat and self.gear and self.cfg.get("ffxi_defense", True) is not False)
+        self.e.def_in_game = on
+        value = self.e.game_defense if on else 0
+        if hasattr(self.mem, "set_defense") and value != getattr(self, "_defense_sent", None):
+            self.mem.set_defense(value)
+            self._defense_sent = value
 
     def _rest_step(self, now: float, writes: dict, p) -> None:
         """Resting: HP and MP back on FFXI's ticks; stood up by moving, being hurt, fighting or casting."""
