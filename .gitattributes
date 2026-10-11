@@ -1,0 +1,2 @@
+# Windows' batch files with Windows' line ends, in a clone and in GitHub's Download ZIP alike
+*.bat text eol=crlf

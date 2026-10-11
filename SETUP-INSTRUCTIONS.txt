@@ -23,6 +23,19 @@ What you need, in short:
   - Optional: an Xbox or similar controller
 
 
+==============================================================================
+  THE EASY WAY: Setup.bat
+==============================================================================
+
+  Download the project (GitHub's Code button, Download ZIP, extracted), then
+  double-click "Setup.bat" in its folder. It does steps 2, 3 and 5 for you:
+  it installs uv and MSYS2, fetches wiikit if the download left it out,
+  asks for your disc image and builds the game (15 to 40 minutes the first
+  time), opens FFXI's installer page if FFXI isn't installed (step 6), and
+  starts the launcher (step 7). If it stops, it says why: fix that and run
+  it again. The steps below are the same thing by hand.
+
+
 ------------------------------------------------------------------------------
  STEP 1 — Git (to download this project; skip it if you were sent an archive)
 ------------------------------------------------------------------------------
@@ -82,14 +95,15 @@ What you need, in short:
 
   The game (build\recomp-build\wiiboot.exe) can't be downloaded: it is
   Monster Hunter Tri's own code, translated and compiled on your PC from
-  your own disc. The easy way, after 5a and installing Dolphin (5b):
+  your own disc. The easy way:
 
       double-click "Build the game.bat" in the project folder
 
-  It finds the disc image and Dolphin, checks the disc is the European
-  release, and does all of 5b and 5c, saying which step it is on; if it
-  stops, it says why and what to do, and run again it carries on from
-  there. The steps by hand, if you'd rather:
+  It finds the disc image (or asks for it) and checks it is the European
+  release. It takes Dolphin's few files from your Dolphin, or from
+  Dolphin's GitHub if Dolphin isn't installed, and does all of 5b and 5c,
+  saying which step it is on. If it stops, it says why and what to do;
+  run again, it carries on from there. The steps by hand, if you'd rather:
 
   5a. Copy your Monster Hunter Tri disc image into the "build" folder of
       the project. Below it is called "Monster Hunter Tri (Europe).rvz";

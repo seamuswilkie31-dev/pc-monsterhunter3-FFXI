@@ -1,5 +1,9 @@
 # FFXI layer for Monster Hunter Tri
 
+> To install and play, see the [main README](../README.md): `Setup.bat` does it all. These are the layer's
+> developer notes, from its first phase (the overlay, the bridge, finding addresses); [NEXT.md](NEXT.md) has
+> everything since.
+
 Adds Final Fantasy XI combat to **Monster Hunter Tri**: TP from your hits, weapon skills, skillchains,
 magic bursts, MP, spells with cast times and interrupts, and six jobs. A small FFXI-style overlay sits on
 top of the game.
@@ -8,8 +12,8 @@ It runs beside the **native port** in this repository (the European release, `RM
 the game's memory through a small bridge (`tools/ffxi_bridge.cpp`). It can also run beside **Dolphin**
 with the same disc, which is how you find the addresses it needs.
 
-Personal use, single-player only. Nothing here touches FFXI's client, files or servers. The rules are
-written from FFXI's published numbers.
+Single-player only. It reads your own FFXI installation's files (models, sounds, interface art); nothing
+here touches FFXI's client or servers. The rules are written from FFXI's published numbers.
 
 ## 1. Try it right now (no game needed)
 

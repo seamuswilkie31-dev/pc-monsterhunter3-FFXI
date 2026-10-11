@@ -7,7 +7,8 @@ Double-click "Build the game.bat" in the project folder, or from PowerShell:
     powershell -ExecutionPolicy Bypass -File tools\build-game.ps1 [-Disc <image>] [-Dolphin <folder>]
 
 -Disc: the disc image (.rvz, .iso, .wbfs or .wia); else the one in the build folder, else it asks.
--Dolphin: Dolphin's folder (the one holding Sys); else it looks in the usual places, else it asks.
+-Dolphin: Dolphin's folder (the one holding Sys); else it looks in the usual places, else it fetches the few
+files needed from Dolphin's GitHub, else it asks.
 Each step is skipped once done, so after fixing a problem run it again: it carries on where it stopped.
 #>
 param([string]$Disc, [string]$Dolphin)
@@ -108,11 +109,32 @@ function Find-Dolphin {
     }
     return $null
 }
+# No Dolphin here: the same few files from Dolphin's own repository (its free fonts, and its database of the
+# SDK's functions), laid out as its Sys folder in build\dolphin
+function Get-DolphinFiles {
+    $base = "https://raw.githubusercontent.com/dolphin-emu/dolphin/master/Data/Sys"
+    $dest = Join-Path $Root "build\dolphin"
+    Say "  Dolphin isn't installed: fetching the files needed from Dolphin's GitHub instead."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = "SilentlyContinue"
+    try {
+        foreach ($f in @("totaldb.dsy", "GC/font_western.bin", "GC/font_japanese.bin", "GC/dsp_coef.bin")) {
+            $out = Join-Path $dest "Sys\$f"
+            New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+            if (-not (Test-Path $out)) { Invoke-WebRequest "$base/$f" -OutFile $out -UseBasicParsing }
+        }
+        return $dest
+    } catch {
+        Say "  That didn't work ($($_.Exception.Message))." Yellow
+        return $null
+    }
+}
 $fonts = @("font_western.bin", "font_japanese.bin")
 $needFonts = @($fonts | Where-Object { -not (Test-Path "build\fonts\$_") })
 $needNames = -not (Test-Path "build\sig_guess.tsv")
 if ($needFonts -or $needNames) {
     if (-not $Dolphin) { $Dolphin = Find-Dolphin }
+    if (-not $Dolphin) { $Dolphin = Get-DolphinFiles }
     if (-not $Dolphin) {
         Say "  Dolphin wasn't found in the usual places: choose its folder (the one holding Sys) in the window that opens."
         Add-Type -AssemblyName System.Windows.Forms
