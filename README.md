@@ -109,6 +109,9 @@ the port.
 - **Samuele Voltan** ([vs-sr-dev](https://github.com/vs-sr-dev)): wiikit, and the original Monster Hunter
   Tri PC port that all of this is built on.
 
+Special thanks to **Claude Opus** ([Anthropic](https://www.anthropic.com/claude)). Working in Claude Code,
+it wrote much of the FFXI layer, the bridge and the setup alongside Seamus and River.
+
 With thanks to:
 
 - [LandSandBoat](https://github.com/LandSandBoat/server). Its public database is the reference for spell,
