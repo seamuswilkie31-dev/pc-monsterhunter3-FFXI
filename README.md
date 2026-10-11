@@ -8,6 +8,13 @@ Monster Hunter's world.
 > European release) and your own FINAL FANTASY XI installation. It is not affiliated with or endorsed by
 > Capcom, Square Enix or Nintendo.
 
+> [!WARNING]
+> **A work in progress, not fully tested for glitches.** Expect some rough edges, and back up your saves
+> (the `build\nand` folder) before you play. If you run into a glitch, please
+> [open an issue](https://github.com/seamuswilkie31-dev/pc-monsterhunter3-FFXI/issues) and comment on what
+> happened. Say what you were doing when it happened, and attach `build\run1\wiiboot.log` and
+> `build\run1\ffxi.log` if you can.
+
 ## What it is
 
 There are two parts:
