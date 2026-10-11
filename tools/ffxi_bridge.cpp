@@ -916,24 +916,49 @@ bool enemy_model(uint32_t obj, char name[16]) {
     return true;
 }
 
-void note_enemy(uint32_t obj) {
-    char name[16];
-    if (!enemy_model(obj, name) || !in_ram(obj + 0x3C, 48)) return;
-    // a model the game keeps placed but draws neither opaque nor translucent (a monster switched out,
-    // away from the area) is nobody's target: the arrow once pointed at an unseen Aptonoth so
-    if (in_ram(obj + 0xCC, 4) && (ld32(obj + 0xCC) & 0x60) == 0x60) return;
-    float x = f32(obj + 0x48), y = f32(obj + 0x58), z = f32(obj + 0x68);
+void place_enemy(uint32_t obj, const char name[16], float x, float y, float z) {
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return;
     for (Enemy& e : g_enemies)
         if (e.obj == obj) {
             e.x = x, e.y = y, e.z = z, e.frame = g_frame;
-            std::memcpy(e.name, name, sizeof name);
+            std::memcpy(e.name, name, sizeof e.name);
             return;
         }
     if (g_enemies.size() >= 64) return;
     Enemy e{obj, x, y, z, g_frame, {}};
-    std::memcpy(e.name, name, sizeof name);
+    std::memcpy(e.name, name, sizeof e.name);
     g_enemies.push_back(e);
+}
+
+// a model the game keeps placed but draws neither opaque nor translucent (a monster switched out, away
+// from the area) is nobody's target: the arrow once pointed at an unseen Aptonoth so
+bool switched_out(uint32_t obj) { return in_ram(obj + 0xCC, 4) && (ld32(obj + 0xCC) & 0x60) == 0x60; }
+
+void note_enemy(uint32_t obj) {
+    char name[16];
+    if (!enemy_model(obj, name) || !in_ram(obj + 0x3C, 48) || switched_out(obj)) return;
+    place_enemy(obj, name, f32(obj + 0x48), f32(obj + 0x58), f32(obj + 0x68));
+}
+
+// Every monster the game has, each frame, drawn or not, on the screen or off it (2026-10-11: a Barioth
+// beside the hunter wasn't among the targets): the game's own table of them (ENEMY_WORK, 0xB18 each, as
+// em_of_model finds them): +0 in use, +0x28 its place, +0x13C its scene model or what holds it at +0x118.
+void table_enemies() {
+    if (!in_ram(0x8065AA60 + 0xA4, 4)) return;
+    uint32_t t = ld32(0x8065AA60 + 0xA4);
+    if (!in_ram(t, 0x30)) return;
+    uint32_t base = ld32(t + 0x10 + 3 * 4), n = ld16(t + 3 * 2);
+    if (!n || n > 256 || !in_ram(base, n * 0xB18)) return;
+    for (uint32_t k = 0; k < n; ++k) {
+        uint32_t w = base + k * 0xB18;
+        if (!ld8(w)) continue;
+        uint32_t link = ld32(w + 0x13C), obj = 0;
+        char name[16];
+        if (enemy_model(link, name)) obj = link;
+        else if (in_ram(link + 0x118, 4) && enemy_model(ld32(link + 0x118), name)) obj = ld32(link + 0x118);
+        if (!obj || switched_out(obj)) continue;
+        place_enemy(obj, name, f32(w + 0x28), f32(w + 0x2C), f32(w + 0x30));
+    }
 }
 
 // the highest of a model's joints (its world matrices' translations), or its root's height and more
@@ -1217,6 +1242,7 @@ uint32_t g_chosen = 0;                              // the target the d-pad chos
 
 void target_frame(uint32_t pl, uint32_t cam, float dt) {
     ++g_frame;
+    table_enemies();
     Block* b = g_block;
     if (b) game_damage(b);
     pouch_frame(b);
@@ -1295,6 +1321,21 @@ void target_frame(uint32_t pl, uint32_t cam, float dt) {
             t = best;
             g_chosen = best->obj;                             // (locked on: the lock goes with it)
         }
+    }
+    if (toggle && !g_lock.on && cam && pl && !(t && t->obj == g_chosen && dist(*t) <= kTargetReach)) {
+        // locking on: the monster nearest the middle of the screen within reach (the one the hunter faces),
+        // not a far one the d-pad chose earlier (2026-10-11: a Baggi 3000 off locked, the Barioth beside the
+        // hunter not); none in sight, the nearest within reach; none within reach, the target as it is
+        Enemy* pick = nullptr;
+        float score = 1e9f;
+        for (Enemy& e : g_enemies) {
+            if (g_frame - e.frame > 3 || dist(e) > kTargetReach || fallen(e)) continue;
+            float w[3] = {e.x, e.y + 50.0f, e.z}, ex, ey;
+            float s = project(cam, w, ex, ey) ? std::hypot(ex, 0.5f * ey) + 0.3f * dist(e) / kTargetReach
+                                              : 10.0f + dist(e) / kTargetReach;
+            if (s < score) score = s, pick = &e;
+        }
+        if (pick) t = pick, g_chosen = pick->obj;
     }
     if (toggle) {
         if (g_lock.on) g_lock.on = false;
