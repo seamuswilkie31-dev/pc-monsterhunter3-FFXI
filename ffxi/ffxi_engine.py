@@ -91,7 +91,9 @@ class Engine:
     # --- the fight's state ---
     tp: float = 0.0
     mp: float = 0.0
-    avg_hit: float = 30.0
+    mh_kind: str = ""                                # Monster Hunter's weapon in hand, its kind (the layer's; "": weapon's)
+    mh_rate: dict = field(default_factory=dict)      # a kind -> [damage, seconds] of your blows with it (avg_hit)
+    blow_at: float = -99.0                           # your last blow's time
     last_ws_time: float = -99.0
     last_ws_props: list = field(default_factory=list)
     mb_until: float = -99.0
@@ -484,9 +486,31 @@ class Engine:
             writes["player_hp"] = self.prev_player = p
         return writes
 
+    @property
+    def avg_hit(self) -> float:
+        """Your hit in FFXI's terms: what your Monster Hunter weapon's blows deal a second (learnt, that kind's;
+        D.MH_RATE until then), a share of it, over your FFXI weapon's delay (ffxi_data.py's MH_RATE)."""
+        dmg, secs = self.mh_rate.get(self.mh_kind or self.weapon, (0.0, 0.0))
+        rate = dmg / secs if secs >= D.MH_LEARNT_SECS else D.MH_RATE
+        return max(D.MH_RATE_FLOOR, rate) * D.MH_SHARE * self.w["delay"] / 60.0
+
+    def _learn_blow(self, now: float, delta: int) -> None:
+        """A blow of yours, learnt: its damage, and the time it took (since the one before, a pause counting a
+        second). One far beyond the monster's usual (its HP set at its death, a scripted fall) isn't."""
+        if self.monster_max and delta > 0.25 * self.monster_max:
+            return
+        gap = now - self.blow_at
+        self.blow_at = now
+        secs = gap if gap < 6.0 else 1.0
+        kind = self.mh_kind or self.weapon
+        dmg, total = self.mh_rate.get(kind, (0.0, 0.0))
+        k = D.MH_DECAY ** secs
+        self.mh_rate[kind] = [dmg * k + delta, total * k + secs]
+
     def _on_hit(self, now: float, delta: int, m: int, p):
         """One of your hits landed (delta: its damage)."""
-        self.avg_hit += (delta - self.avg_hit) * 0.2
+        if not (self.ffxi_combat and self.engaged):                # (FFXI's Attack fighting for you: not your blows)
+            self._learn_blow(now, delta)
         gain = self.tp_hit * self.j["tp_mult"] * (1 + self.effect("haste") + self.effect("store_tp"))
         self.tp = min(D.TP_MAX, self.tp + gain)
         extra = delta * max(0.0, self.effect("atk") + self.mob("def_down")) + self.avg_hit * self.effect("enspell")
@@ -928,7 +952,8 @@ class Engine:
         return {"job": self.job, "sub": self.sub, "levels": dict(self.levels), "exp": dict(self.exp),
                 "inventory": list(self.inventory), "equipment": dict(self.equipment), "all_jobs": self.all_jobs,
                 "lockstyle": dict(self.lockstyle), "gear_serial": self.gear_serial, "all_magic": self.all_magic,
-                "ffxi_combat": self.ffxi_combat, "voice": self.voice}
+                "ffxi_combat": self.ffxi_combat, "voice": self.voice,
+                "mh_rate": {k: [round(v[0], 2), round(v[1], 3)] for k, v in self.mh_rate.items()}}
 
     def load_progress(self, d: dict) -> None:
         self.levels = {k: int(v) for k, v in d.get("levels", {}).items() if k in D.JOBS}
@@ -941,6 +966,8 @@ class Engine:
         self.all_magic = bool(d.get("all_magic", self.all_magic))
         self.ffxi_combat = bool(d.get("ffxi_combat", self.ffxi_combat))
         self.voice = int(d.get("voice", 0) or 0)
+        self.mh_rate = {str(k): [float(v[0]), float(v[1])] for k, v in (d.get("mh_rate") or {}).items()
+                        if isinstance(v, (list, tuple)) and len(v) == 2}
         job, sub = d.get("job", self.job), d.get("sub", self.sub)
         if job in D.JOBS and (sub is None or (sub in D.JOBS and sub != job)):
             self.set_jobs(job, sub)
@@ -998,7 +1025,25 @@ def selftest() -> int:
         t += 1
         m -= 30
         e.tick(t, m, p, 150, 1, 3000)
-    check(e.tp >= 1000 and abs(e.avg_hit - 30) < 2, f"TP from hits (TP {int(e.tp)})")
+    check(e.tp >= 1000 and abs(e.avg_hit - 30 * D.MH_SHARE * 220 / 60) < 2, f"TP from hits (TP {int(e.tp)})")
+    # your hit is your weapon's damage a second: many small blows and few big ones alike, saved with progress
+    small, big = Engine("RDM", "sword_and_shield", rng=rng), Engine("RDM", "sword_and_shield", rng=rng)
+    small.mh_kind, big.mh_kind = "bowgun", "great_sword"
+    for i in range(40):
+        small.tick(i * 0.25, 4000 - 5 * i, p, 150, 1, 4000)
+        big.tick(i * 2.5, 4000 - 50 * i, p, 150, 1, 4000)
+    want = 20 * D.MH_SHARE * 220 / 60
+    check(abs(small.avg_hit - big.avg_hit) < 0.15 * want and abs(small.avg_hit - want) < 0.15 * want,
+          f"a second's damage, not a blow's ({small.avg_hit:.0f} and {big.avg_hit:.0f})")
+    fresh = Engine("RDM", "sword_and_shield", rng=rng)
+    check(abs(fresh.avg_hit - D.MH_RATE * D.MH_SHARE * 220 / 60) < 0.1, "an unlearnt weapon: the usual rate")
+    fresh.load_progress(small.progress())
+    fresh.mh_kind = "bowgun"
+    check(abs(fresh.avg_hit - small.avg_hit) < 0.01, "what's learnt is kept with progress")
+    weak = Engine("RDM", "sword_and_shield", rng=rng)
+    for i in range(40):
+        weak.tick(i * 1.0, 4000 - i, p, 150, 1, 4000)
+    check(weak.avg_hit >= D.MH_RATE_FLOOR * D.MH_SHARE * 220 / 60 - 0.01, "never under the floor")
     w = e.use("Burning Blade", t, m, p)
     check(w.get("monster_hp", m) < m, "a weapon skill damages the monster")
     m = w["monster_hp"]

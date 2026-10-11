@@ -1868,6 +1868,8 @@ class App:
         if not (len(m) > 3 and m[0] == "w" and m[1:3].isdigit()):
             return
         kind = FM.MH_WEAPONS.get(int(m[1:3]))
+        if kind:
+            self.e.mh_kind = kind                                  # FFXI's hits from that kind's blows (avg_hit)
         if not kind or kind == self.mh_weapon or self._rebuilding:
             return
         self.mh_weapon = kind

@@ -907,3 +907,15 @@ def mp_at(job: str, level: int) -> int:
 def level_factor(level: int) -> float:
     """Damage and power with level: half at level 1, whole at 75."""
     return 0.5 + 0.5 * min(level, LEVEL_CAP) / LEVEL_CAP
+
+
+# Your hit in FFXI's terms (the engine's avg_hit: auto-attack's, and the measure of weapon skills, magic, pets and
+# Trusts), from your Monster Hunter weapon: what its blows deal a second, learnt from your own blows with that
+# kind of weapon (kept with your progress), MH_SHARE of it over your FFXI weapon's delay. A second's damage, not a
+# blow's: a bowgun's many small shots and a great sword's few big ones come out alike (2026-10-11: learnt a
+# blow at a time, from small blows and stray drops, FFXI's hits had sunk to 1-4 on a 2800-HP Barioth).
+MH_RATE = 16.0          # damage a second with a kind of weapon not yet learnt (about 30 a sword-and-shield swing)
+MH_RATE_FLOOR = 8.0     # never less, whatever was learnt
+MH_SHARE = 0.5          # the rest of FFXI's damage comes from weapon skills, magic and Trusts
+MH_LEARNT_SECS = 8.0    # seconds of your blows before what's learnt counts
+MH_DECAY = 0.98         # each second of your blows, what came before counts this much less (a better weapon soon shows)
