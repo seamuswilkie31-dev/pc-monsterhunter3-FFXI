@@ -110,7 +110,8 @@ the port.
   Tri PC port that all of this is built on.
 
 Special thanks to **Claude Opus** ([Anthropic](https://www.anthropic.com/claude)). Working in Claude Code,
-it wrote much of the FFXI layer, the bridge and the setup alongside Seamus and River.
+it wrote much of the FFXI layer, the bridge and the setup alongside Seamus and River. Other AI assistants
+helped along the way too.
 
 With thanks to:
 
