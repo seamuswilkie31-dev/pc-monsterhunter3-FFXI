@@ -1228,6 +1228,32 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
     # turn to reach it (two-bone IK from the neutral pose). The places are in the upright frame, as fractions
     # of the limb's length from the shoulder or the hip: (ahead +X, down +Y, out).
     neck = _neck(joints, at_n, limbs)
+    head = _head(joints, packed.get("verts"), np.asarray(world_n), limbs, neck)
+
+    def clear(sh: int, side: float, length: float, g: np.ndarray) -> np.ndarray:
+        """A hand's goal (from its shoulder, the model's space) kept off the head (2026-10-13: "the taru's hands
+        clip into his head": a Tarutaru's head is two of its arms' lengths across): out to its side and down in
+        front of the face till clear of it (the head an ellipsoid, a little wider), then, if the arm can't reach
+        so far, drawn back toward the shoulder and tried again."""
+        if head is None:
+            return g
+        centre, radii = head[0], head[1] * 1.12
+        g = g.copy()
+        for _ in range(16):
+            p = (at_n[sh] + g - centre) / radii
+            if p @ p >= 1.0:
+                if np.linalg.norm(g) <= 0.995 * length:
+                    break
+            else:
+                across = np.sqrt(max(1.0 - p[1] * p[1], 0.0))         # how far from the head's length to be clear
+                way = np.array([p[0], 0.0, p[2]])
+                way[2] += 0.6 * side                                   # (rather to its own side)
+                way /= max(np.linalg.norm(way), 1e-9)
+                g = centre + np.array([way[0] * across, p[1], way[2] * across]) * radii - at_n[sh]
+                if np.linalg.norm(g) <= 0.995 * length:
+                    break
+            g[1] += 0.06 * length                                      # (not so far ahead)
+        return g
 
     def goal(ahead: float, down: float, out: float, side: float, length: float) -> np.ndarray:
         return length * np.array([ahead, down, out * side])
@@ -1275,7 +1301,8 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
             for sh, el, side, wr in limbs["arms"]:
                 length = arm_len(sh, el, wr)
                 a, b, c = path(hand_keys(length), u)
-                reach(want, sh, el, wr, swimmer(a, b, c, side, length), swimmer(-0.3, 0.8, -0.5, side, 1.0),
+                reach(want, sh, el, wr, clear(sh, side, length, swimmer(a, b, c, side, length)),
+                      swimmer(-0.3, 0.8, -0.5, side, 1.0),
                       (shields[sh], -surface(degrees)) if sh in shields else None)   # the elbows high, out
             for hp, kn, side, an in limbs["legs"]:
                 a, b, c = path(foot_keys, u)
@@ -1332,6 +1359,33 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         data[:, sorted(legs)] = np.nan
         clips.append({"name": "~" + c["name"], "frames": c["frames"], "rate": c["rate"], "kind": ACTION,
                       "set": c["set"], "data": data, "speed": 0.0})
+
+
+def _head(joints: list[dict], verts: np.ndarray | None, world: np.ndarray, limbs: dict,
+          neck: list[tuple[int, float]]) -> tuple[np.ndarray, np.ndarray] | None:
+    """The head as an ellipsoid, its centre and its half-widths along the model's axes in the pose `world` holds:
+    the one within the box round the mesh hung from the neck (_neck's first joint; the arms' aside)."""
+    if verts is None or not len(verts) or not neck:
+        return None
+    kids: dict[int, list[int]] = {}
+    for j, jj in enumerate(joints):
+        kids.setdefault(jj["parent"], []).append(j)
+
+    def under(j: int) -> set[int]:
+        out, todo = set(), [j]
+        while todo:
+            k = todo.pop()
+            out.add(k)
+            todo.extend(kids.get(k, []))
+        return out
+    sub = under(neck[0][0])
+    for sh, _el, _side, _wr in limbs["arms"]:
+        sub -= under(sh)
+    c = skin_corners(verts, world)[np.isin(verts[:, 6].astype(int), sorted(sub))]
+    if len(c) < 12:
+        return None
+    lo, hi = c.min(0), c.max(0)
+    return (lo + hi) / 2, np.maximum((hi - lo) / 2, 1e-6)
 
 
 def _turns(world: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

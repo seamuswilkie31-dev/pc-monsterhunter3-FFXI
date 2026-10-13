@@ -9,7 +9,12 @@ the seat, kick out and round and snap together. "swim" (300 a second) lies flat,
 degrees into the same stroke, so the port going from one to the other (its stride kept) stays in step. A
 shield arm strokes as the other, its shield level beneath the forearm (below it in every frame, all races
 and the shield Trusts): a board under both hands in the glide. 110 of 117 models (the 7 without limbs keep
-the run laid flat). Not yet seen in play.
+the run laid flat). Then "the taru's hands clip into his head": a Tarutaru's head (ears and all) is two of its
+arms' lengths across, reaching from a third of an arm above the shoulders to two; no hand reaches past it. So
+each hand's goal is kept off the head (_head: an ellipsoid in the box round the mesh hung from the neck, 1.12
+wider; clear: out to the hand's side and down in front of the face, then nearer the shoulder if out of reach):
+a Tarutaru glides with its hands beside its head and pulls under its chin; the other races, their heads half
+an arm across, are untouched. Kupipi and Ajido-Marujido checked.
 
 **Swimming on Humes and the other races (2026-10-13)**: "it looks a bit funny on humes and id imagine it looks
 strange on the other races aswell". Rendered on the races' own meshes (flat-shaded, side, above, from behind as
