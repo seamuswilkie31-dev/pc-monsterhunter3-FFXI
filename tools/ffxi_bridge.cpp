@@ -1638,7 +1638,16 @@ struct Animator {
     }
 
     // an action once, then next looped (kNone: none); clip kNone ends the one playing
+    // in the water, an action's water twin where the layer made one ("~at0" for "at0", a swing leaning into it,
+    // the legs left kicking: ffxi_model.swim_clips)
+    uint32_t in_water(uint32_t clip) const {
+        if (!swimming || clip >= clips.size()) return clip;
+        int t = tagged((uint32_t)'~' | ((clips[clip].tag & 0x00FFFFFFu) << 8));
+        return t >= 0 ? (uint32_t)t : clip;
+    }
+
     void request(uint32_t clip, uint32_t next) {
+        clip = in_water(clip), next = in_water(next);
         bool ok = clip < clips.size() && clips[clip].kind == kAction;
         if (!ok) {
             if (act >= 0) act_out = true;

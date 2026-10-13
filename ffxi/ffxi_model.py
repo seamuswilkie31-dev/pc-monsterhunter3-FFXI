@@ -1067,12 +1067,16 @@ def _qmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
                      aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz], -1)
 
 
-def swim_clips(packed: dict, joints: list[dict], pitch: float = 80.0) -> None:
-    """Swimming, which FFXI has none of (2026-10-12: Monster Hunter's hunter swims, the character ran upright
-    through the sea): added to pack's clips, set SWIM. The stroke: its run at 0.6 of its rate, the body laid
-    forward `pitch` degrees about its hips, the hips at its feet's height (the hunter's place in the water); the
-    game's own tilt as the hunter dives or climbs comes on top (the port places it by the hunter's matrix).
-    Treading water: its idle, sunk to its shoulders, bobbing. The model's space is FFXI's: it faces +X, Y down."""
+def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pitch: float = 80.0) -> None:
+    """Swimming, which FFXI has none of (2026-10-12: Monster Hunter's hunter swims; the character ran upright
+    through the sea): two clips added to pack's, set SWIM. FFXI's people never swim, so the strokes are made
+    here on the skeleton's own limbs (_limbs: the hands its points 126/127 name, the feet its lowest joints):
+    the crawl, each arm a whole turn about its shoulder half a stroke from the other, the elbow high as it comes
+    back, a six-beat flutter kick, the body rolling a little, laid forward `pitch` degrees about its hips at
+    its feet's height (the hunter's place in the water; the game's own tilt as it dives or climbs comes on
+    top); treading water, upright, sunk to the shoulders, the arms out sculling to and fro, the legs pedalling.
+    A skeleton without such limbs (a Moogle) gets its run laid flat and its idle sunk instead. The model's
+    space is FFXI's: it faces +X, Y down, Z its side."""
     clips = packed["clips"]
     run = next((c for c in clips if c["name"] == "run" and c["set"] == PEACE), None) or \
         next((c for c in clips if c["kind"] == MOVE and c["set"] == PEACE), None)
@@ -1080,30 +1084,316 @@ def swim_clips(packed: dict, joints: list[dict], pitch: float = 80.0) -> None:
     if idle is None or not len(joints):
         return
     d0 = np.asarray(idle["data"][0], np.float64)
-    q = d0[:, :4] / np.maximum(np.linalg.norm(d0[:, :4], axis=1, keepdims=True), 1e-9)
-    at = np.array([m[:3, 3] for m in pose_world(joints, q, d0[:, 4:7], d0[:, 7:10])])
+    q0 = d0[:, :4] / np.maximum(np.linalg.norm(d0[:, :4], axis=1, keepdims=True), 1e-9)
+    at = np.array([m[:3, 3] for m in pose_world(joints, q0, d0[:, 4:7], d0[:, 7:10])])
     height = max(float(-at[:, 1].min()), 0.3)                          # its top, above its feet (Y down)
     hips = at[1] if len(at) > 1 and 0.3 * height < -at[1, 1] < 0.75 * height else np.array([0.0, -0.5 * height, 0.0])
 
-    def laid(clip: dict, degrees: float, centre_y: float, bob: float = 0.0) -> np.ndarray:
-        data = np.array(clip["data"], np.float32)
+    def lay(data: np.ndarray, degrees: float, centre_y: float, roll=None, bob: float = 0.0) -> np.ndarray:
+        """The root turned forward about the hips (and rolled about its length), the hips set at centre_y."""
         a = np.radians(degrees) / 2
         qp = np.array([0.0, 0.0, np.sin(a), np.cos(a)])               # about Z: the head (-Y) toward +X
-        rp = np.array([[np.cos(2 * a), -np.sin(2 * a), 0.0], [np.sin(2 * a), np.cos(2 * a), 0.0], [0.0, 0.0, 1.0]])
+        rp = quat_matrix(qp)
         target = np.array([hips[0], centre_y, hips[2]])
         n = len(data)
         for f in range(n):
-            data[f, 0, :4] = _qmul(qp, data[f, 0, :4].astype(np.float64))
-            t = rp @ (data[f, 0, 4:7].astype(np.float64) - hips) + target
+            q = data[f, 0, :4].astype(np.float64)
+            t = data[f, 0, 4:7].astype(np.float64) - hips
+            if roll is not None:                                       # about its length (Y, upright)
+                r = np.radians(roll[f]) / 2
+                qr = np.array([0.0, np.sin(r), 0.0, np.cos(r)])
+                q, t = _qmul(qr, q), quat_matrix(qr) @ t
+            data[f, 0, :4] = _qmul(qp, q)
+            t = rp @ t + target
             t[1] += bob * height * np.sin(2 * np.pi * f / max(n - 1, 1))
             data[f, 0, 4:7] = t
         return data
 
-    if run is not None:
-        clips.append({"name": "swim", "frames": run["frames"], "rate": run["rate"] * 0.6, "kind": MOVE,
-                      "set": SWIM, "data": laid(run, pitch, 0.0), "speed": 250.0})
-    clips.append({"name": "swid", "frames": idle["frames"], "rate": idle["rate"], "kind": STAND, "set": SWIM,
-                  "data": laid(idle, 10.0, hips[1] + 0.75 * height, bob=0.03), "speed": 0.0})
+    limbs = _limbs(joints, at, points)
+    if limbs is None:                                                  # (no arms and legs to swim with)
+        if run is not None:
+            clips.append({"name": "swim", "frames": run["frames"], "rate": run["rate"] * 0.6, "kind": MOVE,
+                          "set": SWIM, "data": lay(np.array(run["data"], np.float32), pitch, 0.0), "speed": 250.0})
+        clips.append({"name": "swid", "frames": idle["frames"], "rate": idle["rate"], "kind": STAND, "set": SWIM,
+                      "data": lay(np.array(idle["data"], np.float32), 10.0, hips[1] + 0.75 * height, bob=0.03),
+                      "speed": 0.0})
+        return
+
+    def rot(axis: str, degrees: float) -> np.ndarray:
+        a = np.radians(degrees) / 2
+        v = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}[axis]
+        return np.array([v[0] * np.sin(a), v[1] * np.sin(a), v[2] * np.sin(a), np.cos(a)])
+
+    base = _neutral(joints, np.asarray(idle["data"][0], np.float64), limbs)
+
+    def frames(n: int, turns) -> np.ndarray:
+        """n frames of the neutral pose (the idle's, its arms and legs hanging straight: _neutral), each joint
+        `turns(f)` names (joint: a turn in the model's space, about the joint) turned so, its children with it."""
+        out = np.repeat(base.astype(np.float32)[None], n, 0)
+        for f in range(n):
+            want = turns(f)
+            qw = np.zeros((len(joints), 4))
+            for j, jj in enumerate(joints):
+                p = jj["parent"]
+                local = out[f, j, :4].astype(np.float64)
+                local /= max(np.linalg.norm(local), 1e-9)
+                world = _qmul(qw[p], local) if p >= 0 else local
+                if j in want:
+                    world = _qmul(want[j], world)
+                    local = _qmul(_qinv(qw[p]), world) if p >= 0 else world
+                    out[f, j, :4] = local
+                qw[j] = world
+        for f in range(1, n):                                          # q and -q alike: the short way round
+            flip = (out[f, :, :4] * out[f - 1, :, :4]).sum(1) < 0
+            out[f, flip, :4] *= -1
+        return out
+
+    # the crawl: 49 frames a stroke (1.6 s at its pace)
+    n = 49
+
+    def crawl(f: int) -> dict:
+        u = f / (n - 1)
+        want = {}
+        for k, (shoulder, elbow, side, _wrist) in enumerate(limbs["arms"]):
+            phi = 360.0 * u + 180.0 * k                                # down, back, over, forward, pulling down
+            ph = np.radians(phi % 360.0)
+            want[shoulder] = rot("z", phi)
+            back = 0.5 - 0.5 * np.cos(ph) if (phi % 360.0) < 200.0 else 0.0
+            want[elbow] = rot("z", -55.0 * np.sin(np.pi * min(1.0, (phi % 360.0) / 200.0)) * back)   # high elbow
+        for k, (hip, knee, side, _ankle) in enumerate(limbs["legs"]):
+            kick = 3 * 2 * np.pi * u + np.pi * k
+            want[hip] = rot("z", 16.0 * np.sin(kick))                  # up (+) and down
+            want[knee] = rot("z", 12.0 + 12.0 * np.sin(kick + 0.8))    # the heel coming up behind
+        return want
+
+    stroke = frames(n, crawl)
+    roll = [12.0 * np.sin(2 * np.pi * f / (n - 1)) for f in range(n)]
+    clips.append({"name": "swim", "frames": n, "rate": 1.0, "kind": MOVE, "set": SWIM,
+                  "data": lay(stroke, pitch, 0.0, roll=roll), "speed": 250.0})
+
+    # treading water: 45 frames a beat (1.5 s)
+    m = 45
+
+    def tread(f: int) -> dict:
+        u = 2 * np.pi * f / (m - 1)
+        want = {}
+        for k, (shoulder, elbow, side, _wrist) in enumerate(limbs["arms"]):
+            out_ = _qmul(rot("y", 25.0 * np.sin(u) * side), rot("x", 50.0 * side))   # out to the side, sweeping
+            want[shoulder] = out_
+            want[elbow] = rot("z", 30.0)
+        for k, (hip, knee, side, _ankle) in enumerate(limbs["legs"]):
+            pedal = u + np.pi * k
+            want[hip] = rot("z", -25.0 - 20.0 * np.sin(pedal))           # up in front, as on a bicycle
+            want[knee] = rot("z", 35.0 + 25.0 * np.sin(pedal + 1.2))
+        return want
+
+    clips.append({"name": "swid", "frames": m, "rate": 1.0, "kind": STAND, "set": SWIM,
+                  "data": lay(frames(m, tread), 8.0, hips[1] + 0.75 * height, bob=0.025), "speed": 0.0})
+
+    # its swings in the water (2026-10-13: attacking while swimming, it stood up to swing): each "at0".."at2" a
+    # twin "~at0".. the port plays in its place while the hunter is in the water: the swing's upper body as on
+    # land, the body leaning forward 30 degrees about its hips at its feet's height, the legs left to the
+    # stroke or the treading beneath (not driven). The port's clips are 96 at most.
+    legs = set()
+    for hip, _knee, _side, _ankle in limbs["legs"]:
+        todo = [hip]
+        while todo:
+            j = todo.pop()
+            legs.add(j)
+            todo.extend(k for k, kk in enumerate(joints) if kk["parent"] == j)
+    for c in [c for c in clips if c["kind"] == ACTION and c["name"] in ("at0", "at1", "at2")]:
+        if len(clips) >= 96:
+            break
+        data = lay(np.array(c["data"], np.float32), 30.0, 0.0)
+        data[:, sorted(legs)] = np.nan
+        clips.append({"name": "~" + c["name"], "frames": c["frames"], "rate": c["rate"], "kind": ACTION,
+                      "set": c["set"], "data": data, "speed": 0.0})
+
+
+def _qinv(q: np.ndarray) -> np.ndarray:
+    return np.array([-q[0], -q[1], -q[2], q[3]])
+
+
+def _arc(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """The least turn (a quaternion, x y z w) taking direction u to direction v."""
+    u = u / max(np.linalg.norm(u), 1e-9)
+    v = v / max(np.linalg.norm(v), 1e-9)
+    d = float(np.dot(u, v))
+    if d < -0.9999:                                                    # opposite: about any axis across them
+        axis = np.cross(u, (1.0, 0.0, 0.0) if abs(u[0]) < 0.9 else (0.0, 0.0, 1.0))
+        axis /= np.linalg.norm(axis)
+        return np.array([axis[0], axis[1], axis[2], 0.0])
+    q = np.array([*np.cross(u, v), 1.0 + d])
+    return q / np.linalg.norm(q)
+
+
+def _neutral(joints: list[dict], frame: np.ndarray, limbs: dict) -> np.ndarray:
+    """A pose (joints x 10, local) with its arms and legs hanging straight down (+Y): each shoulder and hip
+    turned so its bone to the elbow or knee points down, then each elbow and knee so its bone to the wrist or
+    ankle does: a stance of any idle's (Ayame's, one foot forward; Trion's arm raised with his weapon) made the
+    same relaxed one, the strokes made from it."""
+    out = frame.copy()
+    levels = [[(sh, el) for sh, el, _s, _w in limbs["arms"]] + [(hp, kn) for hp, kn, _s, _a in limbs["legs"]],
+              [(el, w) for _sh, el, _s, w in limbs["arms"]] + [(kn, a) for _hp, kn, _s, a in limbs["legs"]]]
+    down = np.array([0.0, 1.0, 0.0])
+    for level in levels:
+        q = out[:, :4] / np.maximum(np.linalg.norm(out[:, :4], axis=1, keepdims=True), 1e-9)
+        at = np.array([m[:3, 3] for m in pose_world(joints, q, out[:, 4:7], out[:, 7:10])])
+        qw = np.zeros((len(joints), 4))
+        for j, jj in enumerate(joints):
+            p = jj["parent"]
+            qw[j] = _qmul(qw[p], q[j]) if p >= 0 else q[j]
+        for j, end in level:
+            world = _qmul(_arc(at[end] - at[j], down), qw[j])
+            p = joints[j]["parent"]
+            out[j, :4] = _qmul(_qinv(qw[p]), world) if p >= 0 else world
+    return out
+
+
+def _limbs(joints: list[dict], at: np.ndarray, points: list | None) -> dict | None:
+    """A skeleton's arms and legs, as swim_clips turns them, from its idle pose (at: each joint's place): each arm
+    (shoulder, elbow, its side: +1 or -1) and each leg (hip, knee, side). The legs: the pelvis is the deepest joint
+    two of whose children run down to the ground as long chains (legs, not a foot's toes), the two furthest apart
+    along their length (not a coat's tail between them); each one's lowest end is its foot. The arms: from the hands
+    the skeleton's points 126/127 name, else from the wrists (a joint holding four to six fingers, between the
+    knees and the head, not on a leg), the two furthest apart; the chest is where their chains meet, the collarbone
+    just under it, the shoulder under that. The elbow and the knee are the joints halfway down, by height. None
+    if it hasn't two of each."""
+    n = len(joints)
+    kids: dict = {}
+    for j, jj in enumerate(joints):
+        kids.setdefault(jj["parent"], []).append(j)
+    height = max(float(-at[:, 1].min()), 1e-3)
+
+    def chain(j: int) -> list[int]:
+        out = []
+        while 0 <= j < n and len(out) < 64:
+            out.append(j)
+            j = joints[j]["parent"]
+        return out
+
+    def under(j: int) -> list[int]:
+        out, todo = [], [j]
+        while todo:
+            k = todo.pop()
+            out.append(k)
+            todo.extend(kids.get(k, []))
+        return out
+
+    def middle(top: int, low: int) -> int | None:
+        """The joint halfway along the bones from top down to low (the elbow, the knee), whatever the pose."""
+        c = chain(low)
+        if top not in c:
+            return None
+        path = c[:c.index(top) + 1][::-1]                              # top first
+        if len(path) < 3:
+            return None
+        along = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(at[path], axis=0), axis=1))])
+        half = 0.5 * along[-1]
+        inner = range(1, len(path) - 1)
+        return path[min(inner, key=lambda i: (abs(along[i] - half), i))]
+
+    # the legs
+    def named(a: int, b: int) -> list[int] | None:                       # two of its points, if it names them
+        if not points or len(points) <= max(a, b):
+            return None
+        j = [points[a][0], points[b][0]]
+        return j if all(0 < x < n for x in j) and j[0] != j[1] else None
+
+    feet = named(8, 9)                                                 # FFXI's skeletons: 8 and 9 the feet
+    if feet:
+        ca, cb = chain(feet[0]), chain(feet[1])
+        pelvis = next((j for j in ca if j in cb), None)
+        if pelvis is not None and ca.index(pelvis) >= 3 and cb.index(pelvis) >= 3:
+            runs = [(c[c.index(pelvis) - 1], f, float(np.mean(at[c[:c.index(pelvis)], 2]))) for f, c in
+                    ((feet[0], ca), (feet[1], cb))]
+            legs = []
+            for side, (hip, foot, _z) in zip((-1.0, 1.0), sorted(runs, key=lambda r: r[2])):
+                ankle = joints[foot]["parent"] if joints[foot]["parent"] != hip else foot
+                knee = middle(hip, ankle)
+                if knee is None:
+                    break
+                legs.append((hip, knee, side, ankle))
+            if len(legs) == 2:
+                return _arms(joints, at, points, kids, chain, under, middle, named, legs, height)
+    # the lowest end of a long chain (a foot; not a stray joint parked under the ground beside the root; floating,
+    # Shantotto II's, not the ground)
+    ends = [j for j in range(n) if not kids.get(j) and len(chain(j)) >= 6]
+    if not ends:
+        return None
+    bottom = float(-at[ends, 1].max())
+    low = {j for j in ends if -at[j, 1] < bottom + 0.1 * height}
+    legs_found = None
+    for j in sorted(range(n), key=lambda j: -len(chain(j))):            # the deepest first
+        runs = []
+        for k in kids.get(j, []):
+            if -at[k, 1] <= bottom + 0.2 * height:
+                continue
+            ends = [x for x in under(k) if x in low]
+            if not ends:
+                continue
+            foot = max(ends, key=lambda x: at[x, 1])
+            path = chain(foot)[:chain(foot).index(k) + 1]
+            if len(path) >= 4:                                         # hip, knee, ankle, foot at least
+                runs.append((k, foot, float(np.mean(at[path, 2]))))
+        if len(runs) >= 2:
+            a, b = max(((p, q) for i, p in enumerate(runs) for q in runs[i + 1:]), key=lambda pq: abs(pq[0][2] - pq[1][2]))
+            if abs(a[2] - b[2]) > (0.005 if len(runs) == 2 else 0.02) * height:   # (feet together: Trion)
+                legs_found = sorted((a, b), key=lambda r: r[2])
+                break
+    if legs_found is None:
+        return None
+    legs = []
+    for side, (hip, foot, _z) in zip((-1.0, 1.0), legs_found):
+        ankle = joints[foot]["parent"]
+        knee = middle(hip, ankle) if ankle != hip else None
+        if knee is None:
+            return None
+        legs.append((hip, knee, side, ankle))
+    return _arms(joints, at, points, kids, chain, under, middle, named, legs, height)
+
+
+def _arms(joints, at, points, kids, chain, under, middle, named, legs, height) -> dict | None:
+    """_limbs' arms, its legs found: from the wrists its points 10 and 11 name, else the hands its points 126/127
+    name, else the wrists by their fingers (a joint holding three to seven, between the knees and the head, not
+    on a leg), the two furthest apart; the chest where their chains meet, the collarbone under it, the shoulder
+    under that, the elbow halfway down."""
+    n = len(joints)
+    leg_joints = set()
+    for hip, _knee, _side, _ankle in legs:
+        leg_joints |= set(under(hip)) | set(chain(hip))
+    bottom = min(-at[a, 1] for _h, _k, _s, a in legs)              # (about the feet)
+    wrists = named(10, 11)
+    hands = None
+    if wrists is None:
+        h = named(126, 127)
+        if h:
+            wrists = [joints[x]["parent"] for x in h]
+    if wrists is None:
+        cands = [j for j in range(n) if 3 <= len(kids.get(j, [])) <= 7 and j not in leg_joints
+                 and bottom + 0.45 * height < -at[j, 1] < 0.9 * height and all(not kids.get(k) or len(kids[k]) <= 2
+                                                                              for k in kids[j])]
+        if len(cands) < 2:
+            return None
+        wrists = list(max(((p, q) for i, p in enumerate(cands) for q in cands[i + 1:]),
+                          key=lambda pq: abs(at[pq[0], 2] - at[pq[1], 2])))
+    ca, cb = chain(wrists[0]), chain(wrists[1])
+    chest = next((j for j in ca if j in cb), None)
+    arms = []
+    for c in (ca, cb):
+        i = c.index(chest) if chest in c else -1
+        if i < 3:
+            return None
+        shoulder, wrist = c[i - 2], c[0]
+        elbow = middle(shoulder, wrist)
+        if elbow is None:
+            return None
+        arms.append([shoulder, elbow, 0.0, wrist])
+    a, b = arms                                                        # each arm's side: the other's opposite
+    if abs(at[a[0], 2] - at[b[0], 2]) < 0.02 * height:
+        return None
+    a[2], b[2] = (1.0, -1.0) if at[a[0], 2] > at[b[0], 2] else (-1.0, 1.0)
+    return {"arms": [tuple(a), tuple(b)], "legs": legs}
 
 
 def skin_corners(verts: np.ndarray, world: np.ndarray) -> np.ndarray:

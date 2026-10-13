@@ -1,5 +1,19 @@
 # FFXI layer — next session
 
+**Swim strokes and swings in the water (2026-10-13)**: built, NOT YET seen in play. The swim set was the run
+laid flat ("we still need the swimming animations"). FFXI has no swimming, so the strokes are made on each
+skeleton's own limbs (ffxi_model._limbs: the feet its points 8/9, the wrists 10/11, else the hands 126/127,
+else found by shape: the pelvis the deepest joint with two long chains to the ground, the wrists by their
+fingers; the shoulder under the collarbone under the chest where the arms meet; the elbow and knee halfway
+along the bones), first set hanging straight (_neutral: a stance such as Ayame's or Trion's raised arm made
+one relaxed pose): the crawl (each arm a whole turn about its shoulder half a stroke apart, the elbow high
+coming back, a six-beat flutter kick, a little roll, laid 80 degrees forward) and treading water (arms out
+sculling, legs pedalling, upright, sunk to the shoulders). All eight races and 102 of 109 Trust models get
+them (Sakura, Chacharoon, Shantotto II, the Moogles, Ullegore, King of Hearts keep the run laid flat).
+Swings in the water: at0-at2 each get a twin ~at0-~at2 (the upper body's swing leaning 30 degrees forward,
+the legs left to the stroke beneath, not driven), which the port's Animator plays in their place while
+the hunter swims (in_water, by the tag "~" + the first three letters): yours and the Trusts'.
+
 **Swimming (2026-10-12)**: checked in play ("the swimming works"). FFXI's people never swim, so the character ran
 upright through the sea. A swim recorded (the hunter's motion and world matrix through the port's blocks):
 co_01xx in the water (co_0101 swimming, co_0107 dropping in, co_0109/0110 setting off and stopping,
