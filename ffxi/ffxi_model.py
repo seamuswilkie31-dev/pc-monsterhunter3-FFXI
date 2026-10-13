@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import struct
 import sys
 from pathlib import Path
@@ -100,6 +101,35 @@ def skeleton_refs(b: bytes, data: int) -> list[int]:
         return []
     count = struct.unpack_from("<H", b, at)[0]
     return [struct.unpack_from("<H", b, at + 4 + 26 * i)[0] for i in range(count) if at + 4 + 26 * i + 26 <= len(b)]
+
+
+def skeleton_points(path: Path) -> list[tuple[int, tuple]]:
+    """A model's named points (its first skeleton's references, 26 bytes each: u16 joint, then six floats, the
+    last three its offset from that joint, in metres): what an effect's generator means by its joint number.
+    (Shantotto II's orbs are on points 28-33: joints 102-107, which her idl1 turns about her; joints 28-33
+    are her head's.)"""
+    try:
+        b = Path(path).read_bytes()
+    except OSError:
+        return []
+    for at, _nm, typ, size in A.chunks(b):
+        if typ != SKELETON:
+            continue
+        data = at + 16
+        ref_at = data + 4 + 30 * b[data + 2]
+        if ref_at + 4 > at + size:
+            return []
+        count = struct.unpack_from("<H", b, ref_at)[0]
+        out = []
+        for i in range(count):
+            r = ref_at + 4 + 26 * i
+            if r + 26 > at + size:
+                break
+            off = struct.unpack_from("<3f", b, r + 14)
+            out.append((struct.unpack_from("<H", b, r)[0],
+                        off if all(math.isfinite(v) and abs(v) < 10 for v in off) else (0.0, 0.0, 0.0)))
+        return out
+    return []
 
 
 def weapon_grip(path: Path) -> int | None:

@@ -949,8 +949,7 @@ class App:
                         trusts[m.slot].pos, trusts[m.slot].facing, trusts[m.slot].height = a.pos, a.facing, a.height
                     else:
                         trusts[m.slot] = a
-                    joints = m.pm.joints() if m.pm is not None else None   # its joints as the port posed them
-                    trusts[m.slot].joints = FX.from_mh(joints) if joints is not None and len(joints) else None
+                    trusts[m.slot].points = self._trust_points(m, trusts[m.slot])
             self._fx_lasting(fx, effects, trusts)
             t = scene["target"]
             fx["has_target"] = t is not None
@@ -973,6 +972,25 @@ class App:
             port.send(np.zeros((0, 10), np.float32), [0] * 5)
             fx["drawn"] = False
         port.keep_alive()
+
+    def _trust_points(self, m, actor):
+        """A Trust's skeleton's points (ffxi_model.skeleton_points: what its effects' generators are on) where they
+        are now: each on its joint as the port posed it, its offset turned as the Trust faces (FFXI's space)."""
+        import numpy as np
+        import ffxi_fx as FX
+        import ffxi_model as FM
+        joints = m.pm.joints() if m.pm is not None else None
+        if joints is None or not len(joints):
+            return None
+        cache = self.fx.setdefault("points", {})
+        path = m.trust.get("file")
+        if path not in cache:
+            cache[path] = FM.skeleton_points(path) if path else []
+        refs = cache[path]
+        if not refs:
+            return None
+        at = FX.from_mh(joints)
+        return np.array([at[j] + actor.facing @ np.asarray(off) if j < len(at) else actor.pos for j, off in refs])
 
     def _fx_lasting(self, fx: dict, effects, trusts: dict) -> None:
         """Each Trust's own lasting effects, as FFXI starts them as it appears: its file's efon (Shantotto II's

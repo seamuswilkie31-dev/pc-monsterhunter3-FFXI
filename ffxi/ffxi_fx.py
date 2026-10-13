@@ -681,7 +681,8 @@ class Actor:
     pos: np.ndarray
     facing: np.ndarray
     height: float = 1.8
-    joints: np.ndarray | None = None     # each joint's place (FFXI's space), when the port tells it: effects on them
+    points: np.ndarray | None = None     # each of its skeleton's points (FFXI's space), when the port tells where its
+                                         # joints are: a generator's joint number is one of these (skeleton_points)
 
 
 class Transform:                         # a slot's velocity, as the engine keeps it
@@ -768,8 +769,8 @@ class Generator:
         if a is None:
             return
         joint = self.d.joint1 if self.d.attach in (2, 4, 6) else self.d.joint0
-        if joint and a.joints is not None and joint < len(a.joints) and a.joints[joint].any():
-            self.assoc_pos = a.joints[joint].copy()                # on that joint, where it is now
+        if joint and a.points is not None and joint < len(a.points) and a.points[joint].any():
+            self.assoc_pos = a.points[joint].copy()                # on that point of its skeleton, where it is now
         else:
             self.assoc_pos = a.pos + (np.array([0.0, -0.5 * a.height, 0.0]) if joint else 0.0)
         self.assoc_rot = np.eye(4)
