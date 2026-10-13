@@ -17,7 +17,8 @@ window captured from the screen): flat out at speed (a smooth crawl, an arm far 
 the back with the elbow high, a flutter kick with the heels coming up), inclined about 45 degrees slower,
 upright stopped. So two swims by speed (the port blends the set's moving clips by speed): "swim" (300 a
 second) flat (84 degrees), that crawl along smooth paths, rolling a little, the head up; "swsl" (120) the
-leaning stroke at 45 degrees. NOT YET seen in play. Before: The swim set was the run
+leaning stroke at 45 degrees. Then the arms stretched ("rolling into a ball": the hands kept at least 0.77 of
+the arm out). Checked in play: "this looks good". The swings in the water NOT YET seen in play. Before: The swim set was the run
 laid flat ("we still need the swimming animations"). FFXI has no swimming, so the strokes are made on each
 skeleton's own limbs (ffxi_model._limbs: the feet its points 8/9, the wrists 10/11, else the hands 126/127,
 else found by shape: the pelvis the deepest joint with two long chains to the ground, the wrists by their
