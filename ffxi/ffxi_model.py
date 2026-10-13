@@ -1206,8 +1206,10 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         return length * np.array([below, back, out * side])
 
     nf = 55
-    crawl_hand = [(0.00, (0.90, 0.12, 0.10)), (0.18, (0.72, 0.18, 0.38)), (0.38, (0.18, 0.20, 0.44)),
-                  (0.54, (-0.52, 0.20, 0.16)), (0.68, (-0.30, 0.26, -0.24)), (0.84, (0.36, 0.22, -0.34))]
+    # (2026-10-13: "his arms are rolling into a ball": the hand never nearer the shoulder than 0.77 of the arm,
+    # so the arm stays long; the reach a little out, to show beside a Tarutaru's head; the recovery wide)
+    crawl_hand = [(0.00, (0.95, 0.20, 0.08)), (0.18, (0.78, 0.26, 0.45)), (0.38, (0.30, 0.30, 0.78)),
+                  (0.54, (-0.62, 0.28, 0.40)), (0.68, (-0.55, 0.45, -0.30)), (0.84, (0.40, 0.55, -0.50))]
 
     def crawl(f: int) -> dict:
         u = f / (nf - 1)
@@ -1234,8 +1236,8 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
     # and round, draw back past the hips and come in close to the chest to reach ahead again; the legs a steady
     # scissor kick, two beats a stroke, the knees soft.
     n = 61
-    hands = [(0.00, (0.72, 0.32, 0.10)), (0.24, (0.52, 0.42, 0.42)), (0.48, (0.16, 0.66, 0.32)),
-             (0.68, (0.30, 0.38, 0.12)), (0.86, (0.66, 0.30, 0.09))]
+    hands = [(0.00, (0.85, 0.28, 0.20)), (0.24, (0.60, 0.40, 0.55)), (0.48, (0.25, 0.78, 0.40)),
+             (0.68, (0.45, 0.50, 0.28)), (0.86, (0.80, 0.30, 0.18))]
 
     def swim(f: int) -> dict:
         u = f / (n - 1)
