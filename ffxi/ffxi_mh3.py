@@ -1014,7 +1014,9 @@ class App:
                 f = fx["lib"].file(m.trust["file"])
                 routine = next((r for r in ("efon", "init") if f.find(FX.ROUTINE, r)), None)
                 if routine:
-                    play = effects.play(f, routine, trusts[slot])
+                    # drawn bigger than their files' numbers make them: Shantotto II's orbs come out a 0.2 m
+                    # glass ball, FFXI's about twice that beside her (matched to a video of FFXI by eye)
+                    play = effects.play(f, routine, trusts[slot], size=float(self.cfg.get("trust_effect_size", 2.0)))
             except Exception as ex:                                # noqa: BLE001  no effects; the Trust still out
                 print(f"ffxi: {m.trust['name']}'s own effects: {ex}")
             lasting[slot] = (m, play)

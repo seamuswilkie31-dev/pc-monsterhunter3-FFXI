@@ -1104,6 +1104,7 @@ class Play:
     generators: list = field(default_factory=list)
     stopped: bool = False
     alpha: float = 1.0                   # its particles' alpha times this (a status's faint pulse)
+    size: float = 1.0                    # its particles drawn this much bigger (a Trust's own lasting effects)
 
 
 @dataclass
@@ -1125,9 +1126,9 @@ class Effects:
         self.born: list = []                     # child generators made this step: (their play, it)
 
     def play(self, file: EffectFile, routine: str, source: Actor, target: Actor | None = None,
-             op: int = 0x03) -> Play:
+             op: int = 0x03, size: float = 1.0) -> Play:
         events, ticks = self.lib.schedule(file, routine, op)
-        pl = Play(routine, source, target, sorted(events, key=lambda e: e.tick), self.clock)
+        pl = Play(routine, source, target, sorted(events, key=lambda e: e.tick), self.clock, size=size)
         self.plays.append(pl)
         return pl
 
@@ -1209,6 +1210,9 @@ class Effects:
                 continue
             s = p.gen.d.setup
             world, local = particle_matrices(p, cam)
+            if p.gen.play.size != 1.0:
+                local = local.copy()
+                local[:3, :3] *= p.gen.play.size
             tf = np.clip(p.color * p.mult, 0.0, 1.0)
             if p.alpha_override is not None:
                 tf[3] = p.alpha_override
