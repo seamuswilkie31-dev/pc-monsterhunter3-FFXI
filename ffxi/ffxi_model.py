@@ -1194,7 +1194,43 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
     def arm_len(sh: int, el: int, wr: int) -> float:
         return float(np.linalg.norm(at_n[el] - at_n[sh]) + np.linalg.norm(at_n[wr] - at_n[el]))
 
-    # swimming: 61 frames a stroke (2 s at its pace), leaning 35 degrees into it. The hands reach ahead, sweep out
+    # swimming fast, as the hunter swims (2026-10-13, the game's own hunter watched swimming side on): flat out, the
+    # head up a little; a smooth crawl, each hand reaching far ahead, pulled down under the body to the hip, brought
+    # back over the back with the elbow high, half a stroke from the other; a flutter kick, the knees bending as
+    # the heels come up; the body rolling a little. 55 frames a stroke (1.8 s at its pace). The places in the
+    # swimmer's own terms: (ahead, out, below its belly) for the hands, (back, out, below) for the feet.
+    def swimmer(ahead: float, out: float, below: float, side: float, length: float) -> np.ndarray:
+        return length * np.array([below, -ahead, out * side])          # the upright frame: front +X, up -Y
+
+    def kicker(back: float, out: float, below: float, side: float, length: float) -> np.ndarray:
+        return length * np.array([below, back, out * side])
+
+    nf = 55
+    crawl_hand = [(0.00, (0.90, 0.12, 0.10)), (0.18, (0.72, 0.18, 0.38)), (0.38, (0.18, 0.20, 0.44)),
+                  (0.54, (-0.52, 0.20, 0.16)), (0.68, (-0.30, 0.26, -0.24)), (0.84, (0.36, 0.22, -0.34))]
+
+    def crawl(f: int) -> dict:
+        u = f / (nf - 1)
+        want = {}
+        for k, (sh, el, side, wr) in enumerate(limbs["arms"]):
+            a, b, c = path(crawl_hand, u + 0.5 * k)
+            reach(want, sh, el, wr, swimmer(a, b, c, side, arm_len(sh, el, wr)),
+                  swimmer(0.0, 0.6, -0.8, side, 1.0))                  # the elbow up over the back, and out
+        for k, (hp, kn, side, an) in enumerate(limbs["legs"]):
+            w = 3 * 2 * np.pi * u + np.pi * k
+            up = 0.5 + 0.5 * np.sin(w)                                 # 1: the heel up
+            reach(want, hp, kn, an, kicker(0.93 - 0.14 * up, 0.07, 0.10 - 0.26 * up, side, arm_len(hp, kn, an)),
+                  kicker(0.0, 0.1, 1.0, side, 1.0))                    # the knee bending toward the sea floor
+        for j, share in neck:
+            want[j] = rot("z", -22.0 * share)                          # looking ahead
+        return want
+
+    roll = [9.0 * np.sin(2 * np.pi * f / (nf - 1)) for f in range(nf)]
+    clips.append({"name": "swim", "frames": nf, "rate": 1.0, "kind": MOVE, "set": SWIM,
+                  "data": lay(frames(nf, crawl), 84.0, 0.0, roll=roll), "speed": 300.0})
+
+    # swimming slowly: 61 frames a stroke (2 s at its pace), leaning 45 degrees into it (the hunter between flat
+    # out and stopped). The hands reach ahead, sweep out
     # and round, draw back past the hips and come in close to the chest to reach ahead again; the legs a steady
     # scissor kick, two beats a stroke, the knees soft.
     n = 61
@@ -1215,9 +1251,9 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
             want[j] = rot("z", -14.0 * share)
         return want
 
-    lean = [35.0 + 3.0 * np.cos(2 * np.pi * f / (n - 1)) for f in range(n)]
-    clips.append({"name": "swim", "frames": n, "rate": 1.0, "kind": MOVE, "set": SWIM,
-                  "data": lay(frames(n, swim), lean, hips[1] + 0.6 * height), "speed": 250.0})
+    lean = [45.0 + 3.0 * np.cos(2 * np.pi * f / (n - 1)) for f in range(n)]
+    clips.append({"name": "swsl", "frames": n, "rate": 1.0, "kind": MOVE, "set": SWIM,
+                  "data": lay(frames(n, swim), lean, hips[1] + 0.5 * height), "speed": 120.0})
 
     # treading water: 61 frames (2 s), upright: the hands sculling in small loops at the waist, the elbows soft;
     # the legs a slow scissor kick, small.

@@ -12,7 +12,12 @@ fighting: "like this"), so remade again in Monster Hunter's manner: upright in t
 (2 s a stroke) leans 35 degrees into it, the hands reaching ahead, sweeping round and drawing in close to the
 chest, the legs a steady scissor kick, the knees soft, the head up (_neck: the neck and head share a nod);
 treading water upright, a slow small scissor kick, the hands sculling at the waist; the swings in the water
-upright too (10 degrees), sunk as the tread. NOT YET seen in play. Before: The swim set was the run
+upright too (10 degrees), sunk as the tread. Then the game's own hunter watched swimming side on (the layer's
+window captured from the screen): flat out at speed (a smooth crawl, an arm far ahead, the other back over
+the back with the elbow high, a flutter kick with the heels coming up), inclined about 45 degrees slower,
+upright stopped. So two swims by speed (the port blends the set's moving clips by speed): "swim" (300 a
+second) flat (84 degrees), that crawl along smooth paths, rolling a little, the head up; "swsl" (120) the
+leaning stroke at 45 degrees. NOT YET seen in play. Before: The swim set was the run
 laid flat ("we still need the swimming animations"). FFXI has no swimming, so the strokes are made on each
 skeleton's own limbs (ffxi_model._limbs: the feet its points 8/9, the wrists 10/11, else the hands 126/127,
 else found by shape: the pelvis the deepest joint with two long chains to the ground, the wrists by their
