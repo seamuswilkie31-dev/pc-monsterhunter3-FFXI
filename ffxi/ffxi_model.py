@@ -1125,10 +1125,13 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         return np.array([v[0] * np.sin(a), v[1] * np.sin(a), v[2] * np.sin(a), np.cos(a)])
 
     base = _neutral(joints, np.asarray(idle["data"][0], np.float64), limbs)
+    held = _held(joints, [idle["data"]] + [c["data"] for c in clips if c is not idle and c["set"] == PEACE
+                                           and c["kind"] in (STAND, MOVE)], limbs, height)
 
     def frames(n: int, turns) -> np.ndarray:
         """n frames of the neutral pose (the idle's, its arms and legs hanging straight: _neutral), each joint
-        `turns(f)` names (joint: a turn in the model's space, about the joint) turned so, its children with it."""
+        `turns(f)` names (joint: a turn in the model's space, about the joint) turned so, its children with it;
+        what a hand holds on a joint of its own (_held) kept in that hand."""
         out = np.repeat(base.astype(np.float32)[None], n, 0)
         for f in range(n):
             want = turns(f)
@@ -1143,13 +1146,22 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
                     local = _qmul(_qinv(qw[p]), world) if p >= 0 else world
                     out[f, j, :4] = local
                 qw[j] = world
+            if held:
+                _hold(joints, out[f], held)
         for f in range(1, n):                                          # q and -q alike: the short way round
             flip = (out[f, :, :4] * out[f - 1, :, :4]).sum(1) < 0
             out[f, flip, :4] *= -1
         return out
 
     q_n = base[:, :4] / np.maximum(np.linalg.norm(base[:, :4], axis=1, keepdims=True), 1e-9)
-    at_n = np.array([mm[:3, 3] for mm in pose_world(joints, q_n, base[:, 4:7], base[:, 7:10])])
+    world_n = pose_world(joints, q_n, base[:, 4:7], base[:, 7:10])
+    at_n = np.array([mm[:3, 3] for mm in world_n])
+    shields = _shields(joints, packed.get("verts"), np.asarray(world_n), limbs)
+
+    def surface(degrees: float) -> np.ndarray:
+        """Up out of the water, in the upright frame of a body laid forward so (lay)."""
+        a = np.radians(degrees)
+        return np.array([-np.sin(a), -np.cos(a), 0.0])
 
     def path(keys: list, u: float) -> np.ndarray:
         """A closed smooth path through keys [(u, (a, b, c))...], u from 0 to 1."""
@@ -1167,13 +1179,15 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
 
     arm_tops = {sh for sh, _el, _s, _w in limbs["arms"]}
 
-    def reach(want: dict, top: int, mid: int, end: int, goal: np.ndarray, pole: np.ndarray) -> None:
+    def reach(want: dict, top: int, mid: int, end: int, goal: np.ndarray, pole: np.ndarray,
+              face: tuple | None = None) -> None:
         """Turns for top and mid (into want) so end, below them, comes to top's place + goal (the model's space),
         mid pointing toward pole. The elbow and the knee are hinges (2026-10-13: turned the shortest way, the arm
         rolled about its length as it pleased, a shield on its forearm standing up like a fin): top is turned so
         its bone points to mid's place AND its hinge lies across the bend (the neutral pose's hinge: an arm
         flexing forward, a leg backward), then mid bends about that hinge alone; what hangs below keeps its
-        line, nothing twisted."""
+        line, nothing twisted. face (a shield's outer face, neutral; and where to turn it): the forearm turned
+        about its length besides, the shield's face as near that way as it can, so it lies level."""
         s0, e0, w0 = at_n[top], at_n[mid], at_n[end]
         l1, l2 = np.linalg.norm(e0 - s0), np.linalg.norm(w0 - e0)
         d = float(np.clip(np.linalg.norm(goal), 0.05 * (l1 + l2), 0.995 * (l1 + l2)))
@@ -1198,6 +1212,15 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         want[top] = _align(u0, hinge0, u, hinge)
         angle = np.arccos(np.clip(np.dot(u, v), -1.0, 1.0)) / 2
         want[mid] = np.array([*(hinge * np.sin(angle)), np.cos(angle)])
+        if face is not None:
+            f0, toward = face
+            turned = quat_matrix(want[mid]) @ (quat_matrix(want[top]) @ f0)
+            f_ = turned - np.dot(turned, v) * v                        # both across the forearm
+            t_ = toward - np.dot(toward, v) * v
+            if np.linalg.norm(f_) > 1e-6 and np.linalg.norm(t_) > 1e-6:
+                weight = min(1.0, float(np.linalg.norm(t_)) / 0.5)     # (less as the forearm points that way)
+                twist = np.arctan2(np.dot(v, np.cross(f_, t_)), np.dot(f_, t_)) * weight / 2
+                want[mid] = _qmul(np.array([*(v * np.sin(twist)), np.cos(twist)]), want[mid])
 
     # The strokes as Monster Hunter's hunter swims in Tri and 3 Ultimate (2026-10-13, a video of its underwater
     # fighting: upright in the water, leaning into the way it goes, its legs kicking below, never lying flat),
@@ -1232,11 +1255,21 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
     # with the elbow high, never far out to the side)
     crawl_hand = [(0.00, (0.95, 0.15, 0.10)), (0.18, (0.80, 0.20, 0.42)), (0.36, (0.30, 0.24, 0.66)),
                   (0.52, (-0.62, 0.24, 0.36)), (0.66, (-0.62, 0.26, -0.20)), (0.82, (0.20, 0.30, -0.62))]
-
+    # an arm bearing a shield (_shields) is never brought over the back, where the shield stood up above it like a
+    # fin, nor swept out level beside the body, a shield as wide as a wing: it holds the shield flat under the chest
+    # as a swimmer carries a board, the forearm across the chest, the elbow out at the side as low as the hand, the
+    # shield beneath the forearm (its face to the sea floor: hugged face up, a shield standing well off its forearm
+    # went through the chest), sculling a little; the other arm swims the crawl
     def crawl(f: int) -> dict:
         u = f / (nf - 1)
         want = {}
         for k, (sh, el, side, wr) in enumerate(limbs["arms"]):
+            if sh in shields:
+                w = 2 * np.pi * u
+                reach(want, sh, el, wr, swimmer(0.15 + 0.06 * np.sin(w), -0.32 + 0.04 * np.cos(w), 0.45, side,
+                                                arm_len(sh, el, wr)),
+                      swimmer(0.0, 1.0, 0.6, side, 1.0), (shields[sh], -surface(84.0)))
+                continue
             a, b, c = path(crawl_hand, u + 0.5 * k)
             reach(want, sh, el, wr, swimmer(a, b, c, side, arm_len(sh, el, wr)),
                   swimmer(0.0, 0.6, -0.8, side, 1.0))                  # the elbow up over the back, and out
@@ -1316,6 +1349,126 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         data[:, sorted(legs)] = np.nan
         clips.append({"name": "~" + c["name"], "frames": c["frames"], "rate": c["rate"], "kind": ACTION,
                       "set": c["set"], "data": data, "speed": 0.0})
+
+
+def _turns(world: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """pose_world's transforms parted: each joint's turn (its scale taken off) and its scale."""
+    scale = np.maximum(np.linalg.norm(world[..., :3, :3], axis=-2), 1e-9)
+    return world[..., :3, :3] / scale[..., None, :], scale
+
+
+def _held(joints: list[dict], clips: list[np.ndarray], limbs: dict, height: float) -> dict:
+    """What a hand holds on a joint of its own hung from elsewhere (2026-10-13: Trion's sword, on a joint off his
+    hips that his motions carry in his right hand; the strokes made for swimming left it floating where his idle
+    had it): joints off the limbs and off the body's chain to them, kept beside one wrist, rigidly, through every
+    frame of clips (standing and moving: a sheathed sword goes with the hips as the arms swing), and moving
+    against the chest as they do (else a hand kept still told nothing: August's wings stood as still beside his).
+    By joint (the topmost such, what hangs below them comes along): its wrist and its turn and place in the
+    wrist's frame as clips' first frame has them."""
+    kids: dict[int, list[int]] = {}
+    for j, jj in enumerate(joints):
+        kids.setdefault(jj["parent"], []).append(j)
+    tops = [a[0] for a in limbs["arms"]] + [g[0] for g in limbs["legs"]]
+    limb, trunk = set(), set()
+    for top in tops:
+        todo = [top]
+        while todo:
+            j = todo.pop()
+            limb.add(j)
+            todo.extend(kids.get(j, []))
+        j = joints[top]["parent"]
+        while j >= 0 and j not in trunk:
+            trunk.add(j)
+            j = joints[j]["parent"]
+    free = [j for j in range(len(joints)) if j not in limb and j not in trunk]
+    wrists = [a[3] for a in limbs["arms"]]
+    chest = joints[limbs["arms"][0][0]]["parent"]
+    if not free or not clips or chest < 0:
+        return {}
+    places, body = [], []                                               # frames x free (x wrists) x 3
+    for data in clips:
+        for d in np.asarray(data, np.float64):
+            if not np.isfinite(d).all():
+                continue
+            w = pose_world(joints, d[:, :4] / np.maximum(np.linalg.norm(d[:, :4], axis=1, keepdims=True), 1e-9),
+                           d[:, 4:7], d[:, 7:10])
+            r, _ = _turns(w)
+            places.append(np.einsum("wji,fwj->fwi", r[wrists], w[free][:, None, :3, 3] - w[wrists][None, :, :3, 3]))
+            body.append((w[free, :3, 3] - w[chest, :3, 3]) @ r[chest])
+    if len(places) < 8:
+        return {}
+    places, body = np.array(places), np.array(body)
+    spread = np.linalg.norm(places - places.mean(0), axis=-1).max(0)    # free x wrists
+    moved = np.linalg.norm(body - body.mean(0), axis=-1).max(0)         # free, against the chest
+    near = np.linalg.norm(places.mean(0), axis=-1)
+    d = np.asarray(clips[0][0], np.float64)
+    w0 = pose_world(joints, d[:, :4] / np.maximum(np.linalg.norm(d[:, :4], axis=1, keepdims=True), 1e-9),
+                    d[:, 4:7], d[:, 7:10])
+    r0, _ = _turns(w0)
+    out = {}
+    for i, j in enumerate(free):
+        k = int(np.argmin(np.where(spread[i] < 0.03 * height, near[i], np.inf)))
+        if spread[i, k] >= 0.03 * height or near[i, k] > 0.2 * height or moved[i] < spread[i, k] + 0.05 * height:
+            continue
+        wr = wrists[k]
+        out[j] = (wr, r0[wr].T @ r0[j], r0[wr].T @ (w0[j, :3, 3] - w0[wr, :3, 3]))
+    for j in list(out):                                                 # the topmost only
+        p = joints[j]["parent"]
+        while p >= 0:
+            if p in out:
+                del out[j]
+                break
+            p = joints[p]["parent"]
+    return out
+
+
+def _hold(joints: list[dict], d: np.ndarray, held: dict) -> None:
+    """A frame's held joints (_held) set (in place) to go with their wrists as they did."""
+    w = pose_world(joints, d[:, :4] / np.maximum(np.linalg.norm(d[:, :4], axis=1, keepdims=True), 1e-9),
+                   d[:, 4:7], d[:, 7:10])
+    r, scale = _turns(w)
+    for j, (wr, turn, place) in held.items():
+        p = joints[j]["parent"]
+        if p < 0:
+            continue
+        d[j, :4] = _quat_of(r[p].T @ (r[wr] @ turn))
+        d[j, 4:7] = (r[p].T @ (w[wr, :3, 3] + r[wr] @ place - w[p, :3, 3])) / scale[p]
+
+
+def _shields(joints: list[dict], verts: np.ndarray | None, world: np.ndarray, limbs: dict) -> dict[int, np.ndarray]:
+    """The arms bearing a shield (2026-10-13: brought over the back in the crawl, a shield on the forearm stood up
+    above it like a fin), by their shoulders, each with the way its shield's outer face looks in the pose `world`
+    (each joint's transform) holds: the mesh below the elbow reaching far off the forearm's line (a shield 0.6 to 1
+    of the arm's length, a bare hand 0.2 to 0.35), its face the way that far part is thinnest across the forearm."""
+    out: dict[int, np.ndarray] = {}
+    if verts is None or not len(verts):
+        return out
+    kids: dict[int, list[int]] = {}
+    for j, jj in enumerate(joints):
+        kids.setdefault(jj["parent"], []).append(j)
+    corners = skin_corners(verts, world)
+    j0 = verts[:, 6].astype(int)
+    for sh, el, _side, wr in limbs["arms"]:
+        below, todo = set(), [el]
+        while todo:
+            j = todo.pop()
+            below.add(j)
+            todo.extend(kids.get(j, []))
+        e, w = world[el][:3, 3], world[wr][:3, 3]
+        length = float(np.linalg.norm(e - world[sh][:3, 3]) + np.linalg.norm(w - e))
+        axis = (w - e) / max(np.linalg.norm(w - e), 1e-9)
+        p = corners[np.isin(j0, sorted(below))] - e
+        off = p - np.outer(p @ axis, axis)                              # across the forearm
+        reach_ = np.linalg.norm(off, axis=1)
+        if not len(off) or reach_.max() < 0.45 * length:
+            continue
+        far = off[reach_ > 0.3 * length]
+        if len(far) < 6:
+            continue
+        centre = far.mean(0)
+        face = np.linalg.svd(far - centre, full_matrices=False)[2][1]   # (its width the most, along the forearm none)
+        out[sh] = face if np.dot(face, centre) >= 0 else -face
+    return out
 
 
 def _align(a0: np.ndarray, b0: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:

@@ -1,5 +1,23 @@
 # FFXI layer — next session
 
+**Swimming on Humes and the other races (2026-10-13)**: "it looks a bit funny on humes and id imagine it looks
+strange on the other races aswell". Rendered on the races' own meshes (flat-shaded, side, above, from behind as
+the camera sits, and head on): the crawl's arms swung far out and rolled about their length, and a shield on the
+forearm stood up over the back like a fin as the arm came round. So: the crawl kept in the body's line (straight
+ahead, under the chest, back to the hip, over the back with the elbow high), the elbows and knees hinges (reach:
+the shoulder and hip turned so the bone points the way and its hinge lies across the bend, _align). An arm with
+a shield (_shields: the mesh below the elbow reaching 0.6 to 1 of the arm's length off the forearm's line, a
+bare hand 0.2 to 0.35; its face where that part is thinnest) no longer crawls: it holds the shield flat under
+the chest like a board, the forearm across, the shield's face to the sea floor (face up it went through the
+chests of Trion and the Elvaan male), sculling a little, while the other arm crawls. All eight races carry a
+shield on the left in the default look; 30 of 117 Trust models have one (Trion, Curilla, August...). The slow
+swim and treading keep the shield held in front as FFXI's people hold one. And what a Trust holds in its hand
+on a joint of its own (_held: Trion's sword hangs off his hips, his motions carrying it in his hand) floated
+where its idle left it; now found (beside one wrist, rigid through its standing and moving clips, moving
+against the chest) and kept in that hand in the strokes (_hold): 70 of 117 Trust models. The races' sheathed
+weapons stay sheathed. Swim clips take about 0.9 s a model to make (0.57 before), on the build threads.
+Not yet seen in play.
+
 **Swim strokes and swings in the water (2026-10-13)**: the strokes seen in play ("works but a little goofy and
 cartoony... fit the FFXI style"), so remade: a breaststroke for the windmill crawl, unhurried (2.2 s a
 stroke): each hand and foot along a smooth closed path (periodic Catmull-Rom through a few places), its
