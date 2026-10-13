@@ -54,18 +54,21 @@ def sound_path(root: Path, n: int) -> Path:
 # goblin's, se211; King of Hearts' se268). FFXI's own player characters have none, so each race takes one
 # that suits it: by the voice's pitch, measured across the readable sets (2026-10-09: a Tarutaru given
 # se267, the deepest of all, sounded like an ogre), its faces through the race's list in turn. A few sets
-# are ATRAC3, not read here: the next in the list then. /voice in the game tries others.
+# are ATRAC3, not read here: the next in the list then. /voice in the game tries others. (2026-10-13: "deep
+# like the galka": a Hume's face could give it se222, at 110 Hz the darkest of the men's, and a Galka se302 at
+# 158; every set measured again (YIN over the voiced parts of all 16 sounds), the Humes keep to 120-170 Hz and
+# the Galka below 110.)
 VOICE_RACES = ["hume_male", "hume_female", "elvaan_male", "elvaan_female", "tarutaru_male", "tarutaru_female",
                "mithra", "galka"]
 VOICE_CHOICES = {
-    "hume_male": [201, 222, 228, 254, 305, 232],          # a man's (about 120-160 Hz)
+    "hume_male": [254, 228, 302, 215, 232, 305],          # a man's, not deep (about 120-170 Hz)
     "elvaan_male": [221, 303, 215, 254, 305, 222],
     "hume_female": [290, 307, 249, 223, 280, 234],        # a woman's (about 210-350 Hz)
     "elvaan_female": [249, 234, 307, 290, 223],
     "mithra": [220, 238, 231, 234, 249],                   # Babban's first, then the brighter women's
     "tarutaru_male": [236, 212, 243, 241, 242, 268],      # the highest, a child's (about 530-700 Hz)
     "tarutaru_female": [316, 311, 213, 242, 241, 243],
-    "galka": [214, 302, 219, 218, 309],                    # Gessho's first, then the deepest
+    "galka": [214, 309, 219, 303, 222],                    # Gessho's first, then the deepest (86-110 Hz)
 }
 
 

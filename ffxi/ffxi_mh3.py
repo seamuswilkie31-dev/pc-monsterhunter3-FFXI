@@ -1188,7 +1188,9 @@ class App:
                                                                 self.cfg["character_race"])
                 import ffxi_sound as FS
                 face = int(self.cfg.get("character_look", {}).get("face", 1))
-                vset = self.e.voice or self.cfg.get("voice_set") or FS.voice_set(lib.root, self.cfg["character_race"], face)
+                race = self.cfg["character_race"]
+                own = self.e.voice if self.e.voice_race in ("", race) else 0   # /voice's, for the race it was for
+                vset = own or self.cfg.get("voice_set") or FS.voice_set(lib.root, race, face)
                 self._voice_now = vset
                 for kind, routine in (("attack", "vatk"), ("hurt", "vdam"), ("faint", "vded")):
                     opts = FX.voice_options(lib.caster, routine)            # se236's, as the file names them
@@ -1232,14 +1234,15 @@ class App:
         if not hasattr(self, "_all_voices"):
             self._all_voices = FS.voice_sets(root)
         now = getattr(self, "_voice_now", None) or e.voice
+        race = self.cfg.get("character_race") or ""
         if arg in ("next", "prev", "n", "p") and self._all_voices:
             sets = self._all_voices
             i = sets.index(now) if now in sets else -1
-            e.voice = sets[(i + (1 if arg[0] == "n" else -1)) % len(sets)]
+            e.voice, e.voice_race = sets[(i + (1 if arg[0] == "n" else -1)) % len(sets)], race
         elif arg.isdigit() and FS.readable_voice(root, int(arg)):
-            e.voice = int(arg)
+            e.voice, e.voice_race = int(arg), race
         elif arg == "auto":
-            e.voice = 0
+            e.voice, e.voice_race = 0, ""
         elif arg:
             e.say("/voice: next, prev, a set's number (201-328), auto, off, on.", "warn")
             return
@@ -1250,7 +1253,7 @@ class App:
         options = [n for n in (self._voice_sets or {}).get("attack", []) if n is not None]
         if self.sounds and options:
             self.sounds.play(options[0])
-        e.say(f"Voice: se{self._voice_now}" + (" (the race's)" if not e.voice else "") +
+        e.say(f"Voice: se{self._voice_now}" + (" (the race's)" if not e.voice or e.voice_race not in ("", race) else "") +
               ". /voice next or prev to hear others.", "info")
 
     def _music_tracks(self) -> dict:

@@ -1,5 +1,14 @@
 # FFXI layer — next session
 
+**A Hume's voice (2026-10-13)**: "a problem with the voicelines for hitting enemies for humes", "deep like the
+galka". FFXI's player characters have no voices, so each race takes NPC voice sets by face (ffxi_sound
+VOICE_CHOICES), and the Hume's and the Galka's lists overlapped: a Hume could get se222 (110 Hz, the darkest of
+the men's), a Galka se302 (158 Hz). Every readable set measured again (YIN over the voiced parts of all 16
+sounds; the attack grunts alone too short to tell): the Humes now 254, 228, 302, 215, 232, 305 (120-167 Hz),
+the Galka 214 (Gessho's), 309, 219, 303, 222 (86-110 Hz). And a voice chosen with /voice is kept for the race it
+was chosen on (voice_race; an older save's applies to any): a Galka's no longer follows you to a Hume. Not yet
+heard in play: the sets are chosen by measure, so /voice next lets you try others.
+
 **Breaststroke (2026-10-13)**: "instead of the characters doing a front crawl can you make them do a
 breaststroke? it looks goofy when they're doing a front crawl". Both swims are now one breaststroke
 (ffxi_model.swim_clips: breaststroke): the glide (hands together ahead, legs long), the hands sweeping out
