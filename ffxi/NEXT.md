@@ -1,6 +1,6 @@
 # FFXI layer — next session
 
-**Swimming (2026-10-12)**: built, NOT YET seen in play. FFXI's people never swim, so the character ran
+**Swimming (2026-10-12)**: checked in play ("the swimming works"). FFXI's people never swim, so the character ran
 upright through the sea. A swim recorded (the hunter's motion and world matrix through the port's blocks):
 co_01xx in the water (co_0101 swimming, co_0107 dropping in, co_0109/0110 setting off and stopping,
 co_0125 turning), co_0360 afloat, co_0303 and the other co_0... on land; the hunter's world matrix
