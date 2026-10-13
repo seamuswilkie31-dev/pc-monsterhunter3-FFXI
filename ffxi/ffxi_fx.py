@@ -787,6 +787,13 @@ class Generator:
         if self.d.attach in (1, 3, 5, 9, 0) or self.parent is not None:
             self.place()
         self.emit(ticks)
+        if self.parent is None and self.d.attach in (1, 3, 5, 9) and self.d.joint0 and self.d.setup \
+                and self.d.setup.get("follow"):
+            # on a point of the caster's skeleton that moves (Shantotto II's orbs, circling her): its particles go
+            # along with it; left where each was born, a new one every 20 ticks, the orbs jumped round, flashing
+            # (2026-10-12). (Those on the caster's feet, joint 0, stay where born, as the spells were checked.)
+            for p in self.particles:
+                p.assoc_pos, p.assoc_rot = self.assoc_pos.copy(), self.assoc_rot.copy()
         for p in self.particles:
             update_particle(p, ticks)
         self.particles = [p for p in self.particles if p.age < p.max_age]
