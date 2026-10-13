@@ -1,5 +1,40 @@
 # FFXI layer — next session
 
+**Targets, damage, defense, Trusts (2026-10-11/12)**: built; the lock-on, the damage and the defense checked in
+play ("it locks onto Barioth", "it hits harder", "the hits feel better"); the Trusts' fixes NOT YET.
+- Every monster a target: each frame from the game's own table (ENEMY_WORK, 0xB18 each, at
+  ld32(0x8065AA60 + 0xA4) +0x1C, its count at +6: +0 in use, +0x28 its place, +0x13C its model or what holds it
+  at +0x118), drawn or not, on the screen or off it (table_enemies; a switched-out model still skipped). LB
+  locking on takes the monster nearest the middle of the screen within reach (none in sight: the nearest),
+  not a far one the d-pad chose earlier (a Baggi 3000 off had stayed the target, the Barioth beside the hunter
+  not), unless the d-pad's choice is itself within reach.
+- FFXI's hit (Engine.avg_hit: auto-attack, and the measure of weapon skills, magic, pets and Trusts) is now
+  your Monster Hunter weapon's damage a second, not a blow's: learnt from your own blows with each kind of
+  weapon (Engine.mh_rate, kept with the progress; the layer's _weapon_watch tells the engine the kind in
+  hand), half of it over your FFXI weapon's delay; 16 a second until learnt, never under 8 (ffxi_data
+  MH_RATE...). Learnt a blow at a time from every drop not FFXI's own, and begun at 30 each run, it had sunk
+  to 1-4 a hit on a 2800-HP Barioth. Nothing learnt while FFXI's Attack fights for you; a drop beyond a
+  quarter of the monster's HP isn't a blow. Teach it a weapon in Monster Hunter's combat (/combat mh).
+- Your FFXI gear's DEF is the hunter's defense in FFXI's combat (ffxi_defense): a monster's blow is taken as
+  damage x 80 / (80 + defense) (fn_8029B05C), the defense worked out by fn_8027078C (the armor's sum and 1,
+  with skills) into PLW +0x3BA and, a float, +0x3C0. The layer sends 1 + DEF + half of VIT (Engine.game_defense;
+  Block defense, a spare word, the layout unchanged); the bridge sets it each frame and after the game works
+  its own out (fn_8027078C hooked: tools/mh3-hooks.txt), the armor's back when it's off or the layer is gone.
+  The gear's DEF isn't cut from the blows again in the layer (Engine.def_in_game). The HACKER save's hunter
+  wore no armor (defense 1); under the Judge's set and a Darksteel Shield it is 297.
+- Trusts' legs: a walk's or run's pace is measured from the sole sliding under it (ffxi_model.ground_speed);
+  Iroha's robe hem, at the ground and still with the body, was taken for the sole while her feet were up (her
+  run a fifth of its pace, her legs whirling). Only what swings to and fro with the stride counts now. A pace
+  still beyond any FFXI's (11 of 109 Trusts: Moogles hovering, Rosulatia, Shantotto II...) takes the usual,
+  run 380 and walk 130 (ffxi_trust.RUN_PACE, WALK_PACE); the others measure as before.
+- Trusts fighting stood at the monster's height and rose with it when it flew: their height is now the ground
+  the hunter walked nearest that spot (Party._ground_y, its trail), else the hunter's own.
+- The repository: a public README (credits: Seamus, River, Samuele Voltan; Claude Opus and other AI assistants
+  thanked; a disclaimer: not fully tested, glitches as issues), Setup.bat (tools/setup.ps1: wiikit fetched when
+  GitHub's Download ZIP leaves it out, FFXI looked for, uv and MSYS2 installed, the game built, the launcher
+  started), and build-game.ps1 fetching Dolphin's fonts and function database from its GitHub when Dolphin
+  isn't installed.
+
 **The level-up banner (2026-10-09)**: checked in play ("good enough"), after these:
 - The effects' textures went to the port as 64 x 64 (port_fx TEX): the banner's 256 x 64 letters squeezed to
   64 across, blurred and striped. Now 256 square (FxBlock version 2, 38 MB shared; kFxTex in the bridge).
