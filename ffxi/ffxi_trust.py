@@ -179,6 +179,23 @@ def build_model(trust: dict, scale: float) -> dict:
 # How each job fights beside you: who cures you, and below what share of your HP (a subjob's healing a
 # little later); who casts at the foe; who keeps back from it; each job's weapon skill (FFXI's, a typical
 # one of its weapon)
+# A Trust's own last-stand ability, as FFXI's (River's notes, from bg-wiki and ffxiclopedia): used when its HP falls
+# under `below` (here your HP's: the monsters strike only you), at most every SIGNATURE_RECAST seconds; its look (its
+# file's routine `look`, played on it) lasts `lasts` seconds (0: until it ends so), or ends as it uses `ends_with`
+# (`forced`: its next weapon skill is that one, at `tp`); `aura`: an effect on you meanwhile (August's Daybreak: physical
+# damage taken -50%). Shantotto II's orbs and Arciela's crystals are no such thing: they last from its coming
+# (App._fx_lasting).
+SIGNATURE = {
+    "Teodor": {"ability": "Start from Scratch", "below": 0.50, "lasts": 0.0, "ends_with": "Hemocladis",
+               "forced": True, "tp": 2000.0, "look": "efon"},
+    "August": {"ability": "Daybreak", "below": 0.66, "lasts": 90.0, "ends_with": "No Quarter", "look": "eff1",
+               "aura": ("defn", 0.5)},
+    "Mumor II": {"ability": "Firesday Night Fever", "below": 0.50, "lasts": 240.0, "ends_with": "Final Eternal Heart",
+                 "look": "efon"},
+    "Morimar": {"ability": "Vehement Resolution", "below": 0.50, "lasts": 0.0, "ends_with": "12 Blades of Remorse",
+                "forced": True, "look": "efon"},
+}
+SIGNATURE_RECAST = 180.0                 # (August's Daybreak's, about 3 minutes; the others' alike)
 HEALERS = {"WHM": 0.75, "RDM": 0.55, "SCH": 0.65, "PLD": 0.45, "RUN": 0.4, "BLU": 0.45, "GEO": 0.5}
 NUKERS = {"BLM", "RDM", "SCH", "GEO", "DRK"}
 BACK_ROW = {"WHM", "BLM", "SCH", "GEO", "SMN", "BRD", "RNG", "COR"}
@@ -295,6 +312,8 @@ class Member:
     arrived: bool = False                # its coming shown (the call's effect where it appears)
     pet: bool = False                    # a summoner's avatar, a beast, a wyvern: the engine's pet, seen
     swing_n: int = 0
+    sig_on: float = 0.0                  # its last-stand ability (SIGNATURE) in effect since then (0: not)
+    sig_ready: float = 0.0               # and when it may use it again
 
 
 @dataclass
@@ -373,6 +392,8 @@ class Party:
         """One Trust sent away, or (None) all of them (pets: the pet too, silently: the engine says it)."""
         gone = [m for m in self.members if (name is None or m.trust["name"] == name) and (pets or not m.pet)]
         for m in gone:
+            if m.sig_on:                                      # its last stand's aura on you goes with it
+                self._sig_end(m, SIGNATURE[m.trust["name"]], getattr(self, "_engine", None), [], 0.0)
             self.members.remove(m)
             self.mem.set_companion(m.slot, False)
             if not m.pet:
@@ -471,6 +492,7 @@ class Party:
         m_hp, p_hp, shown = f["m"], f["p"], []
         target, foe, me = f["target"], f["foe"], f["me"]
         engine = f.get("e")                                   # the layer's: buffs, debuffs, skillchains
+        self._engine = engine
         lf = D.level_factor(self.level)
         for mb in self.members:
             if not mb.ready:
@@ -490,6 +512,9 @@ class Party:
                 if not want:
                     mb.casting = None
                     mb.tp = 0.0
+            sig = SIGNATURE.get(name)
+            if sig and mb.sig_on and sig["lasts"] and now >= mb.sig_on + sig["lasts"]:
+                self._sig_end(mb, sig, engine, shown, now)            # worn off
             # a spell going off
             if mb.casting and now >= mb.casting[1]:
                 spell, _, on_foe = mb.casting
@@ -526,6 +551,11 @@ class Party:
                         mb.pm.request(f"at{mb.swing_n % 3}")
                     shown.append(("strike", False))
                 continue
+            # its last stand, you being hard pressed (SIGNATURE)
+            if sig and mb.engaged and not mb.sig_on and now >= mb.sig_ready and p_hp is not None and f["p_max"] \
+                    and p_hp < f["p_max"] * sig["below"]:
+                self._sig_begin(mb, sig, engine, shown, now, me)
+                continue
             # a cure for you, when you're hurt (whether fighting or not)
             if p_hp is not None and f["p_max"]:
                 need = HEALERS.get(t["job"]) or HEALERS.get(t["sub"], 0.0) * 0.8
@@ -558,11 +588,16 @@ class Party:
             # a blow, in reach and in its time
             if now >= mb.next_swing and self.in_reach(mb, target):
                 mb.next_swing = now + max(2.0, t.get("delay", 4.0)) * random.uniform(0.95, 1.1)
-                if mb.tp >= 1000:
-                    # its own weapon skills (those that chain first), else its job's usual one
+                last_stand = bool(sig and mb.sig_on)
+                if mb.tp >= (sig.get("tp", 1000.0) if last_stand else 1000.0):
+                    # its own weapon skills (those that chain first), else its job's usual one; in its last stand,
+                    # the one that ends it (forced: that one; else it among the rest)
                     own = [s for s in t.get("skills", []) if s in D.WEAPON_SKILLS] or t.get("skills", [])
                     ws = random.choice(own) if own else WEAPON_SKILL.get(t["job"], "Savage Blade")
-                    dmg = int(f["avg_hit"] * 2.6 * max(0.4, t.get("damage", 1.0)) * random.uniform(0.85, 1.15))
+                    if last_stand and (sig.get("forced") or (sig["ends_with"] not in own and random.random() < 0.5)):
+                        ws = sig["ends_with"]
+                    dmg = int(f["avg_hit"] * 2.6 * max(0.4, t.get("damage", 1.0)) * random.uniform(0.85, 1.15)
+                              * (1.0 + 0.5 * (mb.tp - 1000.0) / 1000.0 if mb.tp > 1000.0 else 1.0))
                     mb.tp = 0.0
                     if engine is not None:
                         m_hp = engine.ws_by(name, ws, dmg, now, m_hp)        # its skillchains with yours
@@ -573,6 +608,8 @@ class Party:
                         mb.pm.request(f"at{mb.swing_n % 3}")
                     shown.append(("ws", ws, mb.slot))
                     shown.append(("strike", True))
+                    if last_stand and ws == sig["ends_with"]:
+                        self._sig_end(mb, sig, engine, shown, now)
                     continue
                 mb.swing_n += 1
                 if mb.pm:
@@ -590,6 +627,25 @@ class Party:
                 m_hp = max(f["floor"], m_hp - dmg)
                 shown.append(("strike", critical))
         return m_hp, p_hp, shown
+
+    def _sig_begin(self, mb: Member, sig: dict, engine, shown: list, now: float, me: str) -> None:
+        """Its last stand: said, its look on it (shown: the layer plays it), its aura on you."""
+        name = mb.trust["name"]
+        mb.sig_on, mb.sig_ready = now, now + SIGNATURE_RECAST
+        self.say(f"{name} uses {sig['ability']}.", "ws")
+        aura = sig.get("aura")
+        if aura and engine is not None:
+            engine.buffs[(sig["ability"], aura[0])] = {"power": aura[1], "until": now + (sig["lasts"] or 600.0)}
+            self.say(f"{me} gains the effect of {sig['ability']}.", "heal")
+        shown.append(("signature", True, mb.slot))
+
+    def _sig_end(self, mb: Member, sig: dict, engine, shown: list, now: float) -> None:
+        """Its last stand over (worn off, its weapon skill used, it gone): its look and its aura with it."""
+        mb.sig_on = 0.0
+        aura = sig.get("aura")
+        if aura and engine is not None and engine.buffs.pop((sig["ability"], aura[0]), None) is not None:
+            self.say(f"{engine.me}'s {sig['ability']} effect wears off.", "info")
+        shown.append(("signature", False, mb.slot))
 
     def _begin(self, mb: Member, spell: str, now: float, on_foe: bool, at: str) -> tuple:
         import ffxi_data as D

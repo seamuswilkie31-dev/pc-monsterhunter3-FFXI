@@ -509,6 +509,8 @@ class App:
                     self._fx_weapon_skill(what[1], actor)
             elif what[0] == "cast" and self.fx:
                 self._fx_trust_cast(what[2], what[1])
+            elif what[0] == "signature" and self.fx:                # a Trust's last stand: its look on or off
+                self._fx_signature(what[2], what[1])
             elif what[0] == "spell":
                 if self.fx:
                     self._fx_trust_cast(what[2], None)
@@ -1009,6 +1011,7 @@ class App:
         port telling where they are); stopped as it goes. (efon, not init, where there is one: init's test
         took the branch that puts them out.)"""
         import ffxi_fx as FX
+        import ffxi_trust as T
         lasting = fx.setdefault("lasting", {})
         out = {m.slot: m for m in (self.party.members if self.party else [])
                if m.ready and m.placed and m.slot in trusts and m.trust.get("file")}
@@ -1020,6 +1023,9 @@ class App:
         for slot, m in out.items():
             if slot in lasting:
                 continue
+            if m.trust["name"] in T.SIGNATURE:                     # its look comes with its last stand
+                lasting[slot] = (m, None)
+                continue
             play = None
             try:
                 f = fx["lib"].file(m.trust["file"])
@@ -1029,6 +1035,31 @@ class App:
             except Exception as ex:                                # noqa: BLE001  no effects; the Trust still out
                 print(f"ffxi: {m.trust['name']}'s own effects: {ex}")
             lasting[slot] = (m, play)
+
+    def _fx_signature(self, slot: int, on: bool) -> None:
+        """A Trust's last stand (ffxi_trust.SIGNATURE): its look played on it (August's wing of light, Teodor's
+        aura...), or ended, its file's efof (a fading) after it where it has one."""
+        import ffxi_fx as FX
+        import ffxi_trust as T
+        fx = self.fx
+        lasting = fx.setdefault("lasting", {})
+        member, play = lasting.get(slot, (None, None))
+        member = member or next((m for m in (self.party.members if self.party else []) if m.slot == slot), None)
+        actor = self._fx_trust_actor(slot)
+        if member is None or actor is None:
+            return
+        if play is not None:
+            fx["effects"].stop(play)
+            play = None
+        f = fx["lib"].file(member.trust["file"])
+        size = self._trust_effect_size(member.trust["name"])
+        if on:
+            look = T.SIGNATURE.get(member.trust["name"], {}).get("look")
+            if look and f.find(FX.ROUTINE, look):
+                play = fx["effects"].play(f, look, actor, size=size)
+        elif f.find(FX.ROUTINE, "efof"):
+            fx["effects"].play(f, "efof", actor, size=size)
+        lasting[slot] = (member, play)
 
     def _fx_hits(self, scene) -> None:
         """A blow of the hunter's taking HP off a monster (the port counts the game's): FFXI's spark for the

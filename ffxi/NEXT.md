@@ -21,6 +21,16 @@ as a video of FFXI: "leave it as its canon size"); the others built and run offl
   her; nothing in her skeleton, her orb joints (scale 0.8) or her info chunk accounts for it, so
   trust_effect_size = { "Shantotto II" = 2.0 } (Play.size, by eye); the rest as their files make them.
 - All 160 spells' effects still play (4 s each, offline), none failing.
+- Which last from the summoning and which are last stands (River's notes, from bg-wiki and ffxiclopedia): only
+  Shantotto II's orbs and Arciela's (and Arciela II's) crystals last from the coming. The rest are an ability
+  used when the Trust's HP falls low (ffxi_trust.SIGNATURE; here your HP's, the monsters striking only you), at
+  most every 3 minutes: Teodor's Start from Scratch (under 50%; ends as he uses Hemocladis, at 2000 TP), August's
+  Daybreak (under 66%; 90 s, or ends with No Quarter; physical damage taken -50% on you meanwhile), Mumor II's
+  Firesday Night Fever (under 50%; 4 minutes, or ends with Final Eternal Heart), Morimar's Vehement Resolution
+  (under 50%; ends with his next weapon skill, 12 Blades of Remorse). Its look (August's eff1, the others' efon)
+  plays as it's used and stops as it ends, the file's efof after it (App._fx_signature). Run offline through a
+  400 s fight: each began, ended as it should, and began again 3 minutes on. Not yet: Arciela's crystals shift
+  colour with her element in FFXI (her 1sta/2sta, 1ef0/2ef0 routines); here they keep the one init chose.
 
 **Targets, damage, defense, Trusts (2026-10-11/12)**: built; the lock-on, the damage and the defense checked in
 play ("it locks onto Barioth", "it hits harder", "the hits feel better"); the Trusts' fixes NOT YET.
