@@ -1,5 +1,16 @@
 # FFXI layer — next session
 
+**Breaststroke (2026-10-13)**: "instead of the characters doing a front crawl can you make them do a
+breaststroke? it looks goofy when they're doing a front crawl". Both swims are now one breaststroke
+(ffxi_model.swim_clips: breaststroke): the glide (hands together ahead, legs long), the hands sweeping out
+wide, then in and down under the chest with the elbows high as the head and shoulders rise to breathe
+(82 degrees flat rising 14), the hands together under the chin and shooting ahead as the heels, drawn up to
+the seat, kick out and round and snap together. "swim" (300 a second) lies flat, "swsl" (120) leans 45
+degrees into the same stroke, so the port going from one to the other (its stride kept) stays in step. A
+shield arm strokes as the other, its shield level beneath the forearm (below it in every frame, all races
+and the shield Trusts): a board under both hands in the glide. 110 of 117 models (the 7 without limbs keep
+the run laid flat). Not yet seen in play.
+
 **Swimming on Humes and the other races (2026-10-13)**: "it looks a bit funny on humes and id imagine it looks
 strange on the other races aswell". Rendered on the races' own meshes (flat-shaded, side, above, from behind as
 the camera sits, and head on): the crawl's arms swung far out and rolled about their length, and a shield on the
