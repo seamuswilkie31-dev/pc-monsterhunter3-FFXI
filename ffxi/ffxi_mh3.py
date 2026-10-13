@@ -992,6 +992,17 @@ class App:
         at = FX.from_mh(joints)
         return np.array([at[j] + actor.facing @ np.asarray(off) if j < len(at) else actor.pos for j, off in refs])
 
+    def _trust_effect_size(self, name: str) -> float:
+        """How much bigger than its file's numbers a Trust's own lasting effects are drawn (trust_effect_size: a
+        number for all, or a table by name). Shantotto II's orbs come out a 0.2 m glass ball, FFXI's about twice
+        that beside her (matched to a video of FFXI by eye); the others, with nothing to match, as their files
+        make them (Teodor's aura, August's wing of light, Morimar's and Mumor II's...)."""
+        v = self.cfg.get("trust_effect_size", {"Shantotto II": 2.0})
+        try:
+            return float(v.get(name, 1.0) if isinstance(v, dict) else v)
+        except (TypeError, ValueError):
+            return 1.0
+
     def _fx_lasting(self, fx: dict, effects, trusts: dict) -> None:
         """Each Trust's own lasting effects, as FFXI starts them as it appears: its file's efon (Shantotto II's
         orbs, Teodor's aura), else its init (Arciela's, August's flourish), on its joints while it's out (the
@@ -1014,9 +1025,7 @@ class App:
                 f = fx["lib"].file(m.trust["file"])
                 routine = next((r for r in ("efon", "init") if f.find(FX.ROUTINE, r)), None)
                 if routine:
-                    # drawn bigger than their files' numbers make them: Shantotto II's orbs come out a 0.2 m
-                    # glass ball, FFXI's about twice that beside her (matched to a video of FFXI by eye)
-                    play = effects.play(f, routine, trusts[slot], size=float(self.cfg.get("trust_effect_size", 2.0)))
+                    play = effects.play(f, routine, trusts[slot], size=self._trust_effect_size(m.trust["name"]))
             except Exception as ex:                                # noqa: BLE001  no effects; the Trust still out
                 print(f"ffxi: {m.trust['name']}'s own effects: {ex}")
             lasting[slot] = (m, play)

@@ -350,6 +350,7 @@ class Entry:
 
 
 SPAWN, STOP_GEN, BLOCK_OPEN, BLOCK_CLOSE, RANDOM_OPEN, RANDOM_CLOSE = 0x02, 0x1E, 0x69, 0x6A, 0x3D, 0x3E
+LOOP = 0x73                              # a routine played over and over (0x5F, before it, stops one: here a no-op)
 IF, ELSE, PUSH = 0x64, 0x67, 0x6B
 CALLS = {0x03, 0x09, 0x3B, 0x3C, 0x57}
 HOLDS = {0x3B, 0x3C}                     # the rest of the routine waits for theirs
@@ -433,6 +434,15 @@ class Spawn:
 class Stop:
     tick: float
     gen: str
+
+
+@dataclass
+class Loop:
+    """A routine played over and over from this tick (its 0x73), until the play is stopped: a Trust's lasting
+    effect made of passing ones (Morimar's lop0 every 2 s, Mumor II's every 1 s)."""
+    tick: float
+    file: EffectFile
+    routine: str
 
 
 class Library:
@@ -526,6 +536,8 @@ class Library:
                         out.append(Spawn(t, f, d, e.ref, e.dur))
                     elif e.op == STOP_GEN and e.ref:
                         out.append(Stop(t, e.ref))
+                    elif e.op == LOOP and e.ref:
+                        out.append(Loop(t, f, e.ref))
                     elif e.op in CALLS and e.ref:
                         sub, ticks = self.schedule(f, e.ref, e.op, t, depth + 1, regs)
                         out.extend(sub)
@@ -1165,6 +1177,15 @@ class Effects:
         for pl in self.plays:
             while pl.pending and pl.pending[0].tick <= self.clock - pl.started:
                 e = pl.pending.pop(0)
+                if isinstance(e, Loop):
+                    # this round of it, from now; and the next round when this one has run its length
+                    events, length = self.lib.schedule(e.file, e.routine)
+                    now = self.clock - pl.started
+                    for x in events:
+                        x.tick += now
+                    nxt = [Loop(now + max(1.0, length), e.file, e.routine)] if events else []
+                    pl.pending = sorted(pl.pending + events + nxt, key=lambda x: x.tick)
+                    continue
                 if isinstance(e, Spawn):
                     r = e.file.find(GEN, e.gen, e.dir) or self.lib.shared.find(GEN, e.gen)
                     owner = e.file if e.file.find(GEN, e.gen, e.dir) else self.lib.shared

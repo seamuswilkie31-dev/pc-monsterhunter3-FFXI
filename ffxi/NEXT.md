@@ -1,5 +1,27 @@
 # FFXI layer — next session
 
+**Trusts' own lasting effects (2026-10-12)**: Shantotto II's orbs checked in play (circling, gliding, the size
+as a video of FFXI: "leave it as its canon size"); the others built and run offline, NOT YET seen in play.
+- FFXI runs a model's init as it appears; for these it comes to effects that last while the Trust is out.
+  Of 109 Trust models, seven: Shantotto II (efon: six orbs and their glass, g1?1/t1?1), Teodor (efon: a
+  crimson aura), Arciela and Arciela II (init: crystals at her hands), August (init: a flourish, then eff1
+  looping, a wing of light), Mumor II and Morimar (efon: lop0 looping, an aura). The layer plays each one's
+  efon, else its init, as it comes out and stops it as it goes (App._fx_lasting). (Shantotto II's init took
+  the branch that puts them out: efon first.)
+- A generator's joint number is one of the skeleton's points (its references after the joints, 26 bytes:
+  u16 joint, six floats, the last three an offset): Shantotto II's points 28-33 are joints 102-107, which
+  her idl1 turns about her (her joints 28-33 are her head's). ffxi_model.skeleton_points; the port writes
+  each joint's place into a companion's model block (ModelBlock joints_out, version 8); Actor.points.
+- A particle kept its generator's place from its birth: an orb (a particle every 20 ticks living 40) jumped
+  round, flashing. A generator on a moving point of the caster (attach 1/3/5/9, a joint) that follows now
+  carries its particles along; those at the caster's feet stay as the spells were checked.
+- Looping routines (0x73: Morimar's and Mumor II's lop0, August's eff1): ffxi_fx.Loop, played round after
+  round until the play is stopped. (0x5F, stopping one, and a routine's 0x2D are still no-ops.)
+- Sizes: Shantotto II's orbs come out a 0.2 m glass ball by her file's numbers, FFXI's twice that beside
+  her; nothing in her skeleton, her orb joints (scale 0.8) or her info chunk accounts for it, so
+  trust_effect_size = { "Shantotto II" = 2.0 } (Play.size, by eye); the rest as their files make them.
+- All 160 spells' effects still play (4 s each, offline), none failing.
+
 **Targets, damage, defense, Trusts (2026-10-11/12)**: built; the lock-on, the damage and the defense checked in
 play ("it locks onto Barioth", "it hits harder", "the hits feel better"); the Trusts' fixes NOT YET.
 - Every monster a target: each frame from the game's own table (ENEMY_WORK, 0xB18 each, at
