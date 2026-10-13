@@ -949,6 +949,9 @@ class App:
                         trusts[m.slot].pos, trusts[m.slot].facing, trusts[m.slot].height = a.pos, a.facing, a.height
                     else:
                         trusts[m.slot] = a
+                    joints = m.pm.joints() if m.pm is not None else None   # its joints as the port posed them
+                    trusts[m.slot].joints = FX.from_mh(joints) if joints is not None and len(joints) else None
+            self._fx_lasting(fx, effects, trusts)
             t = scene["target"]
             fx["has_target"] = t is not None
             if t is not None:
@@ -970,6 +973,33 @@ class App:
             port.send(np.zeros((0, 10), np.float32), [0] * 5)
             fx["drawn"] = False
         port.keep_alive()
+
+    def _fx_lasting(self, fx: dict, effects, trusts: dict) -> None:
+        """Each Trust's own lasting effects, as FFXI starts them as it appears: its file's efon (Shantotto II's
+        orbs, Teodor's aura), else its init (Arciela's, August's flourish), on its joints while it's out (the
+        port telling where they are); stopped as it goes. (efon, not init, where there is one: init's test
+        took the branch that puts them out.)"""
+        import ffxi_fx as FX
+        lasting = fx.setdefault("lasting", {})
+        out = {m.slot: m for m in (self.party.members if self.party else [])
+               if m.ready and m.placed and m.slot in trusts and m.trust.get("file")}
+        for slot, (member, play) in list(lasting.items()):
+            if out.get(slot) is not member:
+                if play is not None:
+                    effects.stop(play)
+                del lasting[slot]
+        for slot, m in out.items():
+            if slot in lasting:
+                continue
+            play = None
+            try:
+                f = fx["lib"].file(m.trust["file"])
+                routine = next((r for r in ("efon", "init") if f.find(FX.ROUTINE, r)), None)
+                if routine:
+                    play = effects.play(f, routine, trusts[slot])
+            except Exception as ex:                                # noqa: BLE001  no effects; the Trust still out
+                print(f"ffxi: {m.trust['name']}'s own effects: {ex}")
+            lasting[slot] = (m, play)
 
     def _fx_hits(self, scene) -> None:
         """A blow of the hunter's taking HP off a monster (the port counts the game's): FFXI's spark for the
