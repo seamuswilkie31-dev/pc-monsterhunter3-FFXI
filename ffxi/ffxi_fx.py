@@ -695,6 +695,8 @@ class Actor:
     height: float = 1.8
     points: np.ndarray | None = None     # each of its skeleton's points (FFXI's space), when the port tells where its
                                          # joints are: a generator's joint number is one of these (skeleton_points)
+    point_rots: np.ndarray | None = None # and how each is turned (its joint's axes, n x 3 x 3): what is on one is
+                                         # set out along them (August's wing of light, 0.3 behind his spine)
 
 
 class Transform:                         # a slot's velocity, as the engine keeps it
@@ -781,12 +783,16 @@ class Generator:
         if a is None:
             return
         joint = self.d.joint1 if self.d.attach in (2, 4, 6) else self.d.joint0
+        self.assoc_rot = np.eye(4)
         if joint and a.points is not None and joint < len(a.points) and a.points[joint].any():
-            self.assoc_pos = a.points[joint].copy()                # on that point of its skeleton, where it is now
+            self.assoc_pos = a.points[joint].copy()                # on that point of its skeleton, where it is now;
+            # attach 9 turned as that point is (August's wing of light, set 0.3 behind his spine), attach 1 as the
+            # actor faces (Teodor's aura rising from below his chest: along his spine's axes it stood behind him)
+            self.assoc_rot[:3, :3] = a.point_rots[joint] if self.d.attach == 9 and a.point_rots is not None \
+                else a.facing
         else:
             self.assoc_pos = a.pos + (np.array([0.0, -0.5 * a.height, 0.0]) if joint else 0.0)
-        self.assoc_rot = np.eye(4)
-        self.assoc_rot[:3, :3] = a.facing
+            self.assoc_rot[:3, :3] = a.facing
         self._frozen = True
 
     def done_emitting(self) -> bool:

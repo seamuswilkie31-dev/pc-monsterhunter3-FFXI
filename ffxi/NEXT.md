@@ -31,6 +31,13 @@ as a video of FFXI: "leave it as its canon size"); the others built and run offl
   plays as it's used and stops as it ends, the file's efof after it (App._fx_signature). Run offline through a
   400 s fight: each began, ended as it should, and began again 3 minutes on. Not yet: Arciela's crystals shift
   colour with her element in FFXI (her 1sta/2sta, 1ef0/2ef0 routines); here they keep the one init chose.
+- August's wing of light stood at his hips: its generators (attach 9) are on point 7 (joint 50, his upper back)
+  and set their base, 0.3 along Y, along that joint's own axes, behind his spine; along FFXI's world Y (down)
+  it fell to his hips. The port now writes each joint's whole 3x4 (ModelBlock joints_out, version 9),
+  App._trust_points turns each point's offset by its joint's axes and gives its turn (Actor.point_rots, the
+  model's Z-flip taken across as a proper rotation), and a generator with attach 9 is set out along it.
+  Attach 1 (every other Trust's: Teodor's aura, with its base 1.0 along Y, rises from below his chest) stays
+  turned as the actor faces. Offline: the wing's base 25 behind him at 120 of his 157.
 
 **Targets, damage, defense, Trusts (2026-10-11/12)**: built; the lock-on, the damage and the defense checked in
 play ("it locks onto Barioth", "it hits harder", "the hits feel better"); the Trusts' fixes NOT YET.

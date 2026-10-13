@@ -1,7 +1,7 @@
 """FFXI's character in your hunter's place: the model handed to the port, which draws it in the scene.
 
 The port (MH3_FFXI=1) maps a shared block, "mh3-ffxi-model" (tools/ffxi_bridge.cpp, struct ModelBlock),
-version 8: the model's triangle corners on its joints, with their normals (ffxi_model.pack), the joints' parents, its place
+version 9: the model's triangle corners on its joints, with their normals (ffxi_model.pack), the joints' parents, its place
 in the hunter's space, its motions (each standing, moving or an action, of the peace set or the battle
 set, with the ground speed a moving one was made for and its name's first four letters), its textures as
 256x256 layers, and flags: draw it, hide Monster Hunter's hunter. The port poses it every frame: the
@@ -18,7 +18,7 @@ import struct
 import numpy as np
 
 TAG = "mh3-ffxi-model"
-MAGIC, VERSION = 0x4D48334D, 8  # 'MH3M'
+MAGIC, VERSION = 0x4D48334D, 9  # 'MH3M'
 MAX_VERTS, VERT_FLOATS, MAX_LAYERS, TEX = 100000, 20, 16, 256    # VERT_FLOATS: ffxi_model.VERT_FLOATS
 MAX_JOINTS, MAX_CLIPS, POOL = 128, 96, 1 << 22
 NONE = 0xFFFFFFFF
@@ -34,8 +34,8 @@ CLIPS_AT = PARENTS_AT + MAX_JOINTS * 4
 VERTS_AT = CLIPS_AT + MAX_CLIPS * CLIP.size
 POOL_AT = VERTS_AT + MAX_VERTS * VERT_FLOATS * 4
 TEX_AT = POOL_AT + POOL * 4
-JOINTS_AT = TEX_AT + MAX_LAYERS * TEX * TEX * 4           # the port's: each joint's place in the world now
-SIZE = JOINTS_AT + MAX_JOINTS * 3 * 4
+JOINTS_AT = TEX_AT + MAX_LAYERS * TEX * TEX * 4           # the port's: each joint's 3x4 in the world now
+SIZE = JOINTS_AT + MAX_JOINTS * 12 * 4
 DRAW, HIDE_HUNTER, AURA = 1, 2, 4      # AURA: a GM's, faint copies of it swaying about it
 
 
@@ -65,10 +65,10 @@ class PortModel:
         return self._get(0) == MAGIC and self._get(1) == VERSION
 
     def joints(self) -> np.ndarray:
-        """Each joint's place in the world now, in the game's units (n x 3), as the port posed it (a companion's;
-        zeros until it is drawn)."""
+        """Each joint as the port posed it, in the world now (n x 3 x 4: its axes, scaled, and its place, in the
+        game's units; a companion's, zeros until it is drawn)."""
         n = min(self._get(9), MAX_JOINTS)
-        return np.frombuffer(self.mm, np.float32, n * 3, JOINTS_AT).reshape(n, 3).astype(np.float64)
+        return np.frombuffer(self.mm, np.float32, n * 12, JOINTS_AT).reshape(n, 3, 4).astype(np.float64)
 
     def send(self, packed: dict) -> None:
         """ffxi_model.pack's model, written whole; the serial last, which the port reads after."""

@@ -1514,7 +1514,7 @@ void hook_cam_posture(PPCContext& c) {
 // set or, while the hunter's weapon is out, the battle set; and actions over them, on the layer's
 // request (a spell's casting) or the hunter's (Monster Hunter's attacks: hunter_motion).
 // ================================================================================================
-constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 8;     // 'MH3M'
+constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 9;     // 'MH3M'
 constexpr int kModelMaxVerts = 100000, kModelVertFloats = 20, kModelMaxLayers = 16, kModelTex = 256;
 constexpr int kModelMaxJoints = 128, kModelMaxClips = 96, kModelPool = 1 << 22, kXf = 10;
 enum : uint32_t { kStand = 0, kMove = 1, kAction = 2 };
@@ -1557,10 +1557,11 @@ struct ModelBlock {
     float verts[kModelMaxVerts * kModelVertFloats];       // video_model_mesh's corners
     float pool[kModelPool];
     uint8_t tex[kModelMaxLayers * kModelTex * kModelTex * 4];
-    float joints_out[kModelMaxJoints * 3];                // the port's: each joint's place in the world now, in the
-                                                          // game's units (a companion's: its effects on its joints)
+    float joints_out[kModelMaxJoints * 12];               // the port's: each joint's 3x4 in the world now (its axes,
+                                                          // scaled, and its place, in the game's units): a companion's,
+                                                          // for its effects on its joints, turned as they are
 };
-static_assert(sizeof(ModelBlock) == 28976784, "ffxi/port_model.py mirrors this layout");
+static_assert(sizeof(ModelBlock) == 28981392, "ffxi/port_model.py mirrors this layout");
 
 // The character's motions, copied from the block when it changes. Moving: under 15 units a second (30
 // to start) the set's standing one; moving, the one made for the nearest speed, played that much faster
@@ -2140,11 +2141,8 @@ void companions_frame(float dt, uint32_t pl, uint32_t cam, bool scene) {
         const float w[12] = {cy, 0, sy, c.x, 0, 1, 0, c.y, -sy, 0, cy, c.z};
         float wp[12], view[12];
         mul34(w, c.anim.place, wp);                            // the model's space to its place, to the world's
-        for (int j = 0; j < c.anim.nj && j < kModelMaxJoints; ++j) {   // where each joint is, for its effects
-            const float* r = &c.anim.rows[(size_t)j * 12];
-            for (int k = 0; k < 3; ++k)
-                mb->joints_out[j * 3 + k] = wp[k * 4] * r[3] + wp[k * 4 + 1] * r[7] + wp[k * 4 + 2] * r[11] + wp[k * 4 + 3];
-        }
+        for (int j = 0; j < c.anim.nj && j < kModelMaxJoints; ++j)    // each joint as it is, for its effects
+            mul34(wp, &c.anim.rows[(size_t)j * 12], &mb->joints_out[j * 12]);
         mul34(camera, wp, view);                               // then the camera's
         video_model_frame(view, proj, true, c.anim.rows.data(), c.anim.nj, camera, s);
         video_model_shadow(a.shadow_radius, a.shadow_dark, c.anim.place[7], s);

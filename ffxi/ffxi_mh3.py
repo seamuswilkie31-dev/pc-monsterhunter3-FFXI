@@ -951,7 +951,7 @@ class App:
                         trusts[m.slot].pos, trusts[m.slot].facing, trusts[m.slot].height = a.pos, a.facing, a.height
                     else:
                         trusts[m.slot] = a
-                    trusts[m.slot].points = self._trust_points(m, trusts[m.slot])
+                    trusts[m.slot].points, trusts[m.slot].point_rots = self._trust_points(m, trusts[m.slot])
             self._fx_lasting(fx, effects, trusts)
             t = scene["target"]
             fx["has_target"] = t is not None
@@ -977,22 +977,37 @@ class App:
 
     def _trust_points(self, m, actor):
         """A Trust's skeleton's points (ffxi_model.skeleton_points: what its effects' generators are on) where they
-        are now: each on its joint as the port posed it, its offset turned as the Trust faces (FFXI's space)."""
+        are now, and how each is turned (FFXI's space): each on its joint as the port posed it, its offset along
+        the joint's own axes. (Turned as the Trust faces, August's wing of light, 0.3 behind his spine along
+        them, fell to his hips.) None, None until the port has posed it."""
         import numpy as np
         import ffxi_fx as FX
         import ffxi_model as FM
         joints = m.pm.joints() if m.pm is not None else None
-        if joints is None or not len(joints):
-            return None
+        if joints is None or not len(joints) or not joints[:, :, 3].any():
+            return None, None
         cache = self.fx.setdefault("points", {})
         path = m.trust.get("file")
         if path not in cache:
             cache[path] = FM.skeleton_points(path) if path else []
         refs = cache[path]
         if not refs:
-            return None
-        at = FX.from_mh(joints)
-        return np.array([at[j] + actor.facing @ np.asarray(off) if j < len(at) else actor.pos for j, off in refs])
+            return None, None
+        at = FX.from_mh(joints[:, :, 3])
+        axes = np.einsum("ij,njk->nik", FX.AXES.T, joints[:, :, :3]) / FX.SCALE   # the joints' axes in FFXI's space
+        # turned, not reflected: the effects' space is the model's with Z the other way (FX.AXES against the
+        # model's own), so a joint's turn is taken across that as a proper rotation
+        flip = np.diag([1.0, 1.0, -1.0])
+        pts, rots = [], []
+        for j, off in refs:
+            if j < len(at):
+                pts.append(at[j] + axes[j] @ np.asarray(off, np.float64))
+                r = axes[j] / np.maximum(np.linalg.norm(axes[j], axis=0, keepdims=True), 1e-9)
+                rots.append(r @ flip)
+            else:
+                pts.append(actor.pos)
+                rots.append(actor.facing)
+        return np.array(pts), np.array(rots)
 
     def _trust_effect_size(self, name: str) -> float:
         """How much bigger than its file's numbers a Trust's own lasting effects are drawn (trust_effect_size: a
