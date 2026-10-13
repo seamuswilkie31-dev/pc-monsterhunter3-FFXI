@@ -1148,10 +1148,6 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
             out[f, flip, :4] *= -1
         return out
 
-    # The strokes go as FFXI's people move, smooth and unhurried (2026-10-13: a windmill crawl at an even pace
-    # looked "goofy and cartoony"): each hand and foot follows a smooth closed path (periodic Catmull-Rom through
-    # a few places), and its shoulder and elbow, hip and knee turn to reach it (two-bone IK, the elbow and the knee
-    # bending toward a pole), from the neutral pose.
     q_n = base[:, :4] / np.maximum(np.linalg.norm(base[:, :4], axis=1, keepdims=True), 1e-9)
     at_n = np.array([mm[:3, 3] for mm in pose_world(joints, q_n, base[:, 4:7], base[:, 7:10])])
 
@@ -1184,67 +1180,67 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         want[top] = q_top
         want[mid] = _arc(quat_matrix(q_top) @ (w0 - e0), s0 + way * d - elbow)
 
-    # the upright frame's ways: the swimmer's forward (its head) -Y, down to the sea floor +X (its front), out Z
-    def arm_goal(f_: float, o_: float, b_: float, side: float, length: float) -> np.ndarray:
-        return length * np.array([b_, -f_, o_ * side])
+    # The strokes as Monster Hunter's hunter swims in Tri and 3 Ultimate (2026-10-13, a video of its underwater
+    # fighting: upright in the water, leaning into the way it goes, its legs kicking below, never lying flat),
+    # moving as FFXI's people do, smooth and unhurried, nothing locked straight. Each hand and foot follows a
+    # smooth closed path (periodic Catmull-Rom through a few places) and its shoulder and elbow, hip and knee
+    # turn to reach it (two-bone IK from the neutral pose). The places are in the upright frame, as fractions
+    # of the limb's length from the shoulder or the hip: (ahead +X, down +Y, out).
+    neck = _neck(joints, at_n, limbs)
 
-    def leg_goal(back: float, o_: float, b_: float, side: float, length: float) -> np.ndarray:
-        return length * np.array([b_, back, o_ * side])
+    def goal(ahead: float, down: float, out: float, side: float, length: float) -> np.ndarray:
+        return length * np.array([ahead, down, out * side])
 
-    # the breaststroke: 67 frames a stroke (2.2 s at its pace). The hands: gliding ahead together, sweeping out,
-    # drawn down and back under the chest, then shot ahead again; the feet: together through the pull, the heels
-    # drawn up, kicked out and round, snapped together as the hands go ahead.
-    n = 67
-    hands = [(0.00, (0.95, 0.10, 0.18)), (0.18, (0.82, 0.48, 0.22)), (0.38, (0.32, 0.50, 0.48)),
-             (0.52, (0.16, 0.13, 0.38)), (0.68, (0.62, 0.08, 0.26)), (0.84, (0.95, 0.09, 0.17))]
-    feet = [(0.00, (0.97, 0.06, 0.04)), (0.40, (0.97, 0.06, 0.04)), (0.56, (0.58, 0.28, -0.32)),
-            (0.71, (0.86, 0.42, -0.04)), (0.84, (0.97, 0.07, 0.04))]
+    def arm_len(sh: int, el: int, wr: int) -> float:
+        return float(np.linalg.norm(at_n[el] - at_n[sh]) + np.linalg.norm(at_n[wr] - at_n[el]))
 
-    def breast(f: int) -> dict:
+    # swimming: 61 frames a stroke (2 s at its pace), leaning 35 degrees into it. The hands reach ahead, sweep out
+    # and round, draw back past the hips and come in close to the chest to reach ahead again; the legs a steady
+    # scissor kick, two beats a stroke, the knees soft.
+    n = 61
+    hands = [(0.00, (0.72, 0.32, 0.10)), (0.24, (0.52, 0.42, 0.42)), (0.48, (0.16, 0.66, 0.32)),
+             (0.68, (0.30, 0.38, 0.12)), (0.86, (0.66, 0.30, 0.09))]
+
+    def swim(f: int) -> dict:
         u = f / (n - 1)
         want = {}
-        for shoulder, elbow, side, wrist in limbs["arms"]:
-            length = np.linalg.norm(at_n[elbow] - at_n[shoulder]) + np.linalg.norm(at_n[wrist] - at_n[elbow])
+        for sh, el, side, wr in limbs["arms"]:
             a, b, c = path(hands, u)
-            reach(want, shoulder, elbow, wrist, arm_goal(a, b, c, side, length),
-                  arm_goal(-0.2, 1.0, -0.4, side, 1.0))                # the elbows out and a little up
-        for hip, knee, side, ankle in limbs["legs"]:
-            length = np.linalg.norm(at_n[knee] - at_n[hip]) + np.linalg.norm(at_n[ankle] - at_n[knee])
-            a, b, c = path(feet, u)
-            reach(want, hip, knee, ankle, leg_goal(a, b, c, side, length),
-                  leg_goal(0.0, 0.7, 0.7, side, 1.0))                  # the knees out and down
+            reach(want, sh, el, wr, goal(a, b, c, side, arm_len(sh, el, wr)), np.array([-0.5, 0.2, 1.0 * side]))
+        for k, (hp, kn, side, an) in enumerate(limbs["legs"]):
+            w = 2 * 2 * np.pi * u + np.pi * k
+            reach(want, hp, kn, an, goal(0.02 + 0.16 * np.sin(w), 0.93 - 0.03 * (1 - np.cos(w)), 0.08, side,
+                                         arm_len(hp, kn, an)), np.array([1.0, 0.0, 0.2 * side]))   # the knees ahead
+        for j, share in neck:                                          # looking where it goes
+            want[j] = rot("z", -14.0 * share)
         return want
 
-    pitch_wave = [pitch - 8.0 + 6.0 * np.cos(2 * np.pi * (f / (n - 1) - 0.42)) for f in range(n)]   # rising to breathe
+    lean = [35.0 + 3.0 * np.cos(2 * np.pi * f / (n - 1)) for f in range(n)]
     clips.append({"name": "swim", "frames": n, "rate": 1.0, "kind": MOVE, "set": SWIM,
-                  "data": lay(frames(n, breast), pitch_wave, 0.0), "speed": 250.0})
+                  "data": lay(frames(n, swim), lean, hips[1] + 0.6 * height), "speed": 250.0})
 
-    # treading water: 61 frames (2 s). The hands scull in small loops at the waist, the elbows soft; the legs pedal
-    # slowly and little, one after the other.
+    # treading water: 61 frames (2 s), upright: the hands sculling in small loops at the waist, the elbows soft;
+    # the legs a slow scissor kick, small.
     m = 61
 
     def tread(f: int) -> dict:
         u = 2 * np.pi * f / (m - 1)
         want = {}
-        for k, (shoulder, elbow, side, wrist) in enumerate(limbs["arms"]):
-            length = np.linalg.norm(at_n[elbow] - at_n[shoulder]) + np.linalg.norm(at_n[wrist] - at_n[elbow])
-            fwd = 0.34 + 0.10 * np.sin(u)                              # (the upright frame: down +Y, front +X)
-            out = 0.40 + 0.07 * np.sin(2 * u)
-            goal = length * np.array([fwd, 0.70, out * side])
-            reach(want, shoulder, elbow, wrist, goal, np.array([-0.6, 0.2, 0.8 * side]))   # the elbows back, out
-        for k, (hip, knee, side, ankle) in enumerate(limbs["legs"]):
-            length = np.linalg.norm(at_n[knee] - at_n[hip]) + np.linalg.norm(at_n[ankle] - at_n[knee])
+        for sh, el, side, wr in limbs["arms"]:
+            reach(want, sh, el, wr, goal(0.32 + 0.07 * np.sin(u), 0.74, 0.36 + 0.05 * np.sin(2 * u), side,
+                                         arm_len(sh, el, wr)), np.array([-0.6, 0.2, 0.8 * side]))   # elbows back, out
+        for k, (hp, kn, side, an) in enumerate(limbs["legs"]):
             w = u + np.pi * k
-            goal = length * np.array([0.10 + 0.09 * np.sin(w), 0.90 - 0.05 * (1 + np.cos(w)), 0.10 * side])
-            reach(want, hip, knee, ankle, goal, np.array([1.0, 0.0, 0.25 * side]))       # the knees ahead
+            reach(want, hp, kn, an, goal(0.03 + 0.10 * np.sin(w), 0.93 - 0.02 * (1 - np.cos(w)), 0.09, side,
+                                         arm_len(hp, kn, an)), np.array([1.0, 0.0, 0.25 * side]))
         return want
 
     clips.append({"name": "swid", "frames": m, "rate": 1.0, "kind": STAND, "set": SWIM,
-                  "data": lay(frames(m, tread), 6.0, hips[1] + 0.75 * height, bob=0.015), "speed": 0.0})
+                  "data": lay(frames(m, tread), 4.0, hips[1] + 0.75 * height, bob=0.015), "speed": 0.0})
 
     # its swings in the water (2026-10-13: attacking while swimming, it stood up to swing): each "at0".."at2" a
     # twin "~at0".. the port plays in its place while the hunter is in the water: the swing's upper body as on
-    # land, the body leaning forward 30 degrees about its hips at its feet's height, the legs left to the
+    # land, upright in the water as Monster Hunter's hunter fights there (leaning 10 degrees), the legs left to the
     # stroke or the treading beneath (not driven). The port's clips are 96 at most.
     legs = set()
     for hip, _knee, _side, _ankle in limbs["legs"]:
@@ -1256,10 +1252,32 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
     for c in [c for c in clips if c["kind"] == ACTION and c["name"] in ("at0", "at1", "at2")]:
         if len(clips) >= 96:
             break
-        data = lay(np.array(c["data"], np.float32), 30.0, 0.0)
+        data = lay(np.array(c["data"], np.float32), 10.0, hips[1] + 0.75 * height)   # upright, as the tread
         data[:, sorted(legs)] = np.nan
         clips.append({"name": "~" + c["name"], "frames": c["frames"], "rate": c["rate"], "kind": ACTION,
                       "set": c["set"], "data": data, "speed": 0.0})
+
+
+def _neck(joints: list[dict], at: np.ndarray, limbs: dict) -> list[tuple[int, float]]:
+    """The joints from the chest up to the head (the chain to its top, under the chest where the arms meet), with
+    each one's share of a nod: a swimmer lying flat lifts its head with its whole neck, not one joint."""
+    def chain(j: int) -> list[int]:
+        out = []
+        while 0 <= j < len(joints) and len(out) < 64:
+            out.append(j)
+            j = joints[j]["parent"]
+        return out
+    shoulders = [sh for sh, _el, _s, _w in limbs["arms"]]
+    arms = [set(chain(sh)) for sh in shoulders]
+    chest = next((j for j in chain(shoulders[0]) if j in arms[1]), None)
+    if chest is None:
+        return []
+    top = min(range(len(joints)), key=lambda j: at[j, 1])               # the head's top (Y down)
+    c = chain(top)
+    if chest not in c:
+        return []
+    up = [j for j in c[1:c.index(chest)] if not any(j in a for a in arms)][::-1][:3]   # the neck, then the head
+    return [(j, 1.0 / len(up)) for j in up] if up else []
 
 
 def _qinv(q: np.ndarray) -> np.ndarray:

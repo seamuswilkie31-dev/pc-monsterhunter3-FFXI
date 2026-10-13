@@ -7,7 +7,12 @@ shoulder and elbow, hip and knee turned to reach it (two-bone IK from the neutra
 knees out and down): the hands glide ahead together, sweep out, draw under the chest, shoot ahead; the
 heels draw up, kick out and round, snap together as the hands go ahead; the body rising a little to
 breathe. Treading water: the hands sculling in small loops at the waist, the legs pedalling slowly, little.
-The remade strokes NOT YET seen in play. Before: The swim set was the run
+Seen in play ("looks better... a little more ergonomic", and a video of Monster Hunter 3 Ultimate's underwater
+fighting: "like this"), so remade again in Monster Hunter's manner: upright in the water, never flat. Swimming
+(2 s a stroke) leans 35 degrees into it, the hands reaching ahead, sweeping round and drawing in close to the
+chest, the legs a steady scissor kick, the knees soft, the head up (_neck: the neck and head share a nod);
+treading water upright, a slow small scissor kick, the hands sculling at the waist; the swings in the water
+upright too (10 degrees), sunk as the tread. NOT YET seen in play. Before: The swim set was the run
 laid flat ("we still need the swimming animations"). FFXI has no swimming, so the strokes are made on each
 skeleton's own limbs (ffxi_model._limbs: the feet its points 8/9, the wrists 10/11, else the hands 126/127,
 else found by shape: the pelvis the deepest joint with two long chains to the ground, the wrists by their
