@@ -1165,9 +1165,15 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t
                       + (3 * p1 - p0 - 3 * p2 + p3) * t ** 3)
 
+    arm_tops = {sh for sh, _el, _s, _w in limbs["arms"]}
+
     def reach(want: dict, top: int, mid: int, end: int, goal: np.ndarray, pole: np.ndarray) -> None:
         """Turns for top and mid (into want) so end, below them, comes to top's place + goal (the model's space),
-        mid bending toward pole."""
+        mid pointing toward pole. The elbow and the knee are hinges (2026-10-13: turned the shortest way, the arm
+        rolled about its length as it pleased, a shield on its forearm standing up like a fin): top is turned so
+        its bone points to mid's place AND its hinge lies across the bend (the neutral pose's hinge: an arm
+        flexing forward, a leg backward), then mid bends about that hinge alone; what hangs below keeps its
+        line, nothing twisted."""
         s0, e0, w0 = at_n[top], at_n[mid], at_n[end]
         l1, l2 = np.linalg.norm(e0 - s0), np.linalg.norm(w0 - e0)
         d = float(np.clip(np.linalg.norm(goal), 0.05 * (l1 + l2), 0.995 * (l1 + l2)))
@@ -1176,9 +1182,22 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         side_ /= max(np.linalg.norm(side_), 1e-9)
         cos_a = np.clip((l1 * l1 + d * d - l2 * l2) / (2 * l1 * d), -1.0, 1.0)
         elbow = s0 + l1 * (cos_a * way + np.sqrt(1 - cos_a * cos_a) * side_)
-        q_top = _arc(e0 - s0, elbow - s0)
-        want[top] = q_top
-        want[mid] = _arc(quat_matrix(q_top) @ (w0 - e0), s0 + way * d - elbow)
+        u = (elbow - s0) / max(np.linalg.norm(elbow - s0), 1e-9)
+        v = s0 + way * d - elbow
+        v /= max(np.linalg.norm(v), 1e-9)
+        bend = v - np.dot(v, u) * u                                   # where the lower bone turns, across the upper
+        if np.linalg.norm(bend) < 1e-4:
+            bend = -side_                                              # (straight: away from where it points)
+        bend /= np.linalg.norm(bend)
+        hinge = np.cross(u, bend)
+        hinge /= max(np.linalg.norm(hinge), 1e-9)
+        u0 = (e0 - s0) / max(np.linalg.norm(e0 - s0), 1e-9)            # (the neutral pose: hanging down)
+        flex0 = np.array([1.0, 0.0, 0.0]) if top in arm_tops else np.array([-1.0, 0.0, 0.0])
+        hinge0 = np.cross(u0, flex0)
+        hinge0 /= max(np.linalg.norm(hinge0), 1e-9)
+        want[top] = _align(u0, hinge0, u, hinge)
+        angle = np.arccos(np.clip(np.dot(u, v), -1.0, 1.0)) / 2
+        want[mid] = np.array([*(hinge * np.sin(angle)), np.cos(angle)])
 
     # The strokes as Monster Hunter's hunter swims in Tri and 3 Ultimate (2026-10-13, a video of its underwater
     # fighting: upright in the water, leaning into the way it goes, its legs kicking below, never lying flat),
@@ -1206,10 +1225,13 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         return length * np.array([below, back, out * side])
 
     nf = 55
-    # (2026-10-13: "his arms are rolling into a ball": the hand never nearer the shoulder than 0.77 of the arm,
-    # so the arm stays long; the reach a little out, to show beside a Tarutaru's head; the recovery wide)
-    crawl_hand = [(0.00, (0.95, 0.20, 0.08)), (0.18, (0.78, 0.26, 0.45)), (0.38, (0.30, 0.30, 0.78)),
-                  (0.54, (-0.62, 0.28, 0.40)), (0.68, (-0.55, 0.45, -0.30)), (0.84, (0.40, 0.55, -0.50))]
+    # (2026-10-13: "his arms are rolling into a ball": the arm kept long, the hand at least 0.7 of it from the
+    # shoulder; then "a bit funny on Humes": swung wide it flailed, the shield on its forearm flapping like a fin,
+    # and the pull hung straight down. So the arm stays long but in the body's line, as the hunter's: reaching
+    # straight ahead, pulled under the chest and back along the body to the hip, brought up and over the back
+    # with the elbow high, never far out to the side)
+    crawl_hand = [(0.00, (0.95, 0.15, 0.10)), (0.18, (0.80, 0.20, 0.42)), (0.36, (0.30, 0.24, 0.66)),
+                  (0.52, (-0.62, 0.24, 0.36)), (0.66, (-0.62, 0.26, -0.20)), (0.82, (0.20, 0.30, -0.62))]
 
     def crawl(f: int) -> dict:
         u = f / (nf - 1)
@@ -1294,6 +1316,36 @@ def swim_clips(packed: dict, joints: list[dict], points: list | None = None, pit
         data[:, sorted(legs)] = np.nan
         clips.append({"name": "~" + c["name"], "frames": c["frames"], "rate": c["rate"], "kind": ACTION,
                       "set": c["set"], "data": data, "speed": 0.0})
+
+
+def _align(a0: np.ndarray, b0: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """The turn (a quaternion, x y z w) taking direction a0 to a and, about it, b0 as near b as may be."""
+    def frame(x, y):
+        x = x / max(np.linalg.norm(x), 1e-9)
+        y = y - np.dot(y, x) * x
+        y /= max(np.linalg.norm(y), 1e-9)
+        return np.stack([x, y, np.cross(x, y)], 1)
+    m = frame(a, b) @ frame(a0, b0).T
+    return _quat_of(m)
+
+
+def _quat_of(m: np.ndarray) -> np.ndarray:
+    """A rotation matrix's quaternion (x y z w), as quat_matrix turns one back."""
+    t = m[0, 0] + m[1, 1] + m[2, 2]
+    if t > 0:
+        s = np.sqrt(t + 1.0) * 2
+        q = [(m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s, (m[1, 0] - m[0, 1]) / s, 0.25 * s]
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        s = np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2
+        q = [0.25 * s, (m[0, 1] + m[1, 0]) / s, (m[0, 2] + m[2, 0]) / s, (m[2, 1] - m[1, 2]) / s]
+    elif m[1, 1] > m[2, 2]:
+        s = np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2
+        q = [(m[0, 1] + m[1, 0]) / s, 0.25 * s, (m[1, 2] + m[2, 1]) / s, (m[0, 2] - m[2, 0]) / s]
+    else:
+        s = np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2
+        q = [(m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s, 0.25 * s, (m[1, 0] - m[0, 1]) / s]
+    q = np.array(q)
+    return q / np.linalg.norm(q)
 
 
 def _neck(joints: list[dict], at: np.ndarray, limbs: dict) -> list[tuple[int, float]]:
