@@ -1,6 +1,13 @@
 # FFXI layer — next session
 
-**Swim strokes and swings in the water (2026-10-13)**: built, NOT YET seen in play. The swim set was the run
+**Swim strokes and swings in the water (2026-10-13)**: the strokes seen in play ("works but a little goofy and
+cartoony... fit the FFXI style"), so remade: a breaststroke for the windmill crawl, unhurried (2.2 s a
+stroke): each hand and foot along a smooth closed path (periodic Catmull-Rom through a few places), its
+shoulder and elbow, hip and knee turned to reach it (two-bone IK from the neutral pose, the elbows out, the
+knees out and down): the hands glide ahead together, sweep out, draw under the chest, shoot ahead; the
+heels draw up, kick out and round, snap together as the hands go ahead; the body rising a little to
+breathe. Treading water: the hands sculling in small loops at the waist, the legs pedalling slowly, little.
+The remade strokes NOT YET seen in play. Before: The swim set was the run
 laid flat ("we still need the swimming animations"). FFXI has no swimming, so the strokes are made on each
 skeleton's own limbs (ffxi_model._limbs: the feet its points 8/9, the wrists 10/11, else the hands 126/127,
 else found by shape: the pelvis the deepest joint with two long chains to the ground, the wrists by their
