@@ -16,6 +16,7 @@ port_bridge.set_companion).
 """
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import re
@@ -143,6 +144,9 @@ def load_list(root: Path | None = None) -> list[dict]:
     return build_list(root)
 
 
+RUN_PACE, WALK_PACE = 380.0, 130.0      # a Trust's usual run and walk, in the hunter's units a second (their median)
+
+
 def build_model(trust: dict, scale: float) -> dict:
     """A Trust packed for the port (ffxi_model.pack): its own motions as a player's are chosen, at the
     player's scale (the hunter's units per FFXI's), so a Tarutaru is as small beside you as in FFXI."""
@@ -153,6 +157,16 @@ def build_model(trust: dict, scale: float) -> dict:
     for c in packed["clips"]:                                 # a Tarutaru's run kept to a Hume's pace: counted as
         if c["name"] in ("run", "brun") and 0 < c["speed"] < 250:   # covering more (as the player's own)
             c["speed"] *= 1.8
+    # a pace measured beyond any FFXI's (a Moogle hovering, a plant, a run or walk its feet don't show): the usual
+    # pace, so the legs go at a likely speed, not whirling or crawling (2026-10-12: 11 of 109 Trusts so)
+    run = next((c["speed"] for c in packed["clips"] if c["name"] == "run"), 0.0)
+    if not 250.0 <= run <= 700.0:
+        run = RUN_PACE
+    for c in packed["clips"]:
+        if c["name"] in ("run", "brun"):
+            c["speed"] = run
+        elif c["name"] in ("wlk", "bwlk") and not (60.0 <= c["speed"] <= min(250.0, 0.6 * run)):
+            c["speed"] = WALK_PACE
     rest = FM.skin_corners(packed["verts"], FM.joint_world(model["skeletons"][0]))
     place = packed["place"]
     packed["top"] = float((rest @ place[:, :3].T + place[:, 3])[:, 1].max())
@@ -422,7 +436,19 @@ class Party:
         k = (i // 2 + 1) * (1 if i % 2 == 0 else -1)
         angle = base + 0.55 * k
         r = (0.5 * th + 140.0) if not _keeps_back(m.trust) else (0.5 * th + 520.0)
-        return tx + math.sin(angle) * r, ty, tz + math.cos(angle) * r
+        x, z = tx + math.sin(angle) * r, tz + math.cos(angle) * r
+        return x, self._ground_y(x, z, here[1]), z
+
+    def _ground_y(self, x: float, z: float, fallback: float) -> float:
+        """The ground's height at x, z, as the hunter's own steps tell it: its trail's nearest point within reach,
+        else its own height. Not the monster's: it leaps and flies, and the Trusts rose into the air with it
+        (2026-10-12)."""
+        best, y = 400.0 * 400.0, fallback
+        for p in itertools.islice(reversed(self.trail), 150):
+            d = (p[0] - x) ** 2 + (p[2] - z) ** 2
+            if d < best:
+                best, y = d, p[1]
+        return y
 
     def in_reach(self, m: Member, target: tuple) -> bool:
         tx, _, tz, th = target

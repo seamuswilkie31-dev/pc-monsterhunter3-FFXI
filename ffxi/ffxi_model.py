@@ -1053,6 +1053,15 @@ def ground_speed(joints: list[dict], verts: np.ndarray, data: np.ndarray, rate: 
         q = d[:, :4] / np.linalg.norm(d[:, :4], axis=1, keepdims=True)
         pos.append(skin_corners(verts, pose_world(joints, q, d[:, 4:7], d[:, 7:10])) @ place[:, :3].T)
     pos = np.array(pos)                                                # samples+1 x corners x 3
+    # the feet only: of what comes near the ground, what swings to and fro with the stride. A robe's hem at the
+    # ground goes along with the body, all but still: taken for the sole while the feet were up, it once made
+    # Iroha's run seem a fifth of its pace, her legs whirling to keep up (2026-10-12)
+    low = pos[:, :, 1].min(0) < pos[:, :, 1].min() + 0.15 * max(float(np.ptp(pos[0, :, 1])), 1.0)
+    travel = np.hypot(np.ptp(pos[:, :, 0], 0), np.ptp(pos[:, :, 2], 0))
+    if low.any():
+        feet = low & (travel >= 0.5 * travel[low].max())
+        if feet.sum() >= 4:
+            pos = pos[:, feet]
     down = pos[:, :, 1] < pos[:, :, 1].min(1, keepdims=True) + 2.0
     v = []
     for i in range(samples):
