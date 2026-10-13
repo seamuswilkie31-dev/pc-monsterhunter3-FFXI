@@ -1518,7 +1518,7 @@ constexpr uint32_t kModelMagic = 0x4D48334D, kModelVersion = 9;     // 'MH3M'
 constexpr int kModelMaxVerts = 100000, kModelVertFloats = 20, kModelMaxLayers = 16, kModelTex = 256;
 constexpr int kModelMaxJoints = 128, kModelMaxClips = 96, kModelPool = 1 << 22, kXf = 10;
 enum : uint32_t { kStand = 0, kMove = 1, kAction = 2 };
-enum : uint32_t { kPeace = 0, kBattle = 1 };
+enum : uint32_t { kPeace = 0, kBattle = 1, kSwim = 2 };     // kSwim: in the water (the layer's own, ffxi_model.swim_clips)
 constexpr uint32_t kNone = 0xFFFFFFFF;
 constexpr uint32_t fourcc(const char (&s)[5]) {
     return (uint32_t)(uint8_t)s[0] | (uint32_t)(uint8_t)s[1] << 8 | (uint32_t)(uint8_t)s[2] << 16 | (uint32_t)(uint8_t)s[3] << 24;
@@ -1579,7 +1579,8 @@ struct Animator {
     float blend = 1.0f;     // cur's share
     float speed = 0.0f;     // the hunter's over the ground, smoothed
     bool moving = false, have_last = false, battle = false;
-    float last_x = 0, last_z = 0;
+    float last_x = 0, last_z = 0, last_y = 0;
+    bool swimming = false;                                  // the hunter in the water: the swim set
     int act = -1, act_next = -1;                            // the action playing, and the one to loop after
     float act_phase = 0, act_w = 0;
     bool act_loop = false, act_out = false;
@@ -1630,6 +1631,8 @@ struct Animator {
             }
             return best >= 0 ? best : stand;
         };
+        int s = swimming ? pick(kSwim) : -1;                    // in the water: swimming, whatever's drawn
+        if (s >= 0) return s;
         int w = battle ? pick(kBattle) : -1;
         return w >= 0 ? w : pick(kPeace);
     }
@@ -1645,6 +1648,8 @@ struct Animator {
         act = (int)clip, act_phase = 0, act_loop = false, act_out = false;
         act_next = next < clips.size() && clips[next].kind == kAction ? (int)next : -1;
     }
+
+    void set_swimming(bool on) { swimming = on; }
 
     // Monster Hunter's hunter drew or put away its weapon, or attacked
     void set_battle(bool on) {
@@ -1716,14 +1721,16 @@ struct Animator {
     }
 
     // dt seconds on, the hunter at x, z: each joint's 3x4 in the model's space, into rows
-    void step(float dt, bool hunter, float x, float z) {
+    void step(float dt, bool hunter, float x, float z, float y = 0.0f) {
         if (hunter && have_last && dt > 0) {
-            float v = std::hypot(x - last_x, z - last_z) / dt;
+            float v = std::hypot(x - last_x, z - last_z);
+            if (swimming) v = std::hypot(v, y - last_y);          // swimming, up and down counts too (a dive)
+            v /= dt;
             if (v > 3000.0f) v = speed;                              // a jump to elsewhere (an area loaded)
             speed += (v - speed) * std::min(1.0f, dt / 0.15f);
         }
         if (!hunter) speed = 0;
-        have_last = hunter, last_x = x, last_z = z;
+        have_last = hunter, last_x = x, last_z = z, last_y = y;
         moving = moving ? speed > 15.0f : speed > 30.0f;
         if (moving && act >= 0 && !act_out && (act_loop || act_next >= 0) && !dead) act_out = true;   // moving ends a held one
         int want = locomotion();
@@ -1836,6 +1843,15 @@ bool hunter_motion(char out[16]) {
 // "w01_0001": the weapon out; "w01_01xx": an attack
 bool motion_battle(const char* m) { return m[0] == 'w' && std::isdigit((uint8_t)m[1]) && std::isdigit((uint8_t)m[2]); }
 bool motion_attack(const char* m) { return motion_battle(m) && m[3] == '_' && m[4] == '0' && m[5] == '1'; }
+// in the water (2026-10-12, a swim recorded): "co_01xx" swimming (co_0101 on, co_0107 in, co_0109/0110 setting
+// off and stopping, co_0125 turning), "co_0360" afloat; any other "co_0..." is on land; the rest (a weapon's)
+// leaves it as it was
+bool motion_water(const char* m, bool was) {
+    if (std::strncmp(m, "co_01", 5) == 0 || std::strcmp(m, "co_0360") == 0) return true;
+    if (std::strncmp(m, "co_0", 4) == 0) return false;
+    return was;
+}
+std::atomic<bool> g_swimming{false};    // the hunter in the water (model_frame's): the companions swim too
 
 std::mutex g_hunter_mx;
 float g_hunter_mtx[12];                 // the hunter model's world matrix, rows
@@ -2121,8 +2137,9 @@ void companions_frame(float dt, uint32_t pl, uint32_t cam, bool scene) {
             c.anim.request(mb->act_clip, mb->act_next);
         }
         c.anim.set_battle(a.battle != 0);
+        c.anim.set_swimming(g_swimming.load(std::memory_order_relaxed));   // the hunter swimming: they swim too
         c.anim.set_dead(a.dead != 0);
-        c.anim.step(dt, true, c.x, c.z);
+        c.anim.step(dt, true, c.x, c.z, c.y);
         mb->battle = c.anim.battle ? 1 : 0;
         if (c.head <= 0.0f) {                                   // standing as it came: its highest joint
             float top = 0.0f;
@@ -2222,11 +2239,16 @@ void model_frame() {
         }
         std::memcpy(last_motion, motion, sizeof motion);
         std::memcpy(mb->motion, motion, sizeof motion);
+        bool water = motion_water(motion, g_swimming.load(std::memory_order_relaxed));
+        if (water != g_swimming.load(std::memory_order_relaxed))
+            rt_log("ffxi: the hunter %s the water (%s)", water ? "in" : "out of", motion);
+        g_swimming.store(water, std::memory_order_relaxed);
     }
     if (attacking) g_anim.set_battle(true);
     mb->battle = g_anim.battle ? 1 : 0;
     video_model_shading(mb->light_gain, mb->ground_shade);    // (0: unlit)
-    g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f);
+    g_anim.set_swimming(pl && g_swimming.load(std::memory_order_relaxed));
+    g_anim.step(dt, pl != 0, pl ? f32(pl + 0x3C) : 0.0f, pl ? f32(pl + 0x44) : 0.0f, pl ? f32(pl + 0x40) : 0.0f);
     if (visible) {
         float v[12], hp[12];
         for (int i = 0; i < 12; ++i) camera[i] = v[i] = f32(cam + 4 * i);

@@ -1,5 +1,17 @@
 # FFXI layer — next session
 
+**Swimming (2026-10-12)**: built, NOT YET seen in play. FFXI's people never swim, so the character ran
+upright through the sea. A swim recorded (the hunter's motion and world matrix through the port's blocks):
+co_01xx in the water (co_0101 swimming, co_0107 dropping in, co_0109/0110 setting off and stopping,
+co_0125 turning), co_0360 afloat, co_0303 and the other co_0... on land; the hunter's world matrix
+pitches as it dives and climbs (up to 76 degrees), level swimming 6-14 (the swim's own lie is in its
+motion). So: ffxi_model.swim_clips adds a third set, SWIM: the stroke, its run at 0.6 of its rate laid
+80 degrees forward about its hips at its feet's height (ground speed 250); treading water, its idle
+sunk to its shoulders and bobbing. The port's Animator picks the swim set while the hunter is in the
+water (motion_water, from its motion; g_swimming; wiiboot.log says "the hunter in/out of the water"),
+its speed then counting up and down too; the game's tilt comes on top as before. The Trusts get the
+same clips (build_model) and swim while you do.
+
 **Trusts' own lasting effects (2026-10-12)**: Shantotto II's orbs checked in play (circling, gliding, the size
 as a video of FFXI: "leave it as its canon size"); the others built and run offline, NOT YET seen in play.
 - FFXI runs a model's init as it appears; for these it comes to effects that last while the Trust is out.

@@ -1056,6 +1056,56 @@ def pack(model: dict, height: float = 175.0, yaw: float = 0.0, mirror: bool = Tr
             "parents": [j["parent"] for j in joints], "clips": clips}
 
 
+SWIM = 2                                 # a third set (the port's kSwim): in the water, which FFXI's people never are
+
+
+def _qmul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Quaternions (x y z w, the motions' own) a after b, b's rows each."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    return np.stack([aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+                     aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz], -1)
+
+
+def swim_clips(packed: dict, joints: list[dict], pitch: float = 80.0) -> None:
+    """Swimming, which FFXI has none of (2026-10-12: Monster Hunter's hunter swims, the character ran upright
+    through the sea): added to pack's clips, set SWIM. The stroke: its run at 0.6 of its rate, the body laid
+    forward `pitch` degrees about its hips, the hips at its feet's height (the hunter's place in the water); the
+    game's own tilt as the hunter dives or climbs comes on top (the port places it by the hunter's matrix).
+    Treading water: its idle, sunk to its shoulders, bobbing. The model's space is FFXI's: it faces +X, Y down."""
+    clips = packed["clips"]
+    run = next((c for c in clips if c["name"] == "run" and c["set"] == PEACE), None) or \
+        next((c for c in clips if c["kind"] == MOVE and c["set"] == PEACE), None)
+    idle = next((c for c in clips if c["kind"] == STAND and c["set"] == PEACE), None)
+    if idle is None or not len(joints):
+        return
+    d0 = np.asarray(idle["data"][0], np.float64)
+    q = d0[:, :4] / np.maximum(np.linalg.norm(d0[:, :4], axis=1, keepdims=True), 1e-9)
+    at = np.array([m[:3, 3] for m in pose_world(joints, q, d0[:, 4:7], d0[:, 7:10])])
+    height = max(float(-at[:, 1].min()), 0.3)                          # its top, above its feet (Y down)
+    hips = at[1] if len(at) > 1 and 0.3 * height < -at[1, 1] < 0.75 * height else np.array([0.0, -0.5 * height, 0.0])
+
+    def laid(clip: dict, degrees: float, centre_y: float, bob: float = 0.0) -> np.ndarray:
+        data = np.array(clip["data"], np.float32)
+        a = np.radians(degrees) / 2
+        qp = np.array([0.0, 0.0, np.sin(a), np.cos(a)])               # about Z: the head (-Y) toward +X
+        rp = np.array([[np.cos(2 * a), -np.sin(2 * a), 0.0], [np.sin(2 * a), np.cos(2 * a), 0.0], [0.0, 0.0, 1.0]])
+        target = np.array([hips[0], centre_y, hips[2]])
+        n = len(data)
+        for f in range(n):
+            data[f, 0, :4] = _qmul(qp, data[f, 0, :4].astype(np.float64))
+            t = rp @ (data[f, 0, 4:7].astype(np.float64) - hips) + target
+            t[1] += bob * height * np.sin(2 * np.pi * f / max(n - 1, 1))
+            data[f, 0, 4:7] = t
+        return data
+
+    if run is not None:
+        clips.append({"name": "swim", "frames": run["frames"], "rate": run["rate"] * 0.6, "kind": MOVE,
+                      "set": SWIM, "data": laid(run, pitch, 0.0), "speed": 250.0})
+    clips.append({"name": "swid", "frames": idle["frames"], "rate": idle["rate"], "kind": STAND, "set": SWIM,
+                  "data": laid(idle, 10.0, hips[1] + 0.75 * height, bob=0.03), "speed": 0.0})
+
+
 def skin_corners(verts: np.ndarray, world: np.ndarray) -> np.ndarray:
     """pack's vertices placed by the joints' transforms (4x4, the model's space)."""
     j0 = verts[:, 6].astype(int)

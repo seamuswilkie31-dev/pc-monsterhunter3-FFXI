@@ -2033,6 +2033,8 @@ class App:
                 model = FM.load(root / dat)
                 packed = FM.pack(model, height, yaw, mirror)
                 what = dat
+            if len(packed["clips"]) <= 94:                        # swimming, as the hunter does in the sea (the
+                FM.swim_clips(packed, model["skeletons"][0])      # port's clips are 96 at most)
             if hasattr(self.mem, "set_name_height"):             # your name 25 units above its head
                 place = packed["place"]
                 rest = FM.skin_corners(packed["verts"], FM.joint_world(model["skeletons"][0]))
